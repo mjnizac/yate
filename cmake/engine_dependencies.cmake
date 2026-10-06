@@ -56,6 +56,42 @@ FetchContent_Declare(vma
 
 FetchContent_MakeAvailable(spdlog tracy mimalloc vma)
 
+# --- zlib ---------------------------------------------------------------------------------------
+# Only needed by libspng, whose CMake requires ZLIB unconditionally (its miniz option exists only
+# in the meson build). OVERRIDE_FIND_PACKAGE makes libspng's find_package(ZLIB) resolve here
+# instead of looking for a system install.
+
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG        v1.3.1
+    GIT_SHALLOW    TRUE
+    OVERRIDE_FIND_PACKAGE
+)
+FetchContent_MakeAvailable(zlib)
+
+# zlib does not export a namespaced target, which is what libspng links against.
+if(NOT TARGET ZLIB::ZLIB)
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+endif()
+
+# --- libspng ------------------------------------------------------------------------------------
+
+set(SPNG_SHARED OFF CACHE BOOL "" FORCE)
+set(SPNG_STATIC ON CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(spng
+    GIT_REPOSITORY https://github.com/randy408/libspng.git
+    GIT_TAG        v0.7.4
+    GIT_SHALLOW    TRUE
+)
+
+# libspng has no install toggle, and its install(EXPORT) refuses to run because the fetched
+# zlibstatic is not in an export set. Nothing here is ever installed, so its rules are skipped.
+set(CMAKE_SKIP_INSTALL_RULES ON)
+FetchContent_MakeAvailable(spng)
+set(CMAKE_SKIP_INSTALL_RULES OFF)
+
 # --- Vulkan SDK ---------------------------------------------------------------------------------
 # Looked up last so a missing SDK is the only thing a fresh configure can fail on, after the
 # fetched dependencies are already in place.
@@ -67,7 +103,7 @@ find_package(Vulkan 1.4 REQUIRED COMPONENTS glslc)
 # VMA's single-header implementation does not compile clean under /W4, and it is not ours to fix.
 # Marking the fetched include directories as SYSTEM keeps third-party warnings out of our build log
 # without lowering the warning level on engine code.
-foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator)
+foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static)
     if(TARGET ${dependency})
         get_target_property(_dirs ${dependency} INTERFACE_INCLUDE_DIRECTORIES)
         if(_dirs)
@@ -86,6 +122,7 @@ target_compile_definitions(engine_third_party INTERFACE
 target_link_libraries(engine_third_party INTERFACE
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
+    spng_static
     spdlog::spdlog
     mimalloc-static
     Tracy::TracyClient
