@@ -7,6 +7,14 @@ if "%VS_ROOT%"=="" set "VS_ROOT=C:\Program Files (x86)\Microsoft Visual Studio\2
 set "CMAKE_BIN=%VS_ROOT%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
 set "NINJA_BIN=%VS_ROOT%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
 
+rem The LunarG installer sets VULKAN_SDK machine-wide, but a shell started before it ran will not
+rem have it. Fall back to the newest SDK under C:\VulkanSDK so a fresh terminal still works.
+if "%VULKAN_SDK%"=="" (
+    for /f "delims=" %%d in ('dir /b /ad /o-n "C:\VulkanSDK" 2^>nul') do (
+        if "%VULKAN_SDK%"=="" set "VULKAN_SDK=C:\VulkanSDK\%%d"
+    )
+)
+
 set "BUILD_TYPE=%~1"
 if "%BUILD_TYPE%"=="" set "BUILD_TYPE=Debug"
 

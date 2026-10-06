@@ -45,8 +45,10 @@ function(engine_set_warnings target)
     if(MSVC)
         # 4251/4275: exporting classes with standard-library members is intentional here; the
         # engine and its consumers are always built with the same toolchain and runtime.
+        # /external:W0 silences the headers marked SYSTEM, so VMA's single-header implementation
+        # does not drown the log while engine code stays at /W4.
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:preprocessor
-                                                 /wd4251 /wd4275)
+                                                 /external:W0 /wd4251 /wd4275)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion
                                                  -Wno-unused-parameter)

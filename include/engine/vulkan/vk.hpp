@@ -20,11 +20,14 @@ namespace engine::vulkan {
 } // namespace engine::vulkan
 
 /// Hard invariant on a Vulkan call. Aborts in debug builds (see ENGINE_ASSERT).
+/// The call itself always runs; only the check disappears in release builds, which is why the
+/// result is explicitly discarded there.
 #    define VK_CHECK(call)                                                                          \
         do {                                                                                        \
             const VkResult vkResult_ = (call);                                                      \
             ENGINE_ASSERT(vkResult_ == VK_SUCCESS, "{} returned {}", #call,                          \
                           ::engine::vulkan::ResultName(vkResult_));                                  \
+            (void)vkResult_;                                                                        \
         } while (false)
 
 /// Logs and returns `ret` when the call fails.

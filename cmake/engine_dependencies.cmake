@@ -67,11 +67,12 @@ find_package(Vulkan 1.4 REQUIRED COMPONENTS glslc)
 # VMA's single-header implementation does not compile clean under /W4, and it is not ours to fix.
 # Marking the fetched include directories as SYSTEM keeps third-party warnings out of our build log
 # without lowering the warning level on engine code.
-foreach(dependency spdlog tracy mimalloc vma)
+foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator)
     if(TARGET ${dependency})
         get_target_property(_dirs ${dependency} INTERFACE_INCLUDE_DIRECTORIES)
         if(_dirs)
-            target_include_directories(${dependency} SYSTEM INTERFACE ${_dirs})
+            set_property(TARGET ${dependency} PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                         "${_dirs}")
         endif()
     endif()
 endforeach()
