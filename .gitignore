@@ -1,5 +1,7 @@
 build/
 out/
+out_release/
 .vs/
 .vscode/
 *.spv
+tests/datasets/*/actual/

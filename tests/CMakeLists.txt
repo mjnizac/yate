@@ -28,3 +28,17 @@ engine_add_unit_test(test_compute_roundtrip)
 engine_add_unit_test(test_noise)
 add_dependencies(test_compute_roundtrip engine_shaders)
 add_dependencies(test_noise engine_shaders)
+
+# --- Dataset runner ------------------------------------------------------------------------------
+# Golden comparison plus performance regression. Also white-box, so it can drive the export path
+# in process rather than through the executable.
+
+add_executable(test_datasets runner/test_datasets.cpp)
+target_compile_definitions(test_datasets PRIVATE IS_ENGINE engine_EXPORTS)
+target_include_directories(test_datasets PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/runner")
+target_link_libraries(test_datasets PRIVATE engine_objects)
+engine_set_warnings(test_datasets)
+add_dependencies(test_datasets engine_shaders)
+
+add_test(NAME test_datasets COMMAND test_datasets)
+set_tests_properties(test_datasets PROPERTIES TIMEOUT 900)

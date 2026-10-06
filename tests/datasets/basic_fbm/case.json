@@ -1,0 +1,19 @@
+{
+  "description": "Fractal simplex heightmap with its analytic normals, over 2x2 sections so the result crosses section borders.",
+  "seed": 1234,
+  "resolution": 1.0,
+  "section": 256,
+  "bounds": { "min_x": 0.0, "min_z": 0.0, "max_x": 512.0, "max_z": 512.0 },
+  "params": {
+    "frequency": "0.004",
+    "octaves": "4",
+    "lacunarity": "2.0",
+    "gain": "0.5",
+    "amplitude": "900",
+    "offset": "700",
+    "range": "-200,1800",
+    "normals": "1"
+  },
+  "tolerance": 0,
+  "performance": { "passes": 5, "warn_slower": 0.10, "fail_slower": 0.25 }
+}

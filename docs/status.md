@@ -1,16 +1,11 @@
-| 1 | Skeleton | **done**, accepted |
-| 2 | Memory system | **done**, accepted |
-| 3 | Vulkan context in Headless mode | **done**, accepted |
 # Status
-
-Scope of the current session: milestones 1 to 3.
 
 | # | Milestone | State |
 | --- | --- | --- |
 | 1 | Skeleton | **done**, accepted |
 | 2 | Memory system | **done**, accepted |
 | 3 | Vulkan context in Headless mode | **done**, accepted |
-| 4 | First export | not started |
+| 4 | First export | **done**, accepted |
 | 5 | Graph and compiler, without Lua | not started |
 | 6 | Lua bindings | not started |
 | 7 | Sections and streaming | not started |
@@ -19,22 +14,22 @@ Scope of the current session: milestones 1 to 3.
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at /W4, and `ctest` passes 4 of 4 in each:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 6 of 6 in each:
 
 ```
-test_allocators ... Passed
-test_mapping ...... Passed
-test_errors ....... Passed
-test_compute_roundtrip ... Passed
+test_allocators ......... Passed
+test_mapping ............ Passed
+test_errors ............. Passed
+test_compute_roundtrip .. Passed
+test_noise .............. Passed
+test_datasets ........... Passed
 ```
 
-`test_compute_roundtrip` ran on a GeForce GTX 1070 reporting Vulkan 1.4.312, with a dedicated
-compute queue family and calibrated timestamps available. `terrain_export` starts and shuts down
-cleanly on the same machine and exits 16 (`FailedToExport`), which is the milestone-4 placeholder.
+Everything GPU-side ran on a GeForce GTX 1070 reporting Vulkan 1.4.312, with a dedicated compute
+queue family and calibrated timestamps available.
 
-Still to do before milestones 2 and 3 can be called fully observed: capture a Tracy session and
-confirm the memory view shows every CPU and VRAM pool with correct reserved and used values. The
-events are produced, nobody has looked at the graphs yet.
+Still open: capture a Tracy session and confirm the memory view shows every CPU and VRAM pool with
+correct reserved and used values. The events are emitted; nobody has looked at the graphs yet.
 
 ## 1. Skeleton
 
@@ -43,7 +38,6 @@ Build system with an `OBJECT` library linked as a DLL or a static library, gener
 macro family, asynchronous spdlog logging mirrored into Tracy, bit-flag exit codes, the platform
 module, and `Application` with its layer stack.
 
-`terrain_export` parses the full CLI documented in the spec and runs the real update loop.
 `terrain_viewer` does not exist yet: Graphics mode is rejected by `engine::init` with an error that
 points here, because the window system arrives in milestone 9.
 
@@ -54,31 +48,70 @@ points here, because the window system arrives in milestone 9.
 over a dedicated `CPU/Lua` allocator. Global `operator new`/`delete` are replaced per module and
 routed to `CPU/Untracked new`.
 
-Tracy reporting follows the rules in spec section 7.4: two pools per allocator (`<name>` for live
-sub-allocations, `<name> [reserved]` for blocks obtained from the OS or the driver), a
-`<name> unused` plot, arenas reporting used bytes as a plot instead of per-bump events,
-reallocation reported as free-then-alloc, and a leak check on destruction.
+Tracy reporting follows spec section 7.4: two pools per allocator, a `<name> unused` plot, arenas
+reporting used bytes as a plot instead of per-bump events, reallocation reported as free-then-alloc,
+and a leak check on destruction.
 
 Known limitation: mimalloc does not expose its segment reservations per allocator instance, so
 `GeneralAllocator` reports `reserved == used` and its `unused` plot stays at zero.
 
 ## 3. Vulkan context in Headless mode
 
-Vulkan 1.4 instance with merged `{name, required}` layer and extension requests, debug messenger
-chained into instance creation, compute-first physical-device selection that logs every candidate
-with its score or its rejection reason, UUID forcing, a `Queue` wrapper with a command pool, a
-timeline semaphore and a Tracy GPU context (calibrated when `VK_EXT_calibrated_timestamps` exists).
+Vulkan 1.4 instance with merged `{name, required}` requests, debug messenger chained into instance
+creation, compute-first device selection that logs every candidate with its score or its rejection
+reason, UUID forcing, and a `Queue` wrapper with a command pool, a timeline semaphore and a Tracy
+GPU context.
 
-VMA is the only path to `vkAllocateMemory`. Device-memory blocks are reported through
-`VmaDeviceMemoryCallbacks` into `VRAM/Device memory [reserved]`; buffers carry a category which is
-also their Tracy pool name; heap budgets are plotted every tick and a heap above 90% flips the
-allocator into a pressure state the evaluator will read.
+Required features: `synchronization2`, `maintenance4`, `timelineSemaphore`, `bufferDeviceAddress`,
+`scalarBlockLayout` and `shaderInt64`. The last two matter specifically to the kernel interface:
+64-bit buffer references, and `LocalSizeId` so the workgroup size can come from specialization
+constants.
 
-The section pool keeps one large `VkBuffer` per domain and block, sub-allocated with VMA virtual
-blocks in power-of-two size classes derived from the mapping, section extent and halo. `R2` and
-`R3` values never share a block. Staging and readback are persistently mapped FIFO rings.
+VMA is the only path to `vkAllocateMemory`. The section pool keeps one large `VkBuffer` per domain
+and block, sub-allocated with VMA virtual blocks in power-of-two size classes derived from the
+mapping, section extent and halo; `R2` and `R3` values never share a block. Staging and readback are
+persistently mapped FIFO rings. Peak bytes are tracked per category for the metadata sidecar.
 
-Two op kernels exist: `ops/constant.comp` and `ops/coords.comp`, both on the uniform kernel
-interface. `test_compute_roundtrip` is the acceptance check: it dispatches `coords` into a section
-slot at an origin far from zero with a halo of 2, reads it back and verifies every padded sample,
-then checks the whole VRAM accounting returns to zero.
+## 4. First export
+
+`terrain_export` evaluates a job section by section and writes 16-bit PNGs plus a JSON sidecar.
+
+**Noise with analytic derivatives.** `assets/shaders/lib/noise.glsl` implements 2D and 3D simplex
+noise whose value *and* exact gradient come out of one evaluation, by differentiating the kernel in
+closed form. Fractal accumulation carries the gradient through the chain rule. `test_noise` compares
+the analytic gradient against a central difference of the value channel over 4096 samples and finds a
+worst-case disagreement of **0.03% of the RMS gradient**, which is the truncation error of the finite
+difference rather than an error in the derivative.
+
+**Two op kernels chained.** `ops/fbm.comp` writes the value on channel 0 and the gradient on
+channel 1; `ops/normals.comp` turns that gradient into a unit surface normal with one
+multiply-and-normalize. No finite differences, no halo, no neighbour reads. The two dispatches are
+separated by a buffer memory barrier, which is the pattern the evaluator will generalise.
+
+**Banded evaluation.** Sections are evaluated into a full-width band held in CPU RAM, and the band is
+streamed into the PNG row by row, so a 16k map never sits in memory. Every section is dispatched over
+the full section extent and only its useful interior is kept, so an edge section computes exactly
+what an interior one does.
+
+**Output.** 16-bit grayscale for `R2 -> R1` normalized from the declared range, 16-bit RGB for
+`R2 -> R2` and `R2 -> R3` remapped from [-1, 1], raw `f32` for `R3`. Clamped samples are counted and
+warned about, because clamping almost always means the declared range is wrong. The sidecar records
+the script hash, bounds, timings, peak CPU and per-category VRAM, and the environment.
+
+**Dataset runner.** `test_datasets` runs each case under `tests/datasets/`, compares the *decoded*
+samples rather than the file bytes, writes a difference image on a mismatch, and compares timings
+against `tests/baselines/<machine-id>.json`, recording one when there is none. History is appended to
+`tests/history/<machine-id>.jsonl` with the commit hash. Performance comparison is skipped in Debug
+builds. `--update-golden <case>` is the only way expected outputs change.
+
+The first case, `basic_fbm`, is a 512x512 heightmap plus normals over 2x2 sections, and reproduces
+**bit-exactly**.
+
+### Not in this milestone
+
+- `--tiles` is rejected with a clear error; one file per tile arrives with streaming (milestone 7).
+- `graph_compilation` in the sidecar is 0 until there is a graph to compile (milestone 5).
+- `gpu` in the sidecar is the total of the per-section timestamp pairs. The per-op breakdown needs the
+  evaluator (milestone 5).
+- Encoding dominates the wall time: a 2048x2048 export with normals takes about 5.7 s in Release, of
+  which the GPU accounts for 3.2 ms and zlib for nearly all the rest.
