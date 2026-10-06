@@ -33,6 +33,9 @@ public:
     void UpdatePlots() const noexcept;
 
 private:
+    /// Raises `m_peak` to `used` when it is higher. Every path that grows `m_used` must call it.
+    void BumpPeak(usize_t used) noexcept;
+
     TracyPool             m_tracy;
     std::atomic<usize_t>  m_used{0};
     std::atomic<usize_t>  m_peak{0};

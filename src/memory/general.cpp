@@ -56,11 +56,15 @@ void* GeneralAllocator::Allocate(usize_t size, usize_t align) {
     const usize_t usable = mi_usable_size(ptr);
     const usize_t used   = m_used.fetch_add(usable, std::memory_order_relaxed) + usable;
     m_count.fetch_add(1, std::memory_order_relaxed);
+    BumpPeak(used);
+    m_tracy.Acquire(ptr, usable);
+    return ptr;
+}
+
+void GeneralAllocator::BumpPeak(usize_t used) noexcept {
     usize_t peak = m_peak.load(std::memory_order_relaxed);
     while (peak < used && !m_peak.compare_exchange_weak(peak, used, std::memory_order_relaxed)) {
     }
-    m_tracy.Acquire(ptr, usable);
-    return ptr;
 }
 
 void GeneralAllocator::Free(void* ptr) {
@@ -90,7 +94,10 @@ void* GeneralAllocator::Reallocate(void* ptr, usize_t newSize, usize_t align) {
         return nullptr;
     }
     const usize_t newUsable = mi_usable_size(result);
-    m_used.fetch_add(newUsable - oldUsable, std::memory_order_relaxed);
+    // Unsigned arithmetic wraps correctly on a shrink, because the sum is taken modulo 2^64.
+    const usize_t used = m_used.fetch_add(newUsable - oldUsable, std::memory_order_relaxed)
+                         + newUsable - oldUsable;
+    BumpPeak(used);
     m_tracy.Acquire(result, newUsable);
     return result;
 }
