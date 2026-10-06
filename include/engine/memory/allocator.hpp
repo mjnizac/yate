@@ -110,6 +110,9 @@ void Shutdown() noexcept;
 /// Refreshes every allocator's `unused` plot. Called once per frame or tick.
 void UpdatePlots() noexcept;
 
+/// Sum of the peak bytes of every engine CPU allocator, for the export metadata sidecar.
+[[nodiscard]] u64_t PeakCpuBytes() noexcept;
+
 } // namespace engine::memory
 
 #endif // IS_ENGINE

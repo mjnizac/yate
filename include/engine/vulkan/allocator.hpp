@@ -102,6 +102,9 @@ public:
     /// Bytes reserved from the driver under `category`, including pool-block slack.
     [[nodiscard]] u64_t CategoryReserved(VramCategory category) const noexcept;
 
+    /// Highest value `CategoryBytes` ever reached. Reported in the export metadata sidecar.
+    [[nodiscard]] u64_t CategoryPeak(VramCategory category) const noexcept;
+
     /// Refreshes the `unused` plot of `category`.
     void UpdateCategoryPlots(VramCategory category) const noexcept;
 
@@ -127,6 +130,9 @@ private:
     std::array<memory::TracyPool*, kCategoryCount> m_categoryPools{};
     std::array<u64_t, kCategoryCount>              m_categoryBytes{};
     std::array<u64_t, kCategoryCount>              m_categoryReserved{};
+    std::array<u64_t, kCategoryCount>              m_categoryPeak{};
+    void TrackPeak(usize_t index) noexcept;
+
     b8_t                                           m_underPressure = false;
 };
 

@@ -142,6 +142,7 @@ Allocator& Allocator::operator=(Allocator&& other) noexcept {
     m_categoryPools    = other.m_categoryPools;
     m_categoryBytes    = other.m_categoryBytes;
     m_categoryReserved = other.m_categoryReserved;
+    m_categoryPeak     = other.m_categoryPeak;
     m_underPressure    = other.m_underPressure;
     other.m_allocator  = nullptr;
     other.m_device     = VK_NULL_HANDLE;
@@ -220,6 +221,7 @@ Result<Buffer> Allocator::CreateBuffer(const BufferDesc& desc) {
     m_categoryPools[index]->BeginBlock(buffer.allocation, desc.size);
     if (!desc.poolBlock) {
         m_categoryBytes[index] += desc.size;
+        TrackPeak(index);
         m_categoryPools[index]->Acquire(buffer.allocation, desc.size);
     }
     m_categoryPools[index]->PlotUnused(m_categoryReserved[index], m_categoryBytes[index]);
@@ -242,9 +244,16 @@ void Allocator::DestroyBuffer(Buffer& buffer) noexcept {
     buffer = Buffer{};
 }
 
+void Allocator::TrackPeak(usize_t index) noexcept {
+    if (m_categoryBytes[index] > m_categoryPeak[index]) {
+        m_categoryPeak[index] = m_categoryBytes[index];
+    }
+}
+
 void Allocator::ReportSubAllocation(VramCategory category, const void* key, u64_t size) noexcept {
     const usize_t index = static_cast<usize_t>(category);
     m_categoryBytes[index] += size;
+    TrackPeak(index);
     m_categoryPools[index]->Acquire(key, size);
     m_categoryPools[index]->PlotUnused(m_categoryReserved[index], m_categoryBytes[index]);
 }
@@ -259,6 +268,11 @@ void Allocator::ReleaseSubAllocation(VramCategory category, const void* key, u64
 u64_t Allocator::CategoryReserved(VramCategory category) const noexcept {
     const usize_t index = static_cast<usize_t>(category);
     return index < kCategoryCount ? m_categoryReserved[index] : 0;
+}
+
+u64_t Allocator::CategoryPeak(VramCategory category) const noexcept {
+    const usize_t index = static_cast<usize_t>(category);
+    return index < kCategoryCount ? m_categoryPeak[index] : 0;
 }
 
 void Allocator::UpdateCategoryPlots(VramCategory category) const noexcept {

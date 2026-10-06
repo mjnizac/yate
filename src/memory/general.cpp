@@ -225,6 +225,16 @@ void Shutdown() noexcept {
     }
 }
 
+u64_t PeakCpuBytes() noexcept {
+    u64_t peak = Untracked().Stats().peak;
+    if (g_initialized) {
+        peak += g_general.instance->Stats().peak;
+        peak += g_lua.instance->Stats().peak;
+        peak += g_frameArena.instance->Stats().peak;
+    }
+    return peak;
+}
+
 void UpdatePlots() noexcept {
     if (!g_initialized) {
         return;
