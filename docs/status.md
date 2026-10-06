@@ -1,3 +1,6 @@
+| 1 | Skeleton | **done**, accepted |
+| 2 | Memory system | **done**, accepted |
+| 3 | Vulkan context in Headless mode | **done**, accepted |
 # Status
 
 Scope of the current session: milestones 1 to 3.
@@ -14,18 +17,24 @@ Scope of the current session: milestones 1 to 3.
 | 8 | Iterative kernels | not started |
 | 9 | Viewer (Graphics mode) | not started |
 
-## Blocker
+## Verification
 
-The Vulkan SDK is not installed on this machine, so the project has not been configured or compiled
-yet. `find_package(Vulkan 1.4 REQUIRED COMPONENTS glslc)` is the first thing that fails. The MSVC
-toolchain, the Windows SDK, CMake and Ninja are all present and working.
+Both configurations build warning-free with MSVC 19.44 at /W4, and `ctest` passes 4 of 4 in each:
 
-See `docs/commands.md` for the one command that installs it; it needs an interactive UAC prompt,
-which is why it could not be scripted.
+```
+test_allocators ... Passed
+test_mapping ...... Passed
+test_errors ....... Passed
+test_compute_roundtrip ... Passed
+```
 
-Every translation unit has been compile-checked with MSVC 19.44 at /W4 against the fetched
-dependencies and the Vulkan 1.4 headers, and is clean. What has not happened yet is linking,
-shader compilation with `glslc`, and running anything: all three need the SDK.
+`test_compute_roundtrip` ran on a GeForce GTX 1070 reporting Vulkan 1.4.312, with a dedicated
+compute queue family and calibrated timestamps available. `terrain_export` starts and shuts down
+cleanly on the same machine and exits 16 (`FailedToExport`), which is the milestone-4 placeholder.
+
+Still to do before milestones 2 and 3 can be called fully observed: capture a Tracy session and
+confirm the memory view shows every CPU and VRAM pool with correct reserved and used values. The
+events are produced, nobody has looked at the graphs yet.
 
 ## 1. Skeleton
 

@@ -1,13 +1,12 @@
 # Open tasks
 
-## Blocking
+## Next
 
-- [ ] Install the Vulkan SDK 1.4.x (see `docs/commands.md`), then configure and build.
-- [ ] Fix whatever the first compile reports, one `fix:` commit per cause.
-- [ ] Run `ctest --output-on-failure` and confirm the four suites pass.
 - [ ] Capture a Tracy session of `test_compute_roundtrip` and confirm the memory view shows every
-      CPU and VRAM pool with correct reserved and used values. That is the acceptance criterion of
-      milestones 2 and 3.
+      CPU and VRAM pool with correct reserved and used values. The events are emitted; nobody has
+      looked at the graphs yet.
+- [ ] Route what is still landing in `CPU/Untracked new` at shutdown (about 1.4 MB in 8k
+      allocations, mostly spdlog and VMA internals) through named allocators.
 
 ## Milestone 4 — First export
 
