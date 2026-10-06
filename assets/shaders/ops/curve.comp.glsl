@@ -10,7 +10,7 @@
 
 #version 460
 
-#include "lib/kernel.glsl"
+#include "lib/kernel.lib.glsl"
 
 layout(constant_id = 3) const uint kCurveOp = 0;
 

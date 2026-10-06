@@ -11,7 +11,7 @@
 
 #version 460
 
-#include "lib/kernel.glsl"
+#include "lib/kernel.lib.glsl"
 
 void main() {
     uvec3 local = LocalSample();

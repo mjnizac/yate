@@ -11,7 +11,7 @@
 #ifndef ENGINE_LIB_NOISE_GLSL
 #define ENGINE_LIB_NOISE_GLSL
 
-#include "lib/hash.glsl"
+#include "lib/hash.lib.glsl"
 
 // --- Gradient sets ------------------------------------------------------------------------------
 
