@@ -67,6 +67,19 @@ inline int Summary(const char* suite) {
         }                                                                                           \
     } while (false)
 
+/// Like REQUIRE_OK, for a helper that returns void: records the failure and gives up on this check
+/// group rather than carrying on with a value that is not there.
+#define REQUIRE_OK_VOID(expression)                                                                 \
+    do {                                                                                            \
+        ++::test::g_checks;                                                                         \
+        auto&& result_ = (expression);                                                               \
+        if (!::test::IsTrue(result_.has_value())) {                                                  \
+            ::test::Fail(__FILE__, __LINE__, #expression);                                          \
+            std::printf("     error: %s\n", result_.error().Format().data());                       \
+            return;                                                                                 \
+        }                                                                                           \
+    } while (false)
+
 /// Unwraps a `Result`/`Status`, printing the formatted error and aborting the suite on failure.
 #define REQUIRE_OK(expression)                                                                      \
     do {                                                                                            \

@@ -19,11 +19,13 @@ function(engine_add_unit_test name)
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endfunction()
 
+# No GPU needed.
 engine_add_unit_test(test_allocators)
 engine_add_unit_test(test_mapping)
 engine_add_unit_test(test_errors)
+engine_add_unit_test(test_compiler)
 
-# Needs a Vulkan 1.4 device and the compiled shaders. Acceptance check for milestone 3.
+# Needs a Vulkan 1.4 device and the compiled shaders.
 engine_add_unit_test(test_compute_roundtrip)
 engine_add_unit_test(test_noise)
 add_dependencies(test_compute_roundtrip engine_shaders)
