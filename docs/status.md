@@ -7,9 +7,9 @@ Scope of the current session: milestones 1 to 3.
 
 | # | Milestone | State |
 | --- | --- | --- |
-| 1 | Skeleton | implemented, compiles clean; link and run pending |
-| 2 | Memory system | implemented, compiles clean; link and run pending |
-| 3 | Vulkan context in Headless mode | implemented, compiles clean; link and run pending |
+| 1 | Skeleton | **done**, accepted |
+| 2 | Memory system | **done**, accepted |
+| 3 | Vulkan context in Headless mode | **done**, accepted |
 | 4 | First export | not started |
 | 5 | Graph and compiler, without Lua | not started |
 | 6 | Lua bindings | not started |
