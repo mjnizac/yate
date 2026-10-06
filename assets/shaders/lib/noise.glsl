@@ -166,15 +166,56 @@ vec4 Simplex3D(vec3 p, uint seed) {
     return sum * ENGINE_SIMPLEX3_SCALE;
 }
 
+// --- Noise kinds --------------------------------------------------------------------------------
+
+#define ENGINE_NOISE_SIMPLEX 0u
+#define ENGINE_NOISE_RIDGED  1u
+#define ENGINE_NOISE_BILLOW  2u
+
+// Shapes one octave, carrying its derivative through the transform:
+//
+//   ridged: v = (1 - |n|)^2,  dv = -2 (1 - |n|) sign(n) dn
+//   billow: v = 2|n| - 1,     dv = 2 sign(n) dn
+//
+// Both have a kink where n is exactly zero. That is inherent to the shape rather than a defect of
+// the derivative, and the set of samples landing there has measure zero.
+vec3 ShapeOctave2(uint kind, vec3 n) {
+    if (kind == ENGINE_NOISE_RIDGED) {
+        float s = n.x < 0.0 ? -1.0 : 1.0;
+        float r = 1.0 - s * n.x;
+        return vec3(r * r, (-2.0 * r * s) * n.yz);
+    }
+    if (kind == ENGINE_NOISE_BILLOW) {
+        float s = n.x < 0.0 ? -1.0 : 1.0;
+        return vec3(2.0 * s * n.x - 1.0, (2.0 * s) * n.yz);
+    }
+    return n;
+}
+
+vec4 ShapeOctave3(uint kind, vec4 n) {
+    if (kind == ENGINE_NOISE_RIDGED) {
+        float s = n.x < 0.0 ? -1.0 : 1.0;
+        float r = 1.0 - s * n.x;
+        return vec4(r * r, (-2.0 * r * s) * n.yzw);
+    }
+    if (kind == ENGINE_NOISE_BILLOW) {
+        float s = n.x < 0.0 ? -1.0 : 1.0;
+        return vec4(2.0 * s * n.x - 1.0, (2.0 * s) * n.yzw);
+    }
+    return n;
+}
+
 // --- Fractal accumulation -----------------------------------------------------------------------
 
-// Each octave is sampled at `f * p`, so by the chain rule its gradient contributes `f * grad`.
-// Accumulating that alongside the value is what makes the fBm gradient exact rather than a
-// finite-difference estimate of the sum.
+// Each octave is sampled at `f * p`, so by the chain rule its gradient in world units is `f * grad`.
+// The chain rule is applied before the kind transform, because that transform is a function of the
+// octave value and its own derivative multiplies whatever comes in. Accumulating this alongside the
+// value is what makes the result exact rather than a finite-difference estimate of the sum.
 //
 // Returns vec3(value, d/dx, d/dy), normalized by the sum of the amplitudes so the result keeps the
 // range of a single octave.
-vec3 FbmSimplex2D(vec2 p, float frequency, uint octaves, float lacunarity, float gain, uint seed) {
+vec3 FractalNoise2D(uint kind, vec2 p, float frequency, uint octaves, float lacunarity, float gain,
+                    uint seed) {
     vec3  sum       = vec3(0.0);
     float amplitude = 1.0;
     float f         = frequency;
@@ -183,8 +224,10 @@ vec3 FbmSimplex2D(vec2 p, float frequency, uint octaves, float lacunarity, float
     for (uint o = 0u; o < octaves; ++o) {
         // Decorrelating the seed per octave avoids the octaves lining up at the lattice origin.
         vec3 n = Simplex2D(p * f, seed + o * ENGINE_HASH_PHI);
-        sum.x += amplitude * n.x;
-        sum.yz += (amplitude * f) * n.yz;
+        n.yz *= f;
+        vec3 shaped = ShapeOctave2(kind, n);
+        sum.x += amplitude * shaped.x;
+        sum.yz += amplitude * shaped.yz;
         norm += amplitude;
         amplitude *= gain;
         f *= lacunarity;
@@ -193,7 +236,8 @@ vec3 FbmSimplex2D(vec2 p, float frequency, uint octaves, float lacunarity, float
     return norm > 0.0 ? sum / norm : vec3(0.0);
 }
 
-vec4 FbmSimplex3D(vec3 p, float frequency, uint octaves, float lacunarity, float gain, uint seed) {
+vec4 FractalNoise3D(uint kind, vec3 p, float frequency, uint octaves, float lacunarity, float gain,
+                    uint seed) {
     vec4  sum       = vec4(0.0);
     float amplitude = 1.0;
     float f         = frequency;
@@ -201,8 +245,10 @@ vec4 FbmSimplex3D(vec3 p, float frequency, uint octaves, float lacunarity, float
 
     for (uint o = 0u; o < octaves; ++o) {
         vec4 n = Simplex3D(p * f, seed + o * ENGINE_HASH_PHI);
-        sum.x += amplitude * n.x;
-        sum.yzw += (amplitude * f) * n.yzw;
+        n.yzw *= f;
+        vec4 shaped = ShapeOctave3(kind, n);
+        sum.x += amplitude * shaped.x;
+        sum.yzw += amplitude * shaped.yzw;
         norm += amplitude;
         amplitude *= gain;
         f *= lacunarity;

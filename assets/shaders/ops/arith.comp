@@ -1,0 +1,59 @@
+// Pointwise arithmetic over any mapping, with broadcasting.
+//
+// Class: pointwise (halo 0). Mappings: Rn -> Rm when both operands match, or Rn -> Rm against
+// Rn -> R1, which broadcasts the scalar side (spec section 8).
+// Variant: specialization constant 3 selects the operation.
+//
+// Parameters:
+//   0  components of input 0
+//   1  components of input 1
+//   2  components of the output
+
+#version 460
+
+#include "lib/kernel.glsl"
+
+layout(constant_id = 3) const uint kArithOp = 0;
+
+#define ARITH_ADD      0u
+#define ARITH_SUBTRACT 1u
+#define ARITH_MULTIPLY 2u
+#define ARITH_DIVIDE   3u
+#define ARITH_MINIMUM  4u
+#define ARITH_MAXIMUM  5u
+
+float Apply(float a, float b) {
+    switch (kArithOp) {
+        case ARITH_ADD: return a + b;
+        case ARITH_SUBTRACT: return a - b;
+        case ARITH_MULTIPLY: return a * b;
+        // A zero divisor yields zero rather than an infinity, so one bad sample cannot poison
+        // everything downstream.
+        case ARITH_DIVIDE: return b == 0.0 ? 0.0 : a / b;
+        case ARITH_MINIMUM: return min(a, b);
+        default: return max(a, b);
+    }
+}
+
+void main() {
+    uvec3 local = LocalSample();
+    if (!InsidePaddedSection(local)) {
+        return;
+    }
+
+    uint index = SampleIndex(local);
+    uint countA = max(ParamUint(0), 1u);
+    uint countB = max(ParamUint(1), 1u);
+    uint countOut = max(ParamUint(2), 1u);
+
+    FloatBuffer a = FloatBuffer(pc.inputs[0]);
+    FloatBuffer b = FloatBuffer(pc.inputs[1]);
+    FloatBuffer target = FloatBuffer(pc.outputs[0]);
+
+    for (uint c = 0u; c < countOut; ++c) {
+        // A one-component operand is read at its only index, which is the broadcast.
+        float left  = a.values[index * countA + (countA == 1u ? 0u : c)];
+        float right = b.values[index * countB + (countB == 1u ? 0u : c)];
+        target.values[index * countOut + c] = Apply(left, right);
+    }
+}

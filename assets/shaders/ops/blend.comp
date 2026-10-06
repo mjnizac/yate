@@ -1,0 +1,33 @@
+// Combine.Blend: linear interpolation between two values, driven by a scalar mask.
+//
+// Class: pointwise (halo 0). Mappings: a and b share Rn -> Rm, mask is Rn -> R1, output Rn -> Rm.
+//
+// Parameters:
+//   0  components
+
+#version 460
+
+#include "lib/kernel.glsl"
+
+void main() {
+    uvec3 local = LocalSample();
+    if (!InsidePaddedSection(local)) {
+        return;
+    }
+
+    uint index = SampleIndex(local);
+    uint count = max(ParamUint(0), 1u);
+
+    FloatBuffer a = FloatBuffer(pc.inputs[0]);
+    FloatBuffer b = FloatBuffer(pc.inputs[1]);
+    FloatBuffer mask = FloatBuffer(pc.inputs[2]);
+    FloatBuffer target = FloatBuffer(pc.outputs[0]);
+
+    // A mask outside [0, 1] would extrapolate, which is never what a blend means.
+    float t = clamp(mask.values[index], 0.0, 1.0);
+
+    for (uint c = 0u; c < count; ++c) {
+        uint at = index * count + c;
+        target.values[at] = mix(a.values[at], b.values[at], t);
+    }
+}

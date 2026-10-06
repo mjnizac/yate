@@ -1,8 +1,9 @@
-// Noises.fBm: fractal simplex noise with its analytic gradient.
+// Noises.fBm: fractal noise with its analytic gradient.
 //
 // Class: pointwise (halo 0).
-// Mappings: R2 -> R1 on channel 0 (value) and R2 -> R2 on channel 1 (gradient),
-//           R3 -> R1 on channel 0 and R3 -> R3 on channel 1.
+// Mappings: channel 0 is R2 -> R1 or R3 -> R1 (the value), channel 1 is R2 -> R2 or R3 -> R3
+//           (the gradient).
+// Variant: specialization constant 3 selects the noise kind.
 //
 // Parameters:
 //   0  frequency   cycles per metre
@@ -12,6 +13,7 @@
 //   4  amplitude   output scale, in metres
 //   5  offset      output offset, in metres
 //   6  resolution  metres per sample
+//   7  seed salt   decorrelates nodes that share the job seed
 //
 // The gradient channel is in metres per metre, so a consumer such as Terrain.Normals needs no
 // finite differences and no extra dispatch.
@@ -20,6 +22,8 @@
 
 #include "lib/kernel.glsl"
 #include "lib/noise.glsl"
+
+layout(constant_id = 3) const uint kNoiseKind = 0;
 
 #define CHANNEL_VALUE    0u
 #define CHANNEL_GRADIENT 1u
@@ -40,12 +44,13 @@ void main() {
     float amplitude  = ParamFloat(4);
     float offset     = ParamFloat(5);
     float resolution = ParamFloat(6);
+    uint  seed       = pc.seed ^ (ParamUint(7) * ENGINE_HASH_PHI);
 
     if (IsR3()) {
         // Positions come from the integer sample times the sample spacing, never accumulated,
         // so neighbouring sections agree exactly on their shared samples.
         vec3 position = vec3(world) * resolution;
-        vec4 n = FbmSimplex3D(position, frequency, octaves, lacunarity, gain, pc.seed);
+        vec4 n = FractalNoise3D(kNoiseKind, position, frequency, octaves, lacunarity, gain, seed);
 
         if (WantsChannel(CHANNEL_VALUE)) {
             StoreScalar(CHANNEL_VALUE, index, n.x * amplitude + offset);
@@ -55,7 +60,7 @@ void main() {
         }
     } else {
         vec2 position = vec2(float(world.x), float(world.z)) * resolution;
-        vec3 n = FbmSimplex2D(position, frequency, octaves, lacunarity, gain, pc.seed);
+        vec3 n = FractalNoise2D(kNoiseKind, position, frequency, octaves, lacunarity, gain, seed);
 
         if (WantsChannel(CHANNEL_VALUE)) {
             StoreScalar(CHANNEL_VALUE, index, n.x * amplitude + offset);
