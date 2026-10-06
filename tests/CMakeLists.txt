@@ -25,4 +25,6 @@ engine_add_unit_test(test_errors)
 
 # Needs a Vulkan 1.4 device and the compiled shaders. Acceptance check for milestone 3.
 engine_add_unit_test(test_compute_roundtrip)
+engine_add_unit_test(test_noise)
 add_dependencies(test_compute_roundtrip engine_shaders)
+add_dependencies(test_noise engine_shaders)
