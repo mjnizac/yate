@@ -36,10 +36,12 @@ struct NodeWork {
     u32_t dispatch = kInvalidBuffer;
     /// Buffer each channel was assigned.
     std::array<u32_t, kMaxNodeChannels> buffers{kInvalidBuffer, kInvalidBuffer};
-    /// Last dispatch index that reads any channel of this node.
-    u32_t lastReader = kInvalidBuffer;
-    /// True when a requested output reads this node, so its buffer must survive the section.
-    b8_t feedsOutput = false;
+    /// Last dispatch index that reads each channel. Per channel, not per node: a multi-output op
+    /// whose value feeds an output while its gradient is consumed and finished would otherwise pin
+    /// the gradient buffer for the whole section.
+    std::array<u32_t, kMaxNodeChannels> lastReader{kInvalidBuffer, kInvalidBuffer};
+    /// Bit per channel a requested output reads, so that channel's buffer survives the section.
+    u8_t outputChannels = 0;
 };
 
 /// Follows the replacement chain to the node that survived canonicalization.
@@ -244,10 +246,10 @@ void MarkReachable(const Graph& graph, std::pmr::vector<NodeWork>& work) {
     for (usize_t i = 0; i < graph.OutputCount(); ++i) {
         const OutputRequest& request = graph.Output(i);
         const u32_t          node    = Resolve(work, request.value.node);
+        const u8_t bit         = static_cast<u8_t>(1u << request.value.channel);
         work[node].reachable   = true;
-        work[node].feedsOutput = true;
-        work[node].channelMask = static_cast<u8_t>(work[node].channelMask
-                                                   | (1u << request.value.channel));
+        work[node].outputChannels = static_cast<u8_t>(work[node].outputChannels | bit);
+        work[node].channelMask    = static_cast<u8_t>(work[node].channelMask | bit);
     }
 
     // Nodes only ever read lower indices, so one backwards sweep is enough.
@@ -422,12 +424,12 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         compiled.dispatches.push_back(dispatch);
     }
 
-    // Liveness: the last dispatch that reads each node.
+    // Liveness: the last dispatch that reads each channel of each node.
     for (const Dispatch& dispatch : compiled.dispatches) {
         const Graph::Node& node = graph.NodeAt(dispatch.node);
         for (u8_t i = 0; i < node.inputCount; ++i) {
             const u32_t producer = Resolve(work, node.inputs[i].node);
-            work[producer].lastReader = work[dispatch.node].dispatch;
+            work[producer].lastReader[node.inputs[i].channel] = work[dispatch.node].dispatch;
         }
     }
 
@@ -452,19 +454,23 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
             work[dispatch.node].buffers[channel] = buffer;
         }
 
-        // Release every buffer whose last reader was this dispatch, so the next value can reuse it.
+        // Release every channel whose last reader was this dispatch, so the next value can reuse
+        // its buffer. A channel a requested output reads is never released: it has to survive the
+        // whole section.
         for (u8_t input = 0; input < node.inputCount; ++input) {
             const u32_t producer = Resolve(work, node.inputs[input].node);
-            if (work[producer].feedsOutput || work[producer].lastReader != i) {
+            const u8_t  channel  = node.inputs[input].channel;
+            if ((work[producer].outputChannels & (1u << channel)) != 0) {
                 continue;
             }
-            for (u8_t channel = 0; channel < kMaxNodeChannels; ++channel) {
-                const u32_t buffer = work[producer].buffers[channel];
-                if (buffer != kInvalidBuffer) {
-                    compiled.buffers[buffer].lastUse = static_cast<u32_t>(i);
-                    planner.Release(buffer);
-                    work[producer].buffers[channel] = kInvalidBuffer;
-                }
+            if (work[producer].lastReader[channel] != i) {
+                continue;
+            }
+            const u32_t buffer = work[producer].buffers[channel];
+            if (buffer != kInvalidBuffer) {
+                compiled.buffers[buffer].lastUse = static_cast<u32_t>(i);
+                planner.Release(buffer);
+                work[producer].buffers[channel] = kInvalidBuffer;
             }
         }
     }
