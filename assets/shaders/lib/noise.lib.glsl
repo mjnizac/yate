@@ -72,9 +72,9 @@ vec3 SimplexCorner2(vec2 d, vec2 g, float r2) {
     return vec3(w4 * gd, (-8.0 * w3 * gd) * d + w4 * g);
 }
 
-// Chosen so the output stays within roughly [-1, 1] for the unit gradient set above. The exact
-// bound is not critical: `terrain_export` reports how many samples the declared output range
-// clamped, which is the signal that a scale or a range is wrong.
+// Chosen so one octave spans roughly [-1, 1] with the unit gradient set above, measured rather than
+// guessed: test_noise reports the band and fails on a gross break. The 3D constant differs because
+// its kernel radius and gradient lengths differ, not because the 2D one was tuned.
 #define ENGINE_SIMPLEX2_SCALE 99.0
 
 // Returns vec3(value, d/dx, d/dy) at `p`, in the units of `p`.
@@ -115,7 +115,7 @@ vec4 SimplexCorner3(vec3 d, vec3 g, float r2) {
     return vec4(w4 * gd, (-8.0 * w3 * gd) * d + w4 * g);
 }
 
-#define ENGINE_SIMPLEX3_SCALE 32.0
+#define ENGINE_SIMPLEX3_SCALE 78.0
 
 // Returns vec4(value, d/dx, d/dy, d/dz) at `p`, in the units of `p`.
 vec4 Simplex3D(vec3 p, uint seed) {
@@ -159,10 +159,10 @@ vec4 Simplex3D(vec3 p, uint seed) {
     vec3 d3 = d0 - 1.0 + 3.0 * G3;
 
     ivec3 i0  = ivec3(cell);
-    vec4  sum = SimplexCorner3(d0, LatticeGradient3(i0, seed), 0.6);
-    sum += SimplexCorner3(d1, LatticeGradient3(i0 + ivec3(step1), seed), 0.6);
-    sum += SimplexCorner3(d2, LatticeGradient3(i0 + ivec3(step2), seed), 0.6);
-    sum += SimplexCorner3(d3, LatticeGradient3(i0 + ivec3(1), seed), 0.6);
+    vec4  sum = SimplexCorner3(d0, LatticeGradient3(i0, seed), 0.5);
+    sum += SimplexCorner3(d1, LatticeGradient3(i0 + ivec3(step1), seed), 0.5);
+    sum += SimplexCorner3(d2, LatticeGradient3(i0 + ivec3(step2), seed), 0.5);
+    sum += SimplexCorner3(d3, LatticeGradient3(i0 + ivec3(1), seed), 0.5);
     return sum * ENGINE_SIMPLEX3_SCALE;
 }
 // --- Derived base functions ----------------------------------------------------------------------

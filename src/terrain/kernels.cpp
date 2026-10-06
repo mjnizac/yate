@@ -256,7 +256,7 @@ void LatticeGradient3(i32_t x, i32_t y, i32_t z, u32_t seed, std::array<f32_t, 3
 [[nodiscard]] std::array<f32_t, 4> Simplex3D(std::array<f32_t, 3> p, u32_t seed) {
     constexpr f32_t F3     = 0.33333333333333333f;
     constexpr f32_t G3     = 0.16666666666666666f;
-    constexpr f32_t kScale = 32.0f;
+    constexpr f32_t kScale = 78.0f;
 
     const f32_t skew = (p[0] + p[1] + p[2]) * F3;
     std::array<f32_t, 3> cell{std::floor(p[0] + skew), std::floor(p[1] + skew),
@@ -293,7 +293,7 @@ void LatticeGradient3(i32_t x, i32_t y, i32_t z, u32_t seed, std::array<f32_t, 3
 
     std::array<f32_t, 4> sum{};
     const auto corner = [&sum](std::array<f32_t, 3> d, const std::array<f32_t, 3>& g) {
-        const f32_t w = 0.6f - (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        const f32_t w = 0.5f - (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
         if (w <= 0.0f) {
             return;
         }
