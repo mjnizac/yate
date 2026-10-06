@@ -1,0 +1,24 @@
+// Const: writes one value over the whole padded section.
+//
+// Class: pointwise (halo 0). Mappings: Rn -> Rm for m in 1..4.
+// Parameters: params[0..3] are the component values, as float bits.
+
+#version 460
+
+#include "lib/kernel.glsl"
+
+void main() {
+    uvec3 local = LocalSample();
+    if (!InsidePaddedSection(local)) {
+        return;
+    }
+
+    uint index      = SampleIndex(local);
+    uint components = max(ParamUint(4), 1u);
+
+    FloatBuffer output = FloatBuffer(pc.outputs[0]);
+    uint        base   = index * components;
+    for (uint c = 0u; c < components; ++c) {
+        output.values[base + c] = ParamFloat(c);
+    }
+}
