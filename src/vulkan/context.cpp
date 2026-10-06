@@ -522,17 +522,18 @@ Status Context::CreateDevice(const ContextCreateInfo& info) {
                                         .ppEnabledExtensionNames = enabled.Data()};
     VK_TRY(vkCreateDevice(m_physical.handle, &deviceInfo, nullptr, &m_device));
 
-    if (Status status = m_compute.Create(m_device, m_physical.handle, m_physical.families.compute,
-                                         0, "compute", m_calibratedTimestamps);
+    if (Status status = m_compute.Create(m_instance, m_device, m_physical.handle,
+                                         m_physical.families.compute, 0, "compute",
+                                         m_calibratedTimestamps);
         !status) {
         return status;
     }
     if (info.mode == RunMode::Graphics) {
         if (m_physical.families.graphics == m_physical.families.compute) {
             LOG_INFO("graphics and compute share queue family {}", m_physical.families.compute);
-        } else if (Status status =
-                       m_graphics.Create(m_device, m_physical.handle, m_physical.families.graphics,
-                                         0, "graphics", m_calibratedTimestamps);
+        } else if (Status status = m_graphics.Create(m_instance, m_device, m_physical.handle,
+                                                     m_physical.families.graphics, 0, "graphics",
+                                                     m_calibratedTimestamps);
                    !status) {
             return status;
         }

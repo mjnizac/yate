@@ -298,8 +298,8 @@ Queue& Queue::operator=(Queue&& other) noexcept {
     return *this;
 }
 
-Status Queue::Create(VkDevice device, VkPhysicalDevice physicalDevice, u32_t family, u32_t index,
-                     const char* name, b8_t calibrated) {
+Status Queue::Create(VkInstance instance, VkDevice device, VkPhysicalDevice physicalDevice,
+                     u32_t family, u32_t index, const char* name, b8_t calibrated) {
     m_device = device;
     m_family = family;
     m_name   = name;
@@ -329,14 +329,18 @@ Status Queue::Create(VkDevice device, VkPhysicalDevice physicalDevice, u32_t fam
     if (calibrated) {
         m_tracyContext = TracyVkContextCalibrated(
             physicalDevice, device, m_queue, m_tracyCommands,
+            // An instance-level entry point: asking vkGetDeviceProcAddr for it is a validation
+            // error, even though the driver would hand one back.
             reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT>(
-                vkGetDeviceProcAddr(device, "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT")),
+                vkGetInstanceProcAddr(instance,
+                                      "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT")),
             reinterpret_cast<PFN_vkGetCalibratedTimestampsEXT>(
                 vkGetDeviceProcAddr(device, "vkGetCalibratedTimestampsEXT")));
     } else {
         m_tracyContext = TracyVkContext(physicalDevice, device, m_queue, m_tracyCommands);
     }
 #else
+    (void)instance;
     (void)physicalDevice;
     (void)calibrated;
 #endif

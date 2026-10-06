@@ -75,8 +75,8 @@ public:
 
     /// `calibrated` enables Tracy's calibrated GPU timestamps, which needs
     /// `VK_EXT_calibrated_timestamps`.
-    [[nodiscard]] Status Create(VkDevice device, VkPhysicalDevice physicalDevice, u32_t family,
-                                u32_t index, const char* name, b8_t calibrated);
+    [[nodiscard]] Status Create(VkInstance instance, VkDevice device, VkPhysicalDevice physicalDevice,
+                                u32_t family, u32_t index, const char* name, b8_t calibrated);
     void                 Destroy() noexcept;
 
     [[nodiscard]] VkQueue       Handle() const noexcept { return m_queue; }
