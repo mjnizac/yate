@@ -194,6 +194,7 @@ Result<PhysicalDeviceInfo> SelectPhysicalDevice(VkInstance instance, RunMode mod
         candidate.driverVersion     = properties.driverVersion;
         candidate.type              = properties.deviceType;
         candidate.deviceLocalMemory = DeviceLocalMemory(memory);
+        candidate.timestampPeriod   = properties.limits.timestampPeriod;
         candidate.families          = FindFamilies(devices[i], mode, surface);
         std::memcpy(candidate.name.data(), properties.deviceName, candidate.name.size() - 1);
         std::memcpy(candidate.uuid.data(), idProperties.deviceUUID, VK_UUID_SIZE);

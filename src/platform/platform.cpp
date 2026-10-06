@@ -20,9 +20,13 @@
 #    include <Windows.h>
 #else
 #    include <pthread.h>
+#    include <sys/stat.h>
 #    include <sys/sysinfo.h>
+#    include <sys/types.h>
 #    include <sys/utsname.h>
 #    include <unistd.h>
+
+#    include <cerrno>
 #endif
 
 namespace engine::platform {
@@ -187,6 +191,40 @@ Status Init() {
 }
 
 void Shutdown() noexcept {}
+
+Status MakeDirectory(std::string_view path) {
+    if (path.empty()) {
+        return {};
+    }
+    std::array<char, kMaxPath> nullTerminated{};
+    const usize_t              count = path.size() < kMaxPath - 1 ? path.size() : kMaxPath - 1;
+    std::memcpy(nullTerminated.data(), path.data(), count);
+    nullTerminated[count] = '\0';
+
+#if defined(_WIN32)
+    std::array<wchar_t, kMaxPath> wide{};
+    if (::MultiByteToWideChar(CP_UTF8, 0, nullTerminated.data(), -1, wide.data(),
+                              static_cast<int>(kMaxPath))
+        <= 0) {
+        return std::unexpected(MakeError(ErrorCode::IoError, ErrorStage::Platform,
+                                        "could not convert the path {}", path));
+    }
+    if (::CreateDirectoryW(wide.data(), nullptr) == 0) {
+        const DWORD error = ::GetLastError();
+        if (error != ERROR_ALREADY_EXISTS) {
+            return std::unexpected(MakeError(ErrorCode::IoError, ErrorStage::Platform,
+                                            "could not create {} (error {})", path,
+                                            static_cast<u32_t>(error)));
+        }
+    }
+#else
+    if (::mkdir(nullTerminated.data(), 0777) != 0 && errno != EEXIST) {
+        return std::unexpected(MakeError(ErrorCode::IoError, ErrorStage::Platform,
+                                        "could not create {} (errno {})", path, errno));
+    }
+#endif
+    return {};
+}
 
 void SetThreadName(const char* name) noexcept {
     if (name == nullptr) {

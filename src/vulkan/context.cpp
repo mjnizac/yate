@@ -471,9 +471,13 @@ Status Context::CreateDevice(const ContextCreateInfo& info) {
     };
     const RequiredFeature required[] = {
         {"synchronization2", features13.synchronization2},
+        {"maintenance4", features13.maintenance4},
         {"timelineSemaphore", features12.timelineSemaphore},
         {"bufferDeviceAddress", features12.bufferDeviceAddress},
         {"scalarBlockLayout", features12.scalarBlockLayout},
+        // Buffer references in the kernel interface are 64-bit addresses, and the workgroup size
+        // comes from specialization constants, which needs LocalSizeId from maintenance4.
+        {"shaderInt64", features2.features.shaderInt64},
     };
     for (const RequiredFeature& feature : required) {
         if (feature.supported != VK_TRUE) {
@@ -487,15 +491,17 @@ Status Context::CreateDevice(const ContextCreateInfo& info) {
     VkPhysicalDeviceVulkan13Features enable13{
         .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
         .pNext            = &enable14,
-        .synchronization2 = VK_TRUE};
+        .synchronization2 = VK_TRUE,
+        .maintenance4     = VK_TRUE};
     VkPhysicalDeviceVulkan12Features enable12{
         .sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext               = &enable13,
         .scalarBlockLayout   = VK_TRUE,
         .timelineSemaphore   = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE};
-    const VkPhysicalDeviceFeatures2 enableFeatures{
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &enable12};
+    VkPhysicalDeviceFeatures2 enableFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                             .pNext = &enable12};
+    enableFeatures.features.shaderInt64 = VK_TRUE;
 
     constexpr f32_t                     kPriority = 1.0f;
     std::array<VkDeviceQueueCreateInfo, 2> queueInfos{};

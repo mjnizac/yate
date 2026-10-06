@@ -1,0 +1,37 @@
+// Terrain.Normals: unit surface normal of a heightfield, from its analytic gradient.
+//
+// Class: pointwise (halo 0). Mapping: R2 -> R2 in (the gradient), R2 -> R3 out.
+// Parameters:
+//   0  verticalScale  multiplies the slope before normalizing, to exaggerate or flatten relief
+//
+// For a heightfield h(x, z) the surface is the graph of h, whose tangents are (1, dh/dx, 0) and
+// (0, dh/dz, 1). Their cross product gives the normal directly:
+//
+//   n = normalize(-dh/dx, 1, -dh/dz)
+//
+// Because the gradient arrives exact from the producing op, this is one multiply-and-normalize per
+// sample: no neighbour reads, no halo and no finite differences. That is the whole reason the noise
+// kernels carry a gradient channel.
+
+#version 460
+
+#include "lib/kernel.glsl"
+
+void main() {
+    uvec3 local = LocalSample();
+    if (!InsidePaddedSection(local)) {
+        return;
+    }
+
+    uint index = SampleIndex(local);
+
+    float verticalScale = ParamFloat(0);
+    if (verticalScale == 0.0) {
+        verticalScale = 1.0;
+    }
+
+    vec2 slope  = LoadVec2(0u, index) * verticalScale;
+    vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
+
+    StoreVec3(0u, index, normal);
+}

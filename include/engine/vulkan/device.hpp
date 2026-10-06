@@ -44,6 +44,8 @@ struct PhysicalDeviceInfo {
     u32_t                                              driverVersion = 0;
     VkPhysicalDeviceType                               type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
     VkDeviceSize                                       deviceLocalMemory = 0;
+    /// Nanoseconds per timestamp tick, for turning query results into wall time.
+    f32_t                                              timestampPeriod = 0.0f;
     QueueFamilyIndices                                 families;
     /// Higher is better. Zero means the device was rejected.
     u64_t score = 0;

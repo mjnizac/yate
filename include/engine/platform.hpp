@@ -23,6 +23,10 @@ void SetThreadName(const char* name) noexcept;
 /// Shader `.spv` files and the pipeline cache are resolved against it.
 [[nodiscard]] std::string_view ExecutableDirectory() noexcept;
 
+/// Creates `path` if it does not exist. Succeeds when it already does.
+/// Not named CreateDirectory: that is a Windows.h macro.
+[[nodiscard]] Status MakeDirectory(std::string_view path);
+
 /// Host description, valid after `Init`. Used by log banners and the metadata sidecar.
 [[nodiscard]] std::string_view CpuName() noexcept;
 [[nodiscard]] std::string_view OsName() noexcept;

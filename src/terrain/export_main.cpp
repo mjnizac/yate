@@ -1,31 +1,17 @@
 // terrain_export: batch evaluation in Headless mode. Must run on a machine with no display.
 
 #include <engine/prelude.hpp>
+#include <engine/terrain/export.hpp>
 
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <string_view>
 
 namespace {
 
 using namespace engine;
-
-/// Everything the CLI can set. Mirrors the invocation documented in spec section 12.
-struct ExportJob {
-    std::string_view script;
-    std::string_view outputDirectory = "out/";
-    std::string_view deviceUuid;
-    u64_t            seed       = 0;
-    f64_t            minX       = 0.0;
-    f64_t            minZ       = 0.0;
-    f64_t            maxX       = 1024.0;
-    f64_t            maxZ       = 1024.0;
-    f64_t            resolution = 1.0;
-    u32_t            sectionSize = 512;
-    b8_t             tiles       = false;
-    log::Format      logFormat   = log::Format::Text;
-};
+using engine::terrain::ExportJob;
+using engine::terrain::ExportSummary;
 
 void PrintUsage() {
     std::fputs(
@@ -42,7 +28,11 @@ void PrintUsage() {
         "  --param key=value      script parameter, repeatable\n"
         "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"
         "  --log-format <text|json>  log encoding (default text)\n"
-        "  --help                 print this message\n",
+        "  --help                 print this message\n"
+        "\n"
+        "Until the Lua runtime lands (milestone 6) the graph is a single fBm node driven by\n"
+        "--param: frequency, octaves, lacunarity, gain, amplitude, offset, range=<min>,<max>\n"
+        "and normals=1.\n",
         stderr);
 }
 
@@ -64,18 +54,14 @@ void PrintUsage() {
     return end != buffer.data();
 }
 
-/// Returns the value of an option that takes an argument, or an empty view when it is missing.
-[[nodiscard]] std::string_view TakeValue(int argc, char** argv, int& index, std::string_view name) {
-    if (index + 1 >= argc) {
-        std::fprintf(stderr, "terrain_export: %.*s needs a value\n", static_cast<int>(name.size()),
-                     name.data());
-        return {};
-    }
-    return argv[++index];
-}
+struct Options {
+    ExportJob        job;
+    std::string_view deviceUuid;
+    log::Format      logFormat = log::Format::Text;
+};
 
-[[nodiscard]] Result<ExportJob> ParseArguments(int argc, char** argv) {
-    ExportJob job;
+[[nodiscard]] Result<Options> ParseArguments(int argc, char** argv) {
+    Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument = argv[i];
         if (argument == "--help" || argument == "-h") {
@@ -83,77 +69,62 @@ void PrintUsage() {
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "usage requested");
         }
         if (argument == "--tiles") {
-            job.tiles = true;
+            options.job.tiles = true;
             continue;
         }
-
-        const std::string_view value = TakeValue(argc, argv, i, argument);
-        if (value.empty()) {
-            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} needs a value",
-                        argument);
+        if (i + 1 >= argc) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} needs a value", argument);
         }
+        const std::string_view value = argv[++i];
 
         if (argument == "--script") {
-            job.script = value;
+            options.job.script = value;
         } else if (argument == "--out") {
-            job.outputDirectory = value;
+            options.job.outputDirectory = value;
         } else if (argument == "--device") {
-            job.deviceUuid = value;
+            options.deviceUuid = value;
         } else if (argument == "--seed") {
-            job.seed = std::strtoull(value.data(), nullptr, 10);
+            options.job.seed = std::strtoull(value.data(), nullptr, 10);
         } else if (argument == "--resolution") {
-            job.resolution = std::strtod(value.data(), nullptr);
+            options.job.resolution = std::strtod(value.data(), nullptr);
         } else if (argument == "--section") {
-            job.sectionSize = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            options.job.sectionSize = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
         } else if (argument == "--min") {
-            if (!ParsePair(value, job.minX, job.minZ)) {
+            if (!ParsePair(value, options.job.minX, options.job.minZ)) {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--min expects <x>,<z>, got {}", value);
             }
         } else if (argument == "--max") {
-            if (!ParsePair(value, job.maxX, job.maxZ)) {
+            if (!ParsePair(value, options.job.maxX, options.job.maxZ)) {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--max expects <x>,<z>, got {}", value);
             }
+        } else if (argument == "--param") {
+            if (!options.job.params.Assign(value)) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--param expects key=value, got {}", value);
+            }
         } else if (argument == "--log-format") {
             if (value == "json") {
-                job.logFormat = log::Format::Json;
-            } else if (value == "text") {
-                job.logFormat = log::Format::Text;
-            } else {
+                options.logFormat = log::Format::Json;
+            } else if (value != "text") {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--log-format expects text or json, got {}", value);
             }
-        } else if (argument == "--param") {
-            // Script parameters are forwarded once the Lua runtime exists (milestone 6).
-            std::fprintf(stderr, "terrain_export: --param is ignored until milestone 6\n");
         } else {
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "unknown option {}",
                         argument);
         }
     }
 
-    if (job.script.empty()) {
+    if (options.job.script.empty()) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "--script is required");
     }
-    if (job.sectionSize == 0 || !IsPowerOfTwo(job.sectionSize)) {
-        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                    "--section must be a power of two, got {}", job.sectionSize);
-    }
-    if (job.resolution <= 0.0) {
-        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                    "--resolution must be positive, got {}", job.resolution);
-    }
-    if (job.maxX <= job.minX || job.maxZ <= job.minZ) {
-        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                    "--max must be greater than --min on both axes");
-    }
-    return job;
+    return options;
 }
 
-/// Logs the job and stops the application. The evaluation and export stages replace its body in
-/// milestones 4 and 7; keeping the loop real means the layer stack and Tracy zones are exercised
-/// from the start.
+/// Runs the job once and stops the application. Section pipelining arrives in milestone 7; the
+/// layer stack is what will carry it.
 class ExportLayer final : public Layer {
 public:
     ExportLayer(Application& application, const ExportJob& job) noexcept
@@ -162,14 +133,16 @@ public:
     [[nodiscard]] const char* Name() const noexcept override { return "ExportLayer"; }
 
     void OnUpdate() override {
-        LOG_INFO("job: script={} seed={} bounds=({},{})..({},{}) resolution={} section={} out={}",
-                 m_job.script, m_job.seed, m_job.minX, m_job.minZ, m_job.maxX, m_job.maxZ,
-                 m_job.resolution, m_job.sectionSize, m_job.outputDirectory);
-
-        const Error error = MakeError(ErrorCode::Unsupported, ErrorStage::Export,
-                                      "evaluation and PNG export are not implemented yet; "
-                                      "see docs/status.md (milestone 4)");
-        App().Fail(error, ExitCode::FailedToExport);
+        const Result<ExportSummary> summary = terrain::RunExport(App(), m_job);
+        if (!summary) {
+            App().Fail(summary.error(), ExitCode::FailedToExport);
+            return;
+        }
+        for (usize_t i = 0; i < summary->fileCount; ++i) {
+            LOG_INFO("wrote {}", summary->files[i].data());
+        }
+        LOG_INFO("wrote {}", summary->metadataFile.data());
+        App().Stop();
     }
 
 private:
@@ -179,16 +152,17 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    const Result<ExportJob> job = ParseArguments(argc, argv);
-    if (!job) {
-        std::fprintf(stderr, "terrain_export: %s\n", job.error().Format().data());
+    const Result<Options> options = ParseArguments(argc, argv);
+    if (!options) {
+        std::fprintf(stderr, "terrain_export: %s\n", options.error().Format().data());
         return static_cast<int>(ExitCode::FailedToLoadScript);
     }
 
-    const Result<Application*> application = engine::init(AppInfo{.mode = RunMode::Headless,
-                                                                 .name = "terrain_export",
-                                                                 .logFormat = job->logFormat,
-                                                                 .deviceUuid = job->deviceUuid});
+    const Result<Application*> application =
+        engine::init(AppInfo{.mode       = RunMode::Headless,
+                             .name       = "terrain_export",
+                             .logFormat  = options->logFormat,
+                             .deviceUuid = options->deviceUuid});
     if (!application) {
         std::fprintf(stderr, "terrain_export: %s\n", application.error().Format().data());
         const Status closed = engine::shutdown(nullptr);
@@ -196,7 +170,7 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitCode::FailedToInitializeEngine);
     }
 
-    (*application)->PushLayer<ExportLayer>(*job);
+    (*application)->PushLayer<ExportLayer>(options->job);
     (*application)->Run();
 
     ExitCode exit = (*application)->Exit();

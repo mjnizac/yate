@@ -70,6 +70,7 @@ add_library(engine_objects OBJECT
     src/memory/pool.cpp
     src/platform/platform.cpp
     src/terrain/mapping.cpp
+    src/terrain/export.cpp
     src/terrain/output_writer.cpp
     src/vulkan/allocator.cpp
     src/vulkan/buffer_pool.cpp
