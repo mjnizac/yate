@@ -4,9 +4,9 @@ Scope of the current session: milestones 1 to 3.
 
 | # | Milestone | State |
 | --- | --- | --- |
-| 1 | Skeleton | implemented, build verification pending |
-| 2 | Memory system | implemented, build verification pending |
-| 3 | Vulkan context in Headless mode | implemented, build verification pending |
+| 1 | Skeleton | implemented, compiles clean; link and run pending |
+| 2 | Memory system | implemented, compiles clean; link and run pending |
+| 3 | Vulkan context in Headless mode | implemented, compiles clean; link and run pending |
 | 4 | First export | not started |
 | 5 | Graph and compiler, without Lua | not started |
 | 6 | Lua bindings | not started |
@@ -23,8 +23,9 @@ toolchain, the Windows SDK, CMake and Ninja are all present and working.
 See `docs/commands.md` for the one command that installs it; it needs an interactive UAC prompt,
 which is why it could not be scripted.
 
-Nothing below has been run. Treat every "implemented" above as "written and reviewed, not yet
-compiled".
+Every translation unit has been compile-checked with MSVC 19.44 at /W4 against the fetched
+dependencies and the Vulkan 1.4 headers, and is clean. What has not happened yet is linking,
+shader compilation with `glslc`, and running anything: all three need the SDK.
 
 ## 1. Skeleton
 
