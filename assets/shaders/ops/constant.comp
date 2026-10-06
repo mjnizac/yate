@@ -16,9 +16,9 @@ void main() {
     uint index      = SampleIndex(local);
     uint components = max(ParamUint(4), 1u);
 
-    FloatBuffer output = FloatBuffer(pc.outputs[0]);
+    FloatBuffer target = FloatBuffer(pc.outputs[0]);
     uint        base   = index * components;
     for (uint c = 0u; c < components; ++c) {
-        output.values[base + c] = ParamFloat(c);
+        target.values[base + c] = ParamFloat(c);
     }
 }

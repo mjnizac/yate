@@ -80,41 +80,41 @@ bool WantsChannel(uint channel) { return (pc.channelMask & (1u << channel)) != 0
 
 // --- Typed access to the bound values ---------------------------------------------------------
 
-float LoadScalar(uint input, uint index) {
-    return FloatBuffer(pc.inputs[input]).values[index];
+float LoadScalar(uint slot, uint index) {
+    return FloatBuffer(pc.inputs[slot]).values[index];
 }
 
-void StoreScalar(uint output, uint index, float value) {
-    FloatBuffer(pc.outputs[output]).values[index] = value;
+void StoreScalar(uint slot, uint index, float value) {
+    FloatBuffer(pc.outputs[slot]).values[index] = value;
 }
 
 // Components of an Rn->Rm value are stored tightly packed, so sample `index` of an m-component
 // value starts at `index * m`.
-vec2 LoadVec2(uint input, uint index) {
-    FloatBuffer buffer = FloatBuffer(pc.inputs[input]);
+vec2 LoadVec2(uint slot, uint index) {
+    FloatBuffer source = FloatBuffer(pc.inputs[slot]);
     uint        base   = index * 2u;
-    return vec2(buffer.values[base], buffer.values[base + 1u]);
+    return vec2(source.values[base], source.values[base + 1u]);
 }
 
-vec3 LoadVec3(uint input, uint index) {
-    FloatBuffer buffer = FloatBuffer(pc.inputs[input]);
+vec3 LoadVec3(uint slot, uint index) {
+    FloatBuffer source = FloatBuffer(pc.inputs[slot]);
     uint        base   = index * 3u;
-    return vec3(buffer.values[base], buffer.values[base + 1u], buffer.values[base + 2u]);
+    return vec3(source.values[base], source.values[base + 1u], source.values[base + 2u]);
 }
 
-void StoreVec2(uint output, uint index, vec2 value) {
-    FloatBuffer buffer = FloatBuffer(pc.outputs[output]);
+void StoreVec2(uint slot, uint index, vec2 value) {
+    FloatBuffer target = FloatBuffer(pc.outputs[slot]);
     uint        base   = index * 2u;
-    buffer.values[base]      = value.x;
-    buffer.values[base + 1u] = value.y;
+    target.values[base]      = value.x;
+    target.values[base + 1u] = value.y;
 }
 
-void StoreVec3(uint output, uint index, vec3 value) {
-    FloatBuffer buffer = FloatBuffer(pc.outputs[output]);
+void StoreVec3(uint slot, uint index, vec3 value) {
+    FloatBuffer target = FloatBuffer(pc.outputs[slot]);
     uint        base   = index * 3u;
-    buffer.values[base]      = value.x;
-    buffer.values[base + 1u] = value.y;
-    buffer.values[base + 2u] = value.z;
+    target.values[base]      = value.x;
+    target.values[base + 1u] = value.y;
+    target.values[base + 2u] = value.z;
 }
 
 // Reinterprets a parameter word, which the engine packs as raw bits.
