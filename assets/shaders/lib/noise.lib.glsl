@@ -165,96 +165,50 @@ vec4 Simplex3D(vec3 p, uint seed) {
     sum += SimplexCorner3(d3, LatticeGradient3(i0 + ivec3(1), seed), 0.6);
     return sum * ENGINE_SIMPLEX3_SCALE;
 }
-
-// --- Noise kinds --------------------------------------------------------------------------------
-
-#define ENGINE_NOISE_SIMPLEX 0u
-#define ENGINE_NOISE_RIDGED  1u
-#define ENGINE_NOISE_BILLOW  2u
-
-// Shapes one octave, carrying its derivative through the transform:
+// --- Derived base functions ----------------------------------------------------------------------
+//
+// Ridged and billow are not a separate axis from the base function: they are base functions in
+// their own right, built on simplex and carrying their own exact derivative. That leaves fbm with a
+// single generic axis instead of two.
 //
 //   ridged: v = (1 - |n|)^2,  dv = -2 (1 - |n|) sign(n) dn
 //   billow: v = 2|n| - 1,     dv = 2 sign(n) dn
 //
-// Both have a kink where n is exactly zero. That is inherent to the shape rather than a defect of
-// the derivative, and the set of samples landing there has measure zero.
-vec3 ShapeOctave2(uint kind, vec3 n) {
-    if (kind == ENGINE_NOISE_RIDGED) {
-        float s = n.x < 0.0 ? -1.0 : 1.0;
-        float r = 1.0 - s * n.x;
-        return vec3(r * r, (-2.0 * r * s) * n.yz);
-    }
-    if (kind == ENGINE_NOISE_BILLOW) {
-        float s = n.x < 0.0 ? -1.0 : 1.0;
-        return vec3(2.0 * s * n.x - 1.0, (2.0 * s) * n.yz);
-    }
-    return n;
+// Both have a kink where n is exactly zero, because |n| has no derivative there. That is inherent
+// to the shape rather than a defect: the kink *is* the ridge. What matters is that the tie-break is
+// deterministic, so a region split into sections still agrees bit for bit. At n == 0 the expression
+// below takes the right-hand derivative. GLSL's `sign()` would return 0 there and kill the
+// gradient, which is why it is not used.
+
+vec3 Ridged2D(vec2 p, uint seed) {
+    vec3  n = Simplex2D(p, seed);
+    float s = n.x < 0.0 ? -1.0 : 1.0;
+    float r = 1.0 - s * n.x;
+    return vec3(r * r, (-2.0 * r * s) * n.yz);
 }
 
-vec4 ShapeOctave3(uint kind, vec4 n) {
-    if (kind == ENGINE_NOISE_RIDGED) {
-        float s = n.x < 0.0 ? -1.0 : 1.0;
-        float r = 1.0 - s * n.x;
-        return vec4(r * r, (-2.0 * r * s) * n.yzw);
-    }
-    if (kind == ENGINE_NOISE_BILLOW) {
-        float s = n.x < 0.0 ? -1.0 : 1.0;
-        return vec4(2.0 * s * n.x - 1.0, (2.0 * s) * n.yzw);
-    }
-    return n;
+vec4 Ridged3D(vec3 p, uint seed) {
+    vec4  n = Simplex3D(p, seed);
+    float s = n.x < 0.0 ? -1.0 : 1.0;
+    float r = 1.0 - s * n.x;
+    return vec4(r * r, (-2.0 * r * s) * n.yzw);
 }
 
-// --- Fractal accumulation -----------------------------------------------------------------------
-
-// Each octave is sampled at `f * p`, so by the chain rule its gradient in world units is `f * grad`.
-// The chain rule is applied before the kind transform, because that transform is a function of the
-// octave value and its own derivative multiplies whatever comes in. Accumulating this alongside the
-// value is what makes the result exact rather than a finite-difference estimate of the sum.
-//
-// Returns vec3(value, d/dx, d/dy), normalized by the sum of the amplitudes so the result keeps the
-// range of a single octave.
-vec3 FractalNoise2D(uint kind, vec2 p, float frequency, uint octaves, float lacunarity, float gain,
-                    uint seed) {
-    vec3  sum       = vec3(0.0);
-    float amplitude = 1.0;
-    float f         = frequency;
-    float norm      = 0.0;
-
-    for (uint o = 0u; o < octaves; ++o) {
-        // Decorrelating the seed per octave avoids the octaves lining up at the lattice origin.
-        vec3 n = Simplex2D(p * f, seed + o * ENGINE_HASH_PHI);
-        n.yz *= f;
-        vec3 shaped = ShapeOctave2(kind, n);
-        sum.x += amplitude * shaped.x;
-        sum.yz += amplitude * shaped.yz;
-        norm += amplitude;
-        amplitude *= gain;
-        f *= lacunarity;
-    }
-
-    return norm > 0.0 ? sum / norm : vec3(0.0);
+vec3 Billow2D(vec2 p, uint seed) {
+    vec3  n = Simplex2D(p, seed);
+    float s = n.x < 0.0 ? -1.0 : 1.0;
+    return vec3(2.0 * s * n.x - 1.0, (2.0 * s) * n.yz);
 }
 
-vec4 FractalNoise3D(uint kind, vec3 p, float frequency, uint octaves, float lacunarity, float gain,
-                    uint seed) {
-    vec4  sum       = vec4(0.0);
-    float amplitude = 1.0;
-    float f         = frequency;
-    float norm      = 0.0;
-
-    for (uint o = 0u; o < octaves; ++o) {
-        vec4 n = Simplex3D(p * f, seed + o * ENGINE_HASH_PHI);
-        n.yzw *= f;
-        vec4 shaped = ShapeOctave3(kind, n);
-        sum.x += amplitude * shaped.x;
-        sum.yzw += amplitude * shaped.yzw;
-        norm += amplitude;
-        amplitude *= gain;
-        f *= lacunarity;
-    }
-
-    return norm > 0.0 ? sum / norm : vec4(0.0);
+vec4 Billow3D(vec3 p, uint seed) {
+    vec4  n = Simplex3D(p, seed);
+    float s = n.x < 0.0 ? -1.0 : 1.0;
+    return vec4(2.0 * s * n.x - 1.0, (2.0 * s) * n.yzw);
 }
+
+// Base function ids, matching engine::terrain::NoiseKind.
+#define ENGINE_BASE_SIMPLEX 0u
+#define ENGINE_BASE_RIDGED  1u
+#define ENGINE_BASE_BILLOW  2u
 
 #endif // ENGINE_LIB_NOISE_GLSL
