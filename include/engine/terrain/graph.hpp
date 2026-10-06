@@ -158,9 +158,16 @@ public:
         f32_t     frequency  = 0.002f;
         u32_t     octaves    = 6;
         f32_t     lacunarity = 2.0f;
-        f32_t     gain       = 0.5f;
+        /// Amplitude multiplier per octave. Strictly positive; usually at most 1, but not bounded.
+        f32_t persistence = 0.5f;
         f32_t     amplitude  = 1.0f;
         f32_t     offset     = 0.0f;
+        /// Decorrelates nodes that share the job seed.
+        u32_t     seedSalt   = 0;
+        /// Divides the octave sum by the sum of the amplitudes, so `amplitude` is the output
+        /// half-range and the declared output range stays predictable. Cleared gives the classic
+        /// unnormalized fBm, where `amplitude` is the first octave's amplitude.
+        b8_t normalize = true;
     };
 
     /// Returns the value channel. `Channel(value, 1)` selects the analytic gradient.

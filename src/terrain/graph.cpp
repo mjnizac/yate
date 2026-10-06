@@ -1,6 +1,7 @@
 #include <engine/terrain/graph.hpp>
 
 #include <engine/assert.hpp>
+#include <engine/terrain/kernels.hpp>
 #include <engine/log.hpp>
 
 #include <cstring>
@@ -154,13 +155,24 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
     if (params.frequency <= 0.0f) {
         return std::unexpected(MakeScriptError(
             ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
-            "Noise frequency must be positive, got {}", params.frequency));
+            "Noise frequency must be strictly greater than zero, got {}", params.frequency));
+    }
+    if (params.persistence <= 0.0f) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Noise persistence must be strictly greater than zero, got {}", params.persistence));
+    }
+    if (params.lacunarity <= 0.0f) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Noise lacunarity must be strictly greater than zero, got {}", params.lacunarity));
     }
 
     Node node;
-    node.kind         = OpKind::Noise;
-    node.nodeClass    = NodeClass::Pointwise;
-    node.variant      = static_cast<u32_t>(params.kind);
+    node.kind      = OpKind::Noise;
+    node.nodeClass = NodeClass::Pointwise;
+    // Two variant axes: the base function and whether the octave sum is normalized.
+    node.variant      = PackVariant(static_cast<u32_t>(params.kind), params.normalize ? 1u : 0u);
     node.channelCount = 2;
     node.channels[0]  = Mapping{params.domain, 1};
     // The gradient has one component per axis: R2 -> R2, R3 -> R3.
@@ -169,10 +181,11 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
     PackFloat(node.params, 0, params.frequency);
     node.params[1] = params.octaves;
     PackFloat(node.params, 2, params.lacunarity);
-    PackFloat(node.params, 3, params.gain);
+    PackFloat(node.params, 3, params.persistence);
     PackFloat(node.params, 4, params.amplitude);
     PackFloat(node.params, 5, params.offset);
-    // params[6] is the sample spacing, filled by the evaluator from the job resolution.
+    // params[6] is the sample spacing, filled by the compiler from the job resolution.
+    node.params[7] = params.seedSalt;
     return Append(node, location);
 }
 

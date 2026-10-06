@@ -31,7 +31,8 @@ void PrintUsage() {
         "  --help                 print this message\n"
         "\n"
         "Until the Lua runtime lands (milestone 6) the graph is a single fBm node driven by\n"
-        "--param: frequency, octaves, lacunarity, gain, amplitude, offset, range=<min>,<max>\n"
+        "--param: frequency, octaves, lacunarity, persistence, amplitude, offset,\n"
+        "range=<min>,<max>, normalize=0 and normals=1.\n"
         "and normals=1.\n",
         stderr);
 }

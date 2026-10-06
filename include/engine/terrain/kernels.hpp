@@ -16,9 +16,20 @@ class Context;
 
 namespace engine::terrain {
 
-/// Specialization constant id carrying the op variant. Ids 0 to 2 are the workgroup size, so one
+/// First specialization constant id available to an op. Ids 0 to 2 are the workgroup size, so one
 /// SPIR-V module serves both domains (see `vulkan::WorkgroupSpecialization`).
-inline constexpr u32_t kVariantConstantId = vulkan::SpecializationValues::kFirstVariantId;
+///
+/// A node's `variant` is an opaque bitfield owned by its op, split into byte-wide fields that map
+/// to consecutive constant ids from here on. That lets an op have several independent variant axes
+/// without the pipeline map needing more than one key.
+inline constexpr u32_t kFirstVariantConstantId = vulkan::SpecializationValues::kFirstVariantId;
+inline constexpr u32_t kVariantFieldBits       = 8;
+inline constexpr u32_t kVariantFieldMask       = 0xFFu;
+
+/// Packs byte-wide variant fields, least significant first.
+[[nodiscard]] constexpr u32_t PackVariant(u32_t field0, u32_t field1 = 0) noexcept {
+    return (field0 & kVariantFieldMask) | ((field1 & kVariantFieldMask) << kVariantFieldBits);
+}
 
 /// Static description of one op: its kernel, its class and how the compiler may treat it.
 ///
@@ -37,8 +48,9 @@ struct OpInfo {
     usize_t resolutionWord = kMaxNodeParams;
     /// True when a CPU reference implementation exists, which is also what makes the op foldable.
     b8_t hasReference = false;
-    /// True when the op reads a variant specialization constant.
-    b8_t hasVariants = false;
+    /// Number of byte-wide fields packed into a node's `variant`, each becoming one
+    /// specialization constant from id 3 upwards. Zero means the op has no variants.
+    u8_t specFieldCount = 0;
 };
 
 [[nodiscard]] const OpInfo& OpInfoOf(OpKind kind) noexcept;

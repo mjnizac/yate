@@ -9,9 +9,9 @@ local function main(params)
         kind       = "simplex",
         frequency  = 0.004,
         octaves    = 4,
-        lacunarity = 2.0,
-        gain       = 0.5,
-        seed       = params.seed,
+        lacunarity  = 2.0,
+        persistence = 0.5,
+        seed        = params.seed,
     }
 
     local height = noise.value * 900.0 + 700.0

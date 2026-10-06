@@ -83,8 +83,8 @@ struct ExportSummary {
 /// Evaluates every section of `job` and writes its outputs plus the `.json` sidecar.
 ///
 /// Until the graph compiler lands (milestone 5) the graph is a single fBm node, configured through
-/// `job.params`: `frequency`, `octaves`, `lacunarity`, `gain`, `amplitude`, `offset`, `range` and
-/// `normals`.
+/// `job.params`: `frequency`, `octaves`, `lacunarity`, `persistence`, `amplitude`, `offset`,
+/// `range`, `normalize` and `normals`.
 [[nodiscard]] ENGINE_API Result<ExportSummary> RunExport(Application&     application,
                                                         const ExportJob& job);
 

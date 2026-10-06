@@ -159,12 +159,13 @@ struct NoiseConfig {
     f32_t frequency  = 0.002f;
     u32_t octaves    = 6;
     f32_t lacunarity = 2.0f;
-    f32_t gain       = 0.5f;
+    f32_t persistence = 0.5f;
     f32_t amplitude  = 1.0f;
     f32_t offset     = 0.0f;
     f32_t rangeMin   = -1.0f;
     f32_t rangeMax   = 1.0f;
     b8_t  normals    = false;
+    b8_t  normalize  = true;
 };
 
 NoiseConfig ReadNoiseConfig(const Params& params) {
@@ -172,7 +173,7 @@ NoiseConfig ReadNoiseConfig(const Params& params) {
     config.frequency  = static_cast<f32_t>(params.Number("frequency", config.frequency));
     config.octaves    = static_cast<u32_t>(params.Number("octaves", config.octaves));
     config.lacunarity = static_cast<f32_t>(params.Number("lacunarity", config.lacunarity));
-    config.gain       = static_cast<f32_t>(params.Number("gain", config.gain));
+    config.persistence = static_cast<f32_t>(params.Number("persistence", config.persistence));
     config.amplitude  = static_cast<f32_t>(params.Number("amplitude", config.amplitude));
     config.offset     = static_cast<f32_t>(params.Number("offset", config.offset));
     config.octaves    = config.octaves == 0 ? 1 : config.octaves;
@@ -187,7 +188,8 @@ NoiseConfig ReadNoiseConfig(const Params& params) {
         config.rangeMin = config.offset - config.amplitude;
         config.rangeMax = config.offset + config.amplitude;
     }
-    config.normals = params.Number("normals", 0.0) != 0.0;
+    config.normals   = params.Number("normals", 0.0) != 0.0;
+    config.normalize = params.Number("normalize", 1.0) != 0.0;
     return config;
 }
 
@@ -510,7 +512,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     std::memcpy(&constants.params[0], &noise.frequency, sizeof(f32_t));
     constants.params[1] = noise.octaves;
     std::memcpy(&constants.params[2], &noise.lacunarity, sizeof(f32_t));
-    std::memcpy(&constants.params[3], &noise.gain, sizeof(f32_t));
+    std::memcpy(&constants.params[3], &noise.persistence, sizeof(f32_t));
     std::memcpy(&constants.params[4], &noise.amplitude, sizeof(f32_t));
     std::memcpy(&constants.params[5], &noise.offset, sizeof(f32_t));
     const f32_t resolution = static_cast<f32_t>(job.resolution);

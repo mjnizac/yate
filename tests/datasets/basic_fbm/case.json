@@ -8,7 +8,7 @@
     "frequency": "0.004",
     "octaves": "4",
     "lacunarity": "2.0",
-    "gain": "0.5",
+    "persistence": "0.5",
     "amplitude": "900",
     "offset": "700",
     "range": "-200,1800",

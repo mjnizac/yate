@@ -30,7 +30,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = false},
+     .specFieldCount = 0},
     {.kind           = OpKind::Coords,
      .name           = "Coords",
      .shader         = "ops/coords.comp.spv",
@@ -39,7 +39,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = false, // Depends on world position, so it is not foldable.
-     .hasVariants    = false},
+     .specFieldCount = 0},
     {.kind           = OpKind::Noise,
      .name           = "Noise",
      .shader         = "ops/fbm.comp.spv",
@@ -48,7 +48,8 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 2,
      .resolutionWord = 6,
      .hasReference   = false, // Has its own reference, `EvalNoise`, not the pointwise one.
-     .hasVariants    = true},
+     // Two axes: the base function and whether the octave sum is normalized.
+     .specFieldCount = 2},
     {.kind           = OpKind::Normals,
      .name           = "Normals",
      .shader         = "ops/normals.comp.spv",
@@ -57,7 +58,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = false},
+     .specFieldCount = 0},
     {.kind           = OpKind::Arith,
      .name           = "Arith",
      .shader         = "ops/arith.comp.spv",
@@ -66,7 +67,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = true},
+     .specFieldCount = 1},
     {.kind           = OpKind::Curve,
      .name           = "Curve",
      .shader         = "ops/curve.comp.spv",
@@ -75,7 +76,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = true},
+     .specFieldCount = 1},
     {.kind           = OpKind::Blend,
      .name           = "Blend",
      .shader         = "ops/blend.comp.spv",
@@ -84,7 +85,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = false},
+     .specFieldCount = 0},
     {.kind           = OpKind::SlopeMask,
      .name           = "SlopeMask",
      .shader         = "ops/slope_mask.comp.spv",
@@ -93,7 +94,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = false},
+     .specFieldCount = 0},
     {.kind           = OpKind::Vector,
      .name           = "Vector",
      .shader         = "ops/vector.comp.spv",
@@ -102,7 +103,7 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .hasVariants    = true},
+     .specFieldCount = 1},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -327,24 +328,81 @@ void LatticeGradient3(i32_t x, i32_t y, i32_t z, u32_t seed, std::array<f32_t, 3
     return {sum[0] * kScale, sum[1] * kScale, sum[2] * kScale, sum[3] * kScale};
 }
 
-/// Shapes one octave, mirroring `ShapeOctave2`/`ShapeOctave3`.
-void ShapeOctave(NoiseKind kind, f32_t& value, f32_t* gradient, usize_t axes) {
+/// A base function sample: value plus its exact gradient, with `axes` components in use.
+template <usize_t Axes>
+struct BaseSample {
+    f32_t                    value = 0.0f;
+    std::array<f32_t, Axes>  gradient{};
+};
+
+/// Derived base functions, mirroring `Ridged2D`/`Billow2D` and their 3D forms.
+///
+/// At value == 0 the sign is taken as +1, which is the right-hand derivative. The GLSL side makes
+/// the same choice for the same reason: `|n|` has no derivative there, and a deterministic
+/// tie-break is what keeps a region split into sections bit-identical.
+template <usize_t Axes>
+void ShapeBase(NoiseKind kind, BaseSample<Axes>& sample) {
     if (kind == NoiseKind::Simplex) {
         return;
     }
-    const f32_t sign = value < 0.0f ? -1.0f : 1.0f;
+    const f32_t sign = sample.value < 0.0f ? -1.0f : 1.0f;
     if (kind == NoiseKind::Ridged) {
-        const f32_t r = 1.0f - sign * value;
-        value         = r * r;
-        for (usize_t i = 0; i < axes; ++i) {
-            gradient[i] *= -2.0f * r * sign;
+        const f32_t r = 1.0f - sign * sample.value;
+        sample.value  = r * r;
+        for (usize_t i = 0; i < Axes; ++i) {
+            sample.gradient[i] *= -2.0f * r * sign;
         }
         return;
     }
-    value = 2.0f * sign * value - 1.0f;
-    for (usize_t i = 0; i < axes; ++i) {
-        gradient[i] *= 2.0f * sign;
+    sample.value = 2.0f * sign * sample.value - 1.0f;
+    for (usize_t i = 0; i < Axes; ++i) {
+        sample.gradient[i] *= 2.0f * sign;
     }
+}
+
+/// The fBm accumulation, generic over the base function, mirroring `ENGINE_DEFINE_FBM`.
+///
+/// The multiply grouping matches the GLSL exactly: one weight per octave, one amplitude multiply at
+/// the end. Any other grouping changes the last bit, and `test_kernels` compares the two.
+template <usize_t Axes, typename Base>
+[[nodiscard]] BaseSample<Axes> Fbm(const Graph::NoiseParams& params, u32_t seed,
+                                   const std::array<f32_t, Axes>& point, Base base) {
+    BaseSample<Axes> sum;
+    f32_t            a    = 1.0f;
+    f32_t            f    = params.frequency;
+    f32_t            norm = 0.0f;
+
+    for (u32_t octave = 0; octave < params.octaves; ++octave) {
+        std::array<f32_t, Axes> scaled{};
+        for (usize_t i = 0; i < Axes; ++i) {
+            scaled[i] = point[i] * f;
+        }
+        BaseSample<Axes> n = base(scaled, seed + octave * kHashPhi);
+        ShapeBase(params.kind, n);
+
+        const f32_t af = a * f;
+        sum.value += n.value * a;
+        for (usize_t i = 0; i < Axes; ++i) {
+            sum.gradient[i] += n.gradient[i] * af;
+        }
+        norm += a;
+        a *= params.persistence;
+        f *= params.lacunarity;
+    }
+
+    BaseSample<Axes> result;
+    if (params.normalize) {
+        result.value = params.amplitude * (sum.value / norm);
+        for (usize_t i = 0; i < Axes; ++i) {
+            result.gradient[i] = params.amplitude * (sum.gradient[i] / norm);
+        }
+    } else {
+        result.value = params.amplitude * sum.value;
+        for (usize_t i = 0; i < Axes; ++i) {
+            result.gradient[i] = params.amplitude * sum.gradient[i];
+        }
+    }
+    return result;
 }
 
 } // namespace
@@ -443,51 +501,28 @@ b8_t EvalPointwise(const Graph::Node& node,
 NoiseSample EvalNoise(const Graph::NoiseParams& params, u32_t seed,
                       std::array<f32_t, 3> position) {
     NoiseSample result;
-    f32_t       amplitude = 1.0f;
-    f32_t       frequency = params.frequency;
-    f32_t       norm      = 0.0f;
-    const usize_t axes    = params.domain == Domain::R3 ? 3 : 2;
 
-    for (u32_t octave = 0; octave < params.octaves; ++octave) {
-        const u32_t octaveSeed = seed + octave * kHashPhi;
-        f32_t                value = 0.0f;
-        std::array<f32_t, 3> gradient{};
-
-        if (params.domain == Domain::R3) {
-            const std::array<f32_t, 4> n =
-                Simplex3D({position[0] * frequency, position[1] * frequency,
-                           position[2] * frequency},
-                          octaveSeed);
-            value    = n[0];
-            gradient = {n[1] * frequency, n[2] * frequency, n[3] * frequency};
-        } else {
-            const std::array<f32_t, 3> n =
-                Simplex2D(position[0] * frequency, position[2] * frequency, octaveSeed);
-            value    = n[0];
-            gradient = {n[1] * frequency, n[2] * frequency, 0.0f};
-        }
-
-        ShapeOctave(params.kind, value, gradient.data(), axes);
-
-        result.value += amplitude * value;
-        for (usize_t i = 0; i < axes; ++i) {
-            result.gradient[i] += amplitude * gradient[i];
-        }
-        norm += amplitude;
-        amplitude *= params.gain;
-        frequency *= params.lacunarity;
+    if (params.domain == Domain::R3) {
+        const BaseSample<3> sample = Fbm<3>(
+            params, seed, position, [](const std::array<f32_t, 3>& p, u32_t octaveSeed) {
+                const std::array<f32_t, 4> n = Simplex3D(p, octaveSeed);
+                return BaseSample<3>{.value = n[0], .gradient = {n[1], n[2], n[3]}};
+            });
+        result.value    = sample.value + params.offset;
+        result.gradient = sample.gradient;
+        return result;
     }
 
-    if (norm > 0.0f) {
-        result.value /= norm;
-        for (usize_t i = 0; i < 3; ++i) {
-            result.gradient[i] /= norm;
-        }
-    }
-    result.value = result.value * params.amplitude + params.offset;
-    for (usize_t i = 0; i < 3; ++i) {
-        result.gradient[i] *= params.amplitude;
-    }
+    // R2 lives in the (x, z) plane, so the y component of `position` is ignored.
+    const BaseSample<2> sample = Fbm<2>(
+        params, seed, {position[0], position[2]},
+        [](const std::array<f32_t, 2>& p, u32_t octaveSeed) {
+            const std::array<f32_t, 3> n = Simplex2D(p[0], p[1], octaveSeed);
+            return BaseSample<2>{.value = n[0], .gradient = {n[1], n[2]}};
+        });
+    result.value       = sample.value + params.offset;
+    result.gradient[0] = sample.gradient[0];
+    result.gradient[1] = sample.gradient[1];
     return result;
 }
 
@@ -524,8 +559,8 @@ Result<const vulkan::ComputePipeline*> KernelLibrary::Get(OpKind kind, u32_t var
     // which is how a change of code shape avoids any shader compilation.
     vulkan::SpecializationValues specialization =
         vulkan::WorkgroupSpecialization(static_cast<u32_t>(domain));
-    if (info.hasVariants) {
-        specialization.Add(variant);
+    for (u8_t field = 0; field < info.specFieldCount; ++field) {
+        specialization.Add((variant >> (field * kVariantFieldBits)) & kVariantFieldMask);
     }
 
     const Clock::time_point start = Clock::now();

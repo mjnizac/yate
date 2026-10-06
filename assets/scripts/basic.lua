@@ -7,9 +7,9 @@ local function main(params)
         kind       = "simplex",
         frequency  = 0.002,
         octaves    = 6,
-        lacunarity = 2.0,
-        gain       = 0.5,
-        seed       = params.seed,
+        lacunarity  = 2.0,
+        persistence = 0.5,
+        seed        = params.seed,
     }
 
     local ridges = Noises.Ridged{

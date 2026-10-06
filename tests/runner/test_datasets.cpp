@@ -284,8 +284,9 @@ struct Case {
     testCase.failSlower      = json->Number("performance.fail_slower", kFailSlowerFraction);
 
     // Parameters are a flat object, copied through verbatim.
-    static constexpr const char* kParamKeys[] = {"frequency", "octaves",   "lacunarity", "gain",
-                                                 "amplitude", "offset",    "range",      "normals"};
+    static constexpr const char* kParamKeys[] = {"frequency",  "octaves", "lacunarity", "persistence",
+                                                 "amplitude",  "offset",  "range",      "normals",
+                                                 "normalize"};
     for (const char* key : kParamKeys) {
         const std::string path  = std::string{"params."} + key;
         const std::string_view value = json->Text(path);
