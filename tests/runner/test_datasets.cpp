@@ -8,6 +8,7 @@
 //   test_datasets                          run every case
 //   test_datasets --case <name>            run one case
 //   test_datasets --update-golden <name>   regenerate the expected outputs of one case
+//   test_datasets --update-baseline        re-record the timing baseline for this machine
 //   test_datasets --list                   list the cases
 
 #include "json_reader.hpp"
@@ -367,7 +368,8 @@ void CheckTiming(const Case& testCase, const char* label, f64_t measured, f64_t 
 int main(int argc, char** argv) {
     std::string updateGolden;
     std::string onlyCase;
-    b8_t        listOnly = false;
+    b8_t        listOnly       = false;
+    b8_t        updateBaseline = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument = argv[i];
@@ -375,6 +377,8 @@ int main(int argc, char** argv) {
             listOnly = true;
         } else if (argument == "--update-golden" && i + 1 < argc) {
             updateGolden = argv[++i];
+        } else if (argument == "--update-baseline") {
+            updateBaseline = true;
         } else if (argument == "--case" && i + 1 < argc) {
             onlyCase = argv[++i];
         } else {
@@ -534,7 +538,9 @@ int main(int argc, char** argv) {
         const std::string baselinePath =
             root + kBaselinesRelative + "/" + machine + ".json";
         Result<test::Json> baseline = test::Json::Load(baselinePath);
-        if (!baseline) {
+        // A baseline is re-recorded only on request, for the same reason golden outputs are: a
+        // number that moves on its own measures nothing.
+        if (!baseline || updateBaseline) {
             if (Status created =
                     platform::MakeDirectory(root + kBaselinesRelative);
                 !created) {
@@ -548,7 +554,8 @@ int main(int argc, char** argv) {
                              "{\n  \"%s\": { \"total_ms\": %.4f, \"gpu_ms\": %.4f }\n}\n",
                              name.c_str(), medianTotal, medianGpu);
                 std::fclose(file);
-                std::printf("NOTE no baseline for this machine; recorded %s\n",
+                std::printf("NOTE %s baseline for this machine: %s\n",
+                            updateBaseline ? "re-recorded the" : "recorded a first",
                             baselinePath.c_str());
             }
         } else {

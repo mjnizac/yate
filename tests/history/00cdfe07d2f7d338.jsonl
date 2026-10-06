@@ -1,3 +1,7 @@
 {"case":"basic_fbm","commit":"76d39c1","total_ms":322.1606,"gpu_ms":0.1228}
 {"case":"basic_fbm","commit":"76d39c1","total_ms":318.1457,"gpu_ms":0.1210}
 {"case":"basic_fbm","commit":"76d39c1","total_ms":328.0874,"gpu_ms":0.1229}
+{"case":"basic_fbm","commit":"746c24b","total_ms":390.7096,"gpu_ms":0.1673}
+{"case":"basic_fbm","commit":"746c24b","total_ms":395.8663,"gpu_ms":0.1666}
+{"case":"basic_fbm","commit":"746c24b","total_ms":379.2170,"gpu_ms":0.1676}
+{"case":"basic_fbm","commit":"746c24b","total_ms":338.8653,"gpu_ms":0.1696}

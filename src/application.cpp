@@ -18,6 +18,10 @@ Application::~Application() { DetachLayers(); }
 
 ApplicationState& StateOf(Application& application) noexcept { return application.m_state; }
 
+terrain::KernelLibrary& KernelsOf(Application& application) noexcept {
+    return StateOf(application).kernels;
+}
+
 vulkan::Context& VulkanContext(Application& application) noexcept {
     ApplicationState& state = StateOf(application);
     ENGINE_ASSERT(state.vulkan != nullptr, "the application has no Vulkan context");

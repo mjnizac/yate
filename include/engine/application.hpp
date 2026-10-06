@@ -74,6 +74,8 @@ private:
 
 #ifdef IS_ENGINE
 
+#    include <engine/terrain/kernels.hpp>
+
 #    include <atomic>
 #    include <memory_resource>
 #    include <vector>
@@ -93,8 +95,11 @@ struct ApplicationState {
     explicit ApplicationState(RunMode runMode, std::pmr::memory_resource& resource)
         : mode(runMode), layers(&resource) {}
 
-    RunMode                      mode;
-    vulkan::Context*             vulkan = nullptr;
+    RunMode          mode;
+    vulkan::Context* vulkan = nullptr;
+    /// Pipeline map, which must outlive any single job: a pipeline is created on first use and kept
+    /// for the life of the device (spec section 9, stage 5).
+    terrain::KernelLibrary kernels;
     std::atomic<b8_t>            running{false};
     u64_t                        tick = 0;
     ExitCode                     exit = ExitCode::Success;
@@ -106,6 +111,9 @@ struct ApplicationState {
 
 /// Engine-side view of the application state.
 [[nodiscard]] ApplicationState& StateOf(Application& application) noexcept;
+
+/// Pipeline map of the running application.
+[[nodiscard]] terrain::KernelLibrary& KernelsOf(Application& application) noexcept;
 
 } // namespace engine
 

@@ -5,6 +5,7 @@
 #include <engine/log.hpp>
 #include <engine/memory/general.hpp>
 #include <engine/platform.hpp>
+#include <engine/terrain/kernels.hpp>
 #include <engine/vulkan/context.hpp>
 
 #ifdef TRACY_ENABLE
@@ -193,6 +194,14 @@ Result<Application*> init(const AppInfo& info) {
     g_runtime.state = ::new (g_runtime.stateStorage)
         ApplicationState(info.mode, memory::General().Resource());
     g_runtime.state->vulkan = g_runtime.vulkan;
+
+    // The pipeline map belongs to the device, not to a job: creating it per export would rebuild
+    // every pipeline on every run.
+    Result<terrain::KernelLibrary> kernels = terrain::KernelLibrary::Create(*g_runtime.vulkan);
+    if (!kernels) {
+        return std::unexpected(FailInit("kernels", kernels.error()));
+    }
+    g_runtime.state->kernels = std::move(*kernels);
     g_runtime.application =
         ::new (g_runtime.applicationStorage) Application(*g_runtime.state);
 

@@ -348,10 +348,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         return std::unexpected(compiled.error());
     }
 
-    Result<KernelLibrary> kernels = KernelLibrary::Create(context);
-    if (!kernels) {
-        return std::unexpected(kernels.error());
-    }
+    KernelLibrary& kernels = KernelsOf(application);
     Result<SectionResources> resources = SectionResources::Create(context, *compiled);
     if (!resources) {
         return std::unexpected(resources.error());
@@ -440,7 +437,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                 .extent = extent,
                 .seed   = static_cast<u32_t>(job.seed)};
             if (Status recorded =
-                    RecordSection(*kernels, *compiled, *resources, *timers, *commands, sectionJob);
+                    RecordSection(kernels, *compiled, *resources, *timers, *commands, sectionJob);
                 !recorded) {
                 return std::unexpected(recorded.error());
             }
@@ -533,7 +530,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     metadata.width              = grid->width;
     metadata.height             = grid->height;
     metadata.timings.compileMs  = compiled->stats.milliseconds;
-    metadata.timings.pipelineMs = kernels->CreationMilliseconds();
+    metadata.timings.pipelineMs = kernels.CreationMilliseconds();
     metadata.timings.gpuMs      = gpuMs;
     metadata.timings.readbackMs = readbackMs;
     metadata.timings.encodeMs   = encodeMs;
