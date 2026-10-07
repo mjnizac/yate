@@ -4,6 +4,8 @@
 
 #ifdef IS_ENGINE
 
+#    include <engine/error.hpp>
+
 #    include <array>
 
 namespace engine::vulkan {
@@ -40,6 +42,14 @@ enum class MouseButton : u32_t { Left = 0, Right, Middle, Count };
 /// and deriving one from the other at every call site is how a toggle ends up firing every frame.
 class Input {
 public:
+    /// Installs the scroll callback on `window`. Call once, and **before** anything else that installs
+    /// callbacks on the same window.
+    ///
+    /// Order matters and it bit once: a scroll wheel arrives as a callback rather than as a state, so
+    /// somebody has to own it, and the UI backend installs its own that chains to whatever was there
+    /// first. Installing this one afterwards replaced the UI's and the panels stopped scrolling.
+    [[nodiscard]] Status Attach(const vulkan::Window& window);
+
     /// Samples the window. Call once per frame, after events have been polled.
     void Update(const vulkan::Window& window);
 
@@ -67,6 +77,9 @@ private:
     f32_t                            m_cursorDeltaX = 0.0f;
     f32_t                            m_cursorDeltaY = 0.0f;
     b8_t                             m_hasCursor    = false;
+    /// Opaque `GLFWwindow*`, so the scroll accumulator can be found without assuming there is one
+    /// window in the process.
+    void* m_window = nullptr;
 };
 
 } // namespace engine::render

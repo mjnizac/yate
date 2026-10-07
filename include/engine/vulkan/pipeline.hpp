@@ -208,6 +208,9 @@ struct TerrainPushConstants {
 static_assert(sizeof(TerrainPushConstants) == 112,
               "TerrainPushConstants must match viewer/terrain.vert.glsl");
 
+/// How the terrain pipeline rasterizes. Line mode is the viewer's wireframe.
+enum class PolygonMode : u32_t { Fill = 0, Line };
+
 /// One graphics pipeline for the terrain preview, built against the viewer's render pass.
 ///
 /// Fixed state rather than configurable: there is one way the terrain is drawn, and a builder with
@@ -226,7 +229,8 @@ public:
     [[nodiscard]] static Result<GraphicsPipeline> Create(VkDevice device, VkRenderPass renderPass,
                                                         std::string_view vertexSpirv,
                                                         std::string_view fragmentSpirv,
-                                                        VkPipelineCache  cache);
+                                                        VkPipelineCache  cache,
+                                                        PolygonMode mode = PolygonMode::Fill);
 
     [[nodiscard]] VkPipeline       Handle() const noexcept { return m_pipeline; }
     [[nodiscard]] VkPipelineLayout Layout() const noexcept { return m_layout; }

@@ -296,7 +296,7 @@ namespace {
 Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass renderPass,
                                                   std::string_view vertexSpirv,
                                                   std::string_view fragmentSpirv,
-                                                  VkPipelineCache  cache) {
+                                                  VkPipelineCache cache, PolygonMode mode) {
     Result<VkShaderModule> vertex = LoadModule(device, vertexSpirv);
     if (!vertex) {
         return std::unexpected(vertex.error());
@@ -368,8 +368,10 @@ Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass 
     // visible, and culling it halves the fragment work.
     const VkPipelineRasterizationStateCreateInfo rasterization{
         .sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode    = VK_CULL_MODE_BACK_BIT,
+        .polygonMode = mode == PolygonMode::Line ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL,
+        // Lines are not culled: a wireframe is for seeing the grid, including the far side of a ridge.
+        .cullMode  = static_cast<VkCullModeFlags>(mode == PolygonMode::Line ? VK_CULL_MODE_NONE
+                                                                            : VK_CULL_MODE_BACK_BIT),
         .frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .lineWidth   = 1.0f};
     const VkPipelineMultisampleStateCreateInfo multisample{

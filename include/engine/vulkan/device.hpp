@@ -38,6 +38,10 @@ struct QueueFamilyIndices {
 
 struct PhysicalDeviceInfo {
     VkPhysicalDevice                                   handle = VK_NULL_HANDLE;
+    /// Line rasterization, which the viewer's wireframe needs. The only *optional* feature the engine
+    /// asks for: a device without it keeps working and loses the wireframe, so it is recorded here
+    /// rather than making the device unacceptable.
+    b8_t fillModeNonSolid = false;
     std::array<char, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE> name{};
     std::array<u8_t, VK_UUID_SIZE>                     uuid{};
     u32_t                                              apiVersion    = 0;

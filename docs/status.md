@@ -413,25 +413,27 @@ because an iterative op has no CPU reference worth maintaining:
 
 ## 9. Viewer
 
-`terrain_viewer` runs a script, keeps the result resident on the GPU and draws it as a displaced grid,
-with an orbit and fly camera, a parameter panel, an error panel and hot reload.
+`terrain_viewer` runs a script, keeps a ring of tiles around the camera resident on the GPU and draws
+them as a displaced grid, with an orbit and fly camera, a parameter panel, an error panel and hot
+reload.
 
 ```
-terrain_viewer --script assets/scripts/basic.lua --extent 2048 --resolution 2 --section 128
+terrain_viewer --script assets/scripts/basic.lua --resolution 2 --section 128 --ring 3
 ```
 
 Left-drag turns, middle-drag pans, the wheel zooms, F switches between orbit and fly, WASDQE moves in
-fly mode and shift goes faster. R reloads, which also happens on its own when the file changes.
+fly mode and shift goes faster. R reloads, which also happens on its own when the file changes, and T
+toggles wireframe.
 
 ### Window, swapchain and the frame loop
 
-**The ordering problem at startup, and what it cost.** A `VkSurfaceKHR` needs an instance. Choosing a
-physical device needs a surface, because presentation support is part of what makes a device acceptable
-in Graphics mode. So the caller cannot have a surface before calling `Context::Create`, and the context
-cannot pick a device before the caller has one. `ContextCreateInfo` therefore takes an optional
-`createSurface` callback: the context builds its instance, asks for the surface, and only then looks at
-devices. A plain function pointer rather than a `std::function`, because the context is constructed
-before the allocators a capturing callable would want.
+**The ordering problem at startup.** A `VkSurfaceKHR` needs an instance. Choosing a physical device needs
+a surface, because presentation support is part of what makes a device acceptable in Graphics mode. So
+the caller cannot have a surface before calling `Context::Create`, and the context cannot pick a device
+before the caller has one. `ContextCreateInfo` therefore takes an optional `createSurface` callback: the
+context builds its instance, asks for the surface, and only then looks at devices. A plain function
+pointer rather than a `std::function`, because the context is constructed before the allocators a
+capturing callable would want.
 
 **GLFW is asked, not told.** The instance extensions for presentation come from
 `glfwGetRequiredInstanceExtensions` rather than from a `#if defined(_WIN32)` block, which both removes a
@@ -454,17 +456,52 @@ normal through a buffer device address, exactly as the compute kernels pass buff
 vertices per quad rather than an index buffer, because an index buffer is a second allocation describing
 what the vertex index already encodes. Nothing is uploaded and nothing is copied per frame.
 
-**Resident tiles.** The previewed square is split into tiles, each evaluated once into its own pair of
-section-pool slots. The evaluator reuses one set of buffers for every section, so the tile's copy is what
-makes it outlive the next tile's dispatches; a tile is a `samples x samples` field with no padding.
+**Resident tiles that follow the camera.** A ring of `(2r + 1)^2` tiles is kept around whatever the
+camera is looking at. Each tile is evaluated once into its own pair of section-pool slots; the evaluator
+reuses one set of buffers for every section, so the tile's copy is what makes it outlive the next tile's
+dispatches, and a tile is a `samples x samples` field with no padding.
 
-**Grid density follows distance.** A tile more than four tile-widths away drops to half the grid, past
-eight to a quarter, past sixteen to an eighth, in powers of two so a coarser grid lands on a subset of
-the same samples and neighbouring tiles at different levels still meet along their shared edge.
+As the camera moves, tiles that left the ring are evicted and the ones that entered are evaluated
+nearest-first, at most `--tiles-per-frame` of them. The bound is the point: a hole at the edge of the
+ring for a few frames is a far better failure than a hitch every time the camera crosses a tile border.
+A load and a reload ignore the budget, because showing a half-built ring right after a deliberate act
+would look like a failure rather than like streaming.
+
+The ring is centred on what the camera is *about* — the orbit target, or the eye in fly mode — not on
+the eye. In orbit the eye can be kilometres from what is being examined, and centring on it would stream
+in terrain behind the camera while the terrain being looked at fell out of the ring.
+
+**One level for the whole ring, chosen by distance.** Sample spacing is `resolution * 2^level`, and the
+level comes from how far away the ground is: the orbit radius in orbit mode, the height above the terrain
+in fly mode, because that is the measure that makes climbing coarsen the terrain and descending refine
+it. The ideal level has to disagree with the active one for fifteen frames before the ring switches,
+since a switch evicts and re-evaluates everything and a camera hovering near a threshold must not
+stutter.
+
+Per-tile levels are the usual answer and they bring the usual problem: two levels meeting on screen
+sample the terrain at different spacings, so their shared edge does not line up and the crack has to be
+hidden with skirts. This engine's whole claim is that section borders are bit-identical, and shipping a
+renderer that visibly cracks between levels would contradict it. With one global level nothing ever
+meets a different level: the ring switches as a whole, which is a transition in time rather than a seam
+in space.
+
+A level change recompiles the graph, because the sample spacing is baked into the parameter block of
+every op that needs a world position. That costs 0.05 ms and creates no pipeline, since the pipeline map
+is keyed on op and variant. Tile origins are multiples of the tile size in that level's sample units, so
+a level's lattice is a subset of the one below it and changing level does not shift the terrain sideways.
+
+**Grid density follows distance too, separately.** Inside one level, a tile more than four tile-widths
+away drops to half the drawn grid, past eight to a quarter, past sixteen to an eighth. That is a
+rendering decision on top of the evaluation one: the data is the same, only the number of triangles
+changes.
 
 **Frustum culling** from the six planes of the view-projection matrix against each tile's box, where the
 height range comes from what the script declared rather than from the data: that can only make the box
 too large, which is the only direction that cannot cull something visible.
+
+**Wireframe** on `T`, which is the only way to see what either distance rule actually chose. It needs
+`fillModeNonSolid`, the one *optional* device feature the engine asks for: a device without it keeps
+working and loses the mode.
 
 ### Hot reload
 
@@ -473,8 +510,8 @@ writes a file in several steps and reloading on the first one reads a half-writt
 
 The CPU half of a reload — running the script and resolving its outputs — happens on a worker thread.
 The GPU half stays on the main thread, because the queue and the section pool are not synchronized for
-concurrent use and making them so would be a large change to serve one feature. The previous preview
-keeps rendering until the new one has been both compiled *and* evaluated, so a broken edit leaves the
+concurrent use and making them so would be a large change to serve one feature. The previous terrain
+keeps rendering until the new one has been both compiled *and* prepared, so a broken edit leaves the
 terrain on screen and puts the error in the panel:
 
 ```
@@ -502,19 +539,20 @@ text box. Editing one triggers a reload, because the script is what turns a para
 
 ### What the tests check, and what they cannot
 
-`test_viewer` is 45 checks: the surface exists, the swapchain is at least double buffered with a valid
+`test_viewer` is 56 checks: the surface exists, the swapchain is at least double buffered with a valid
 render pass, frames are acquired and presented, three forced resizes rebuild everything, the loop still
-runs afterwards, a script loads into 16 tiles, **something is actually drawn** after culling, a changed
-script reloads, a script with no normals output still loads, and a broken script leaves the load count
-where it was with a non-empty error. On a machine with no display it returns 77 and ctest reports it as
-skipped.
+runs afterwards, a script loads into a complete ring, **something is actually drawn** after culling, a
+changed script reloads, a script with no normals output still loads, a broken script leaves the load
+count where it was with a non-empty error, moving the camera twenty tiles re-evaluates the whole ring and
+leaves nothing missing, and climbing to 20 km coarsens the level. On a machine with no display it returns
+77 and ctest reports it as skipped.
 
-The "something is actually drawn" check is the one that earns its place: a culling bug that rejected
-every tile looks exactly like a successful empty frame, which is how that whole class of error hides.
+The "something is actually drawn" check is the one that earns its place: a culling bug that rejected every
+tile looks exactly like a successful empty frame, which is how that whole class of error hides.
 
 **Still a human's job.** Nothing here says the picture is *right*. Whether the terrain looks like terrain,
-whether the shading reads, whether the camera feels right — none of that is in reach of a test, and it is
-the part that needs looking at.
+whether the shading reads, whether the camera feels right, whether a level change is visible when it
+happens — none of that is in reach of a test, and it is the part that needs looking at.
 
 ### The bugs this milestone found
 
@@ -549,15 +587,18 @@ the part that needs looking at.
   recorder from inside its own update, which runs *before* the viewer's, so `NewFrame` landed after the
   `Render` that consumes it. The whole UI frame now lives in the recorder, which removes the ordering
   question instead of answering it.
+- **A callback has one owner.** The scroll wheel arrives as a callback, and the UI backend installs its
+  own that chains to whatever was there first. Installing the engine's afterwards replaced it and the
+  panels stopped scrolling. `Input::Attach` is now called before the UI comes up, and says why.
+- **`VK_POLYGON_MODE_LINE` needs a feature.** Creating the wireframe pipeline without `fillModeNonSolid`
+  is a validation error rather than a clean failure, so the feature is requested as the engine's first
+  optional one and the pipeline is only attempted when the device has it.
 
-### Not in this milestone
+### Not carried out, deliberately
 
-- **Evaluation does not follow the camera.** The preview evaluates a fixed square once and on reload;
-  "evaluation restricted to visible sections at a resolution appropriate to camera distance" is done for
-  *rendering* (culling and grid density) but not for evaluation. Doing it properly means a streaming
-  scheduler that evaluates and evicts tiles as the camera moves, which is the piece milestone 7
-  deliberately scoped down to one section in flight. `docs/todo.md` says what it would take.
-- **A second `WindowLayer` is refused, deliberately.** The main window's surface is what chose the
-  physical device, so a second window cannot make that choice and has to be checked against it; and the
-  input module keys its scroll accumulator to one window. A terrain viewer with one viewport has nothing
-  to gain, so the refusal is explicit and the message says why.
+- **A second `WindowLayer` is refused.** The main window's surface is what chose the physical device, so
+  a second window cannot make that choice and has to be checked against it. A terrain viewer with one
+  viewport has nothing to gain, so the refusal is explicit and the message says why. The input module no
+  longer assumes one window, which was the other obstacle.
+- **Per-tile levels**, for the reason above: they would put a visible crack on screen in an engine whose
+  one firm claim is that section borders are bit-identical.

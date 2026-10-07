@@ -172,16 +172,19 @@ int main() {
             CHECK(params.Set("amplitude", "80"));
 
             ViewerLayer::Settings settings;
-            settings.script      = scriptPath;
-            settings.extent      = 512.0;
-            settings.resolution  = 4.0;
-            settings.sectionSize = 32;
-            settings.gridVertices = 32;
-            settings.params      = &params;
+            settings.script        = scriptPath;
+            settings.resolution    = 4.0;
+            settings.sectionSize   = 32;
+            settings.gridVertices  = 32;
+            settings.ringRadius    = 2;
+            settings.tilesPerFrame = 4;
+            settings.params        = &params;
 
             ViewerLayer& viewer = (*application)->PushLayer<ViewerLayer>(settings);
-            // 512 m at 4 m/sample is 128 samples, which is 4x4 tiles of 32.
-            CHECK_EQ(viewer.TileCount(), u32_t{16});
+            // A radius of two is a 5x5 ring, filled completely before the first frame.
+            CHECK_EQ(viewer.TileCount(), u32_t{25});
+            CHECK_EQ(viewer.MissingTiles(), u32_t{0});
+            CHECK_EQ(viewer.TilesEvaluated(), u64_t{25});
             CHECK_EQ(viewer.LoadCount(), u64_t{1});
             CHECK(viewer.LastError().empty());
 
@@ -207,7 +210,8 @@ int main() {
             // No normals output in that script, so the viewer appended a measured gradient and the
             // normals from it rather than refusing to show it.
             CHECK(viewer.LastError().empty());
-            CHECK_EQ(viewer.TileCount(), u32_t{16});
+            CHECK_EQ(viewer.TileCount(), u32_t{25});
+            CHECK_EQ(viewer.MissingTiles(), u32_t{0});
 
             test::Section("a broken script keeps the previous terrain on screen");
             CHECK(WriteFile(scriptPath, "local function main( return {} end\nreturn main\n"));
@@ -220,12 +224,52 @@ int main() {
             CHECK(!viewer.LastError().empty());
             std::printf("     reload rejected with: %.*s\n",
                         static_cast<int>(viewer.LastError().size()), viewer.LastError().data());
-            CHECK(viewer.TileCount() == 16);
+            CHECK(viewer.TileCount() == 25);
 
             // And it still draws, which is the actual promise: a bad edit must not blank the window.
             window.StopAfter(window.FramesPresented() + kFrames);
             (*application)->Run();
             CHECK(viewer.TilesDrawn() > 0);
+
+            test::Section("the ring follows the camera");
+            // Restored first, so the reload below has something that compiles.
+            CHECK(WriteFile(scriptPath, kScript));
+            viewer.RequestReload();
+            window.StopAfter(window.FramesPresented() + 2);
+            (*application)->Run();
+            viewer.WaitForReload();
+            CHECK(viewer.LastError().empty());
+
+            const u64_t evaluatedBefore = viewer.TilesEvaluated();
+            const u32_t levelBefore     = viewer.Level();
+
+            // Far enough to leave the ring entirely: a 32-sample tile at 4 m is 128 m, and the ring is
+            // two tiles on each side, so twenty tiles along x is well outside it. Every tile must be
+            // re-evaluated at the new centre, and none of the old ones may still be resident.
+            viewer.MoveCameraTo(20.0f * 128.0f, 200.0f, 0.0f);
+            window.StopAfter(window.FramesPresented() + 40);
+            (*application)->Run();
+
+            std::printf("     %llu tile(s) evaluated after moving, level %u -> %u\n",
+                        static_cast<unsigned long long>(viewer.TilesEvaluated() - evaluatedBefore),
+                        levelBefore, viewer.Level());
+            CHECK(viewer.TilesEvaluated() > evaluatedBefore);
+            CHECK_EQ(viewer.TileCount(), u32_t{25});
+            CHECK_EQ(viewer.MissingTiles(), u32_t{0});
+            CHECK(viewer.TilesDrawn() > 0);
+
+            test::Section("distance picks the level");
+            // In fly mode the level follows the height above the ground, which is the measure that
+            // makes climbing coarsen the terrain. In orbit it follows the orbit radius instead, and
+            // placing the eye would move the target with it and change nothing.
+            viewer.SetFlyMode(true);
+            viewer.MoveCameraTo(0.0f, 20000.0f, 0.0f);
+            window.StopAfter(window.FramesPresented() + 60);
+            (*application)->Run();
+            std::printf("     level %u at 20 km, spacing x%u\n", viewer.Level(),
+                        1u << viewer.Level());
+            CHECK(viewer.Level() > 0);
+            CHECK_EQ(viewer.MissingTiles(), u32_t{0});
         }
 
         // The whole point: none of the above may have produced a validation error.

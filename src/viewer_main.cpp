@@ -26,7 +26,9 @@ void PrintUsage() {
                "Options:\n"
                "  --script <file>        terrain script to preview and watch (required)\n"
                "  --seed <n>             random seed (default 0)\n"
-               "  --extent <meters>      side of the previewed square (default 2048)\n"
+               "  --ring <n>             tiles kept on each side of the camera (default 3)\n"
+               "  --max-level <n>        coarsest level the ring may use (default 4)\n"
+               "  --tiles-per-frame <n>  tiles evaluated per frame while moving (default 2)\n"
                "  --resolution <meters>  meters per sample (default 2.0)\n"
                "  --section <n>          samples per tile side (default 128)\n"
                "  --grid <n>             drawn vertices per tile side (default 128)\n"
@@ -40,7 +42,8 @@ void PrintUsage() {
                "\n"
                "Left-drag turns, middle-drag pans, the wheel zooms, F switches between orbit\n"
                "and fly, WASDQE moves in fly mode and shift goes faster. R reloads the\n"
-               "script, which also happens on its own when the file changes.\n"
+               "script, which also happens on its own when the file changes, and T toggles\n"
+               "wireframe.\n"
                "\n"
                "--frames is what makes the viewer testable without a human: it opens the window,\n"
                "presents that many frames and exits with the usual exit codes.\n",
@@ -76,8 +79,14 @@ struct Options {
             options.viewer.script = value;
         } else if (argument == "--seed") {
             options.viewer.seed = std::strtoull(value.data(), nullptr, 10);
-        } else if (argument == "--extent") {
-            options.viewer.extent = std::strtod(value.data(), nullptr);
+        } else if (argument == "--ring") {
+            options.viewer.ringRadius =
+                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+        } else if (argument == "--max-level") {
+            options.viewer.maxLevel = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+        } else if (argument == "--tiles-per-frame") {
+            options.viewer.tilesPerFrame =
+                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
         } else if (argument == "--resolution") {
             options.viewer.resolution = std::strtod(value.data(), nullptr);
         } else if (argument == "--section") {
@@ -123,9 +132,19 @@ struct Options {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                     "--resolution must be positive, got {}", options.viewer.resolution);
     }
-    if (!(options.viewer.extent > 0.0)) {
+    if (options.viewer.ringRadius > 16) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                    "--extent must be positive, got {}", options.viewer.extent);
+                    "--ring is {}, which would be a {}x{} ring of tiles", options.viewer.ringRadius,
+                    2 * options.viewer.ringRadius + 1, 2 * options.viewer.ringRadius + 1);
+    }
+    if (options.viewer.maxLevel > 8) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                    "--max-level is {}, which would make one tile cover {}x its finest area",
+                    options.viewer.maxLevel, 1u << (2 * options.viewer.maxLevel));
+    }
+    if (options.viewer.tilesPerFrame == 0) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                    "--tiles-per-frame must be at least 1, or the ring would never fill");
     }
     if (options.viewer.sectionSize < 2 || !IsPowerOfTwo(options.viewer.sectionSize)) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,

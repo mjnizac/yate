@@ -1,6 +1,7 @@
 #include <engine/render/camera.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace engine::render {
 namespace {
@@ -39,6 +40,8 @@ Vec3 Camera::Position() const noexcept {
     return m_mode == CameraMode::Orbit ? m_target - Forward() * m_distance : m_target;
 }
 
+Vec3 Camera::Focus() const noexcept { return m_mode == CameraMode::Orbit ? m_target : Position(); }
+
 Mat4 Camera::View() const noexcept {
     const Vec3 eye = Position();
     return LookAt(eye, eye + Forward(), Vec3{0.0f, 1.0f, 0.0f});
@@ -75,6 +78,19 @@ void Camera::Frame(Vec3 centre, f32_t radius) noexcept {
     // is metres away.
     SetClipPlanes(std::max(m_distance * 0.001f, 0.05f), std::max(m_distance * 20.0f, 1000.0f));
     m_speed = std::clamp(radius * 0.5f, kMinSpeed, kMaxSpeed);
+}
+
+void Camera::PlaceAt(Vec3 eye) noexcept {
+    // Orbit keeps its target ahead of the eye at the current radius, so the eye lands where asked
+    // without the orientation or the zoom level changing.
+    m_target = m_mode == CameraMode::Orbit ? eye + Forward() * m_distance : eye;
+}
+
+f32_t Camera::ViewDistance(f32_t groundHeight) const noexcept {
+    if (m_mode == CameraMode::Orbit) {
+        return m_distance;
+    }
+    return std::max(std::fabs(Position().y - groundHeight), 1.0f);
 }
 
 void Camera::Turn(f32_t deltaYawPixels, f32_t deltaPitchPixels) noexcept {

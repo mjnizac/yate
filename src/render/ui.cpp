@@ -169,7 +169,10 @@ b8_t Ui::Draw(Panels& panels) {
     ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Terrain", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted(panels.scriptPath);
-        ImGui::Text("%u of %u tiles drawn", panels.tilesDrawn, panels.tileCount);
+        ImGui::Text("%u of %u tiles drawn, %u streaming", panels.tilesDrawn, panels.tileCount,
+                    panels.missingTiles);
+        ImGui::Text("level %u, %.2f m per sample%s", panels.level,
+                    static_cast<f64_t>(panels.spacing), panels.wireframe ? ", wireframe" : "");
         ImGui::Text("%.1f fps (%.2f ms)", panels.framesPerSecond, panels.frameMilliseconds);
         ImGui::Text("load %llu", static_cast<unsigned long long>(panels.loadCount));
         ImGui::Separator();

@@ -43,9 +43,13 @@ public:
         /// Null-terminated, empty when there is nothing wrong.
         const char* error      = "";
         const char* cameraMode = "";
-        u32_t       tilesDrawn = 0;
-        u32_t       tileCount  = 0;
-        u64_t       loadCount  = 0;
+        u32_t       tilesDrawn   = 0;
+        u32_t       tileCount    = 0;
+        u32_t       missingTiles = 0;
+        u32_t       level        = 0;
+        f32_t       spacing      = 1.0f;
+        b8_t        wireframe    = false;
+        u64_t       loadCount    = 0;
         f32_t       framesPerSecond   = 0.0f;
         f32_t       frameMilliseconds = 0.0f;
         std::array<f32_t, 3> eye{};

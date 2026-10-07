@@ -149,6 +149,13 @@ public:
 
     /// Where the camera is, in world units.
     [[nodiscard]] Vec3 Position() const noexcept;
+
+    /// The point the camera is about: the orbit target, or the eye in fly mode.
+    ///
+    /// This, not the eye, is what a ring of terrain tiles should be centred on. In orbit the eye can be
+    /// kilometres away from what the user is looking at, and centring the ring on it would stream in
+    /// terrain behind the camera while the terrain being examined fell out of the ring.
+    [[nodiscard]] Vec3 Focus() const noexcept;
     [[nodiscard]] Vec3 Forward() const noexcept;
     [[nodiscard]] Vec3 Right() const noexcept;
 
@@ -157,6 +164,17 @@ public:
 
     /// Frames a region: centres the target on it and pulls back far enough to see all of it.
     void Frame(Vec3 centre, f32_t radius) noexcept;
+
+    /// Puts the eye exactly here, keeping the orientation. Works in either mode.
+    void PlaceAt(Vec3 eye) noexcept;
+
+    /// How far away the ground is, which is what a level-of-detail decision actually wants.
+    ///
+    /// Not the same as `Distance()`: that is the orbit radius and does not change when a flying camera
+    /// climbs. In orbit the two agree, because the target *is* on the ground; in fly mode the honest
+    /// measure is the height above it, which is what makes climbing coarsen the terrain and descending
+    /// refine it.
+    [[nodiscard]] f32_t ViewDistance(f32_t groundHeight) const noexcept;
 
     /// Turns by a pixel delta. Pitch is clamped just short of vertical, because at exactly vertical the
     /// up vector and the forward vector are parallel and the view matrix degenerates.

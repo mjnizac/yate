@@ -543,6 +543,30 @@ Status Context::CreateDevice(const ContextCreateInfo& info) {
                                              .pNext = &enable12};
     enableFeatures.features.shaderInt64 = VK_TRUE;
 
+    // Optional, and the only optional feature so far: line rasterization, which the viewer's wireframe
+    // needs. A device without it keeps working and loses the wireframe, which is why it is requested
+    // rather than required; what it must not do is create the pipeline anyway, because the result is a
+    // validation error rather than a clean refusal.
+    m_physical.fillModeNonSolid = features2.features.fillModeNonSolid == VK_TRUE;
+    if (m_physical.fillModeNonSolid) {
+        enableFeatures.features.fillModeNonSolid = VK_TRUE;
+    } else {
+        LOG_WARN("device {} does not support fillModeNonSolid, so the viewer has no wireframe",
+                 m_physical.Name());
+    }
+
+    // Optional, and the only optional feature so far: line rasterization, which the viewer's wireframe
+    // needs. A device without it keeps working and loses the wireframe, which is why it is requested
+    // rather than required; what it must not do is create the pipeline anyway, because the result is a
+    // validation error rather than a clean refusal.
+    m_physical.fillModeNonSolid = features2.features.fillModeNonSolid == VK_TRUE;
+    if (m_physical.fillModeNonSolid) {
+        enableFeatures.features.fillModeNonSolid = VK_TRUE;
+    } else {
+        LOG_WARN("device {} does not support fillModeNonSolid, so the viewer has no wireframe",
+                 m_physical.Name());
+    }
+
     constexpr f32_t                     kPriority = 1.0f;
     std::array<VkDeviceQueueCreateInfo, 2> queueInfos{};
     u32_t                                  queueCount = 0;

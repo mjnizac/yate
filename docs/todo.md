@@ -117,19 +117,25 @@
 
 ## Milestone 9 — follow-ups
 
-- [ ] **Evaluation that follows the camera.** The one part of the spec's viewer section that is not done:
-      the preview evaluates a fixed square once, so flying past its edge flies off the terrain. What it
-      needs is a scheduler that keeps a ring of tiles around the camera, evaluates the ones that came
-      into view, evicts the ones that left, and picks a sample spacing from the distance — which is the
-      streaming system milestone 7 scoped down to one section in flight. Now that erosion makes the GPU a
-      real cost (28 ms of a 40 ms export), the "one section in flight" decision is worth revisiting at
-      the same time.
-- [ ] A reload re-evaluates every tile, which takes 57 ms for 64 tiles. Most of a parameter tweak changes
-      every sample, so there is nothing to cache; what *is* worth measuring is whether the tiles can be
-      evaluated on a second queue so the frame loop does not stall on them.
-- [ ] The viewer has no wireframe mode, though `Key::Wireframe` is bound. It needs a second pipeline with
-      `POLYGON_MODE_LINE`, which is five lines and a variant, and is genuinely useful for judging the grid
-      density the distance LOD picked.
-- [ ] `Input` keys its scroll accumulator to a file-scope variable, because GLFW's callback has no user
-      pointer the window hands out. Fine for one window; it is the thing to fix first if multiple windows
-      ever happen.
+- [x] **Evaluation follows the camera.** A ring of tiles around what the camera is looking at, streamed a
+      couple at a time as it moves, at a sample spacing chosen from how far away the ground is. One
+      global level rather than per-tile, so two levels never meet on screen and there is no crack to hide
+      with skirts — which would have contradicted the engine's one firm claim about seams. A level change
+      recompiles the graph, which is 0.05 ms and no new pipeline.
+- [x] **Wireframe on `T`.** It needed `fillModeNonSolid`, which is now the engine's only optional device
+      feature; without it the mode is unavailable and the viewer says so instead of producing a
+      validation error.
+- [x] **The scroll accumulator no longer assumes one window**, and more importantly no longer replaces
+      the UI backend's own scroll callback: `Input::Attach` runs before the UI comes up, so the UI chains
+      to it rather than the other way round.
+- [ ] A reload re-evaluates the whole ring, which is 49 tiles at the default radius. Most of a parameter
+      tweak changes every sample, so there is nothing to cache; what *is* worth measuring is whether
+      tiles can be evaluated on a second queue so the frame loop does not stall on them at all.
+- [ ] Streaming evaluates tiles synchronously, one submit and one wait each, so `--tiles-per-frame` is a
+      direct frame-time cost: about a millisecond per tile for the sample script. A second set of
+      evaluator buffers and a fence per tile would let it overlap the frame instead. Measure first: at
+      two tiles a frame it is under 5% of a 60 Hz budget.
+- [ ] A level change evicts the whole ring, so there is a visible pause when it happens. Keeping the old
+      level's tiles until the new ones arrive would hide it, at the cost of twice the resident memory
+      during the transition and of two levels being briefly on screen — which is exactly the thing the
+      single-level design exists to avoid. Worth deciding only if the pause turns out to be noticeable.

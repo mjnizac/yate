@@ -32,29 +32,65 @@ constexpr std::array<int, static_cast<usize_t>(MouseButton::Count)> kButtons{
 
 /// Scroll arrives as a callback, not as a state, so it is accumulated between frames.
 ///
-/// File-scope because GLFW callbacks are C functions with no user pointer available at registration time
-/// without owning the window's user pointer, which the window does not hand out. One viewer, one scroll
-/// accumulator; a second window would need this keyed by handle, which is in the todo list along with
-/// the second window.
-f64_t g_scrollAccumulator = 0.0;
-b8_t  g_scrollRegistered  = false;
+/// Keyed by window handle rather than kept in one variable: GLFW callbacks are C functions and the
+/// window's user pointer belongs to whoever else wants it, so a small table is the way to stay correct
+/// with more than one window without fighting over that pointer. Four entries, scanned linearly, because
+/// the count is a handful and a map would allocate behind the engine's back.
+constexpr usize_t kMaxScrollSources = 4;
 
-void OnScroll(GLFWwindow* /*window*/, double /*x*/, double y) noexcept {
-    g_scrollAccumulator += y;
+struct ScrollSource {
+    GLFWwindow* window      = nullptr;
+    f64_t       accumulated = 0.0;
+};
+
+std::array<ScrollSource, kMaxScrollSources> g_scroll{};
+
+[[nodiscard]] ScrollSource* FindScroll(GLFWwindow* window) {
+    for (ScrollSource& source : g_scroll) {
+        if (source.window == window) {
+            return &source;
+        }
+    }
+    return nullptr;
+}
+
+/// Nothing is thrown or logged from here: this is a C callback (spec section 3).
+void OnScroll(GLFWwindow* window, double /*x*/, double y) noexcept {
+    if (ScrollSource* source = FindScroll(window); source != nullptr) {
+        source->accumulated += y;
+    }
 }
 
 } // namespace
+
+Status Input::Attach(const vulkan::Window& window) {
+    auto* handle = static_cast<GLFWwindow*>(window.Handle());
+    if (handle == nullptr) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                    "the input system needs an open window");
+    }
+    if (FindScroll(handle) != nullptr) {
+        m_window = handle;
+        return {};
+    }
+    for (ScrollSource& source : g_scroll) {
+        if (source.window == nullptr) {
+            source.window      = handle;
+            source.accumulated = 0.0;
+            glfwSetScrollCallback(handle, OnScroll);
+            m_window = handle;
+            return {};
+        }
+    }
+    ENGINE_FAIL(ErrorCode::Unsupported, ErrorStage::Init,
+                "at most {} window(s) can report scrolling", kMaxScrollSources);
+}
 
 void Input::Update(const vulkan::Window& window) {
     auto* handle = static_cast<GLFWwindow*>(window.Handle());
     if (handle == nullptr) {
         return;
     }
-    if (!g_scrollRegistered) {
-        glfwSetScrollCallback(handle, OnScroll);
-        g_scrollRegistered = true;
-    }
-
     m_wasHeld = m_held;
     for (const Binding& binding : kBindings) {
         b8_t down = false;
@@ -100,8 +136,13 @@ b8_t Input::Held(MouseButton button) const noexcept {
 }
 
 f32_t Input::ScrollDelta() const noexcept {
-    const f32_t ticks   = static_cast<f32_t>(g_scrollAccumulator);
-    g_scrollAccumulator = 0.0;
+    ScrollSource* source = FindScroll(static_cast<GLFWwindow*>(m_window));
+    if (source == nullptr) {
+        return 0.0f;
+    }
+    // Consumed on read, so a tick is applied exactly once whoever reads it.
+    const f32_t ticks   = static_cast<f32_t>(source->accumulated);
+    source->accumulated = 0.0;
     return ticks;
 }
 
