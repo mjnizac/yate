@@ -14,6 +14,7 @@
     "range": "-200,1800",
     "normals": "1"
   },
+  "outputs": ["height.png", "normals.png"],
   "tolerance": 0,
   "performance": { "passes": 5, "warn_slower": 0.10, "fail_slower": 0.25 }
 }

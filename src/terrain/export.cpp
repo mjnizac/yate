@@ -234,6 +234,20 @@ struct Grid {
         return requested;
     }
 
+    // The gradient channel, exported directly rather than turned into normals. This is the only way
+    // to get an Rn -> Rn output out of the pipeline, which is a mapping the writer handles
+    // differently from both a heightmap and a normal map.
+    if (params.Number("gradient", 0.0) != 0.0) {
+        Result<Value> gradient = graph.Channel(Value{.node = 0, .channel = 0, .mapping = {}}, 1);
+        if (!gradient) {
+            return std::unexpected(gradient.error());
+        }
+        if (Status requested = graph.RequestOutput("gradient", *gradient, -1.0f, 1.0f);
+            !requested) {
+            return requested;
+        }
+    }
+
     if (params.Number("normals", 0.0) == 0.0) {
         return {};
     }

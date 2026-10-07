@@ -28,6 +28,7 @@
 #include <array>
 #include <cstdarg>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -46,8 +47,9 @@ constexpr const char* kDatasetsRelative = "tests/datasets";
 constexpr const char* kBaselinesRelative = "tests/baselines";
 constexpr const char* kHistoryRelative   = "tests/history";
 
-/// Every case produces these, named by the export path.
-constexpr const char* kOutputNames[] = {"height", "normals"};
+/// Most samples a difference image is written for. A volume gets its worst-difference numbers
+/// reported instead, because there is no obvious 2D view of a 3D difference.
+constexpr usize_t kMaxOutputsPerCase = 8;
 
 constexpr f64_t kWarnSlowerFraction = 0.10;
 constexpr f64_t kFailSlowerFraction = 0.25;
@@ -86,6 +88,30 @@ struct Image {
         return width == other.width && height == other.height && components == other.components;
     }
 };
+
+/// Raw little-endian f32 samples, as an `R3` output is written.
+[[nodiscard]] Result<std::vector<f32_t>> ReadRawVolume(const std::string& path) {
+    std::FILE* file = std::fopen(path.c_str(), "rb");
+    if (file == nullptr) {
+        ENGINE_FAIL(ErrorCode::NotFound, ErrorStage::Export, "could not open {}", path);
+    }
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+    if (size <= 0 || size % static_cast<long>(sizeof(f32_t)) != 0) {
+        std::fclose(file);
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export,
+                    "{} is {} bytes, which is not a whole number of f32 samples", path, size);
+    }
+    std::vector<f32_t> samples(static_cast<usize_t>(size) / sizeof(f32_t));
+    const usize_t      read = std::fread(samples.data(), sizeof(f32_t), samples.size(), file);
+    std::fclose(file);
+    if (read != samples.size()) {
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "read {} of {} samples from {}", read,
+                    samples.size(), path);
+    }
+    return samples;
+}
 
 /// Decodes a 16-bit PNG. `SPNG_FMT_PNG` hands samples through in PNG's big-endian order, so they
 /// are swapped back here, mirroring what the writer does.
@@ -254,8 +280,11 @@ struct Case {
     std::string name;
     std::string directory;
     ExportJob   job;
-    /// Maximum absolute difference in 16-bit units that still counts as a match.
-    u32_t tolerance = 0;
+    /// Maximum absolute difference that still counts as a match: 16-bit steps for a PNG, raw units
+    /// for a volume. Zero means bit-exact.
+    f64_t tolerance = 0.0;
+    /// File names the case produces, read from `case.json` so a case can declare any set of outputs.
+    std::vector<std::string> outputs;
     /// Measured passes after one warm-up.
     u32_t passes = 5;
     f64_t warnSlower = kWarnSlowerFraction;
@@ -277,17 +306,34 @@ struct Case {
     testCase.job.minZ        = json->Number("bounds.min_z", 0.0);
     testCase.job.maxX        = json->Number("bounds.max_x", 512.0);
     testCase.job.maxZ        = json->Number("bounds.max_z", 512.0);
+    testCase.job.minY        = json->Number("bounds.min_y", 0.0);
+    testCase.job.maxY        = json->Number("bounds.max_y", 256.0);
     testCase.job.resolution  = json->Number("resolution", 1.0);
     testCase.job.sectionSize = static_cast<u32_t>(json->Number("section", 256));
-    testCase.tolerance       = static_cast<u32_t>(json->Number("tolerance", 0.0));
+    testCase.tolerance       = json->Number("tolerance", 0.0);
+
+    const usize_t outputCount = json->ArraySize("outputs");
+    for (usize_t i = 0; i < outputCount; ++i) {
+        std::array<char, 64> key{};
+        std::snprintf(key.data(), key.size(), "outputs.%zu", i);
+        const std::string_view value = json->Text(key.data());
+        if (!value.empty()) {
+            testCase.outputs.emplace_back(value);
+        }
+    }
+    if (testCase.outputs.empty()) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "case {} declares no outputs", name);
+    }
     testCase.passes          = static_cast<u32_t>(json->Number("performance.passes", 5.0));
     testCase.warnSlower      = json->Number("performance.warn_slower", kWarnSlowerFraction);
     testCase.failSlower      = json->Number("performance.fail_slower", kFailSlowerFraction);
 
     // Parameters are a flat object, copied through verbatim.
-    static constexpr const char* kParamKeys[] = {"frequency",  "octaves", "lacunarity", "persistence",
-                                                 "amplitude",  "offset",  "range",      "normals",
-                                                 "normalize"};
+    static constexpr const char* kParamKeys[] = {
+        "frequency", "octaves",  "lacunarity", "persistence", "amplitude", "offset",
+        "range",     "normals",  "normalize",  "kind",        "blur",      "domain",
+        "gradient",  "vertical_scale"};
     for (const char* key : kParamKeys) {
         const std::string path  = std::string{"params."} + key;
         const std::string_view value = json->Text(path);
@@ -464,42 +510,86 @@ int main(int argc, char** argv) {
 
         // Correctness first: decoded samples, not file bytes.
         b8_t caseFailed = false;
-        for (const char* output : kOutputNames) {
-            const std::string actualPath   = actual + "/" + output + ".png";
-            const std::string expectedPath = expected + "/" + output + ".png";
-            Result<Image>     expectedImage = DecodePng(expectedPath);
+        for (const std::string& output : testCase->outputs) {
+            const b8_t        isVolume     = output.size() > 4 && output.ends_with(".raw");
+            const std::string actualPath   = actual + "/" + output;
+            const std::string expectedPath = expected + "/" + output;
+
+            if (isVolume) {
+                Result<std::vector<f32_t>> expectedVolume = ReadRawVolume(expectedPath);
+                Result<std::vector<f32_t>> actualVolume   = ReadRawVolume(actualPath);
+                if (!expectedVolume || !actualVolume) {
+                    Fail("%s/%s: %s", name.c_str(), output.c_str(),
+                         (!expectedVolume ? expectedVolume : actualVolume).error().Format().data());
+                    caseFailed = true;
+                    continue;
+                }
+                if (expectedVolume->size() != actualVolume->size()) {
+                    Fail("%s/%s: %zu samples, expected %zu", name.c_str(), output.c_str(),
+                         actualVolume->size(), expectedVolume->size());
+                    caseFailed = true;
+                    continue;
+                }
+                u64_t differing = 0;
+                f64_t worst     = 0.0;
+                for (usize_t i = 0; i < expectedVolume->size(); ++i) {
+                    const f64_t difference = std::fabs(static_cast<f64_t>((*actualVolume)[i])
+                                                       - static_cast<f64_t>((*expectedVolume)[i]));
+                    worst = std::max(worst, difference);
+                    // A volume is raw f32, so the tolerance is in absolute units rather than in
+                    // 16-bit steps; a tolerance of zero means bit-exact.
+                    if (difference > static_cast<f64_t>(testCase->tolerance)) {
+                        ++differing;
+                    }
+                }
+                if (differing != 0) {
+                    Fail("%s/%s: %llu of %zu samples differ, worst %.6g", name.c_str(),
+                         output.c_str(), static_cast<unsigned long long>(differing),
+                         expectedVolume->size(), worst);
+                    caseFailed = true;
+                } else {
+                    std::printf("     %s matches (%zu samples, worst %.6g)\n", output.c_str(),
+                                expectedVolume->size(), worst);
+                }
+                continue;
+            }
+
+            Result<Image> expectedImage = DecodePng(expectedPath);
             if (!expectedImage) {
-                Fail("%s/%s: %s", name.c_str(), output,
+                Fail("%s/%s: %s", name.c_str(), output.c_str(),
                      expectedImage.error().Format().data());
                 caseFailed = true;
                 continue;
             }
             Result<Image> actualImage = DecodePng(actualPath);
             if (!actualImage) {
-                Fail("%s/%s: %s", name.c_str(), output, actualImage.error().Format().data());
+                Fail("%s/%s: %s", name.c_str(), output.c_str(),
+                     actualImage.error().Format().data());
                 caseFailed = true;
                 continue;
             }
             if (!actualImage->Matches(*expectedImage)) {
-                Fail("%s/%s: geometry is %ux%ux%u, expected %ux%ux%u", name.c_str(), output,
-                     actualImage->width, actualImage->height, actualImage->components,
-                     expectedImage->width, expectedImage->height, expectedImage->components);
+                Fail("%s/%s: geometry is %ux%ux%u, expected %ux%ux%u", name.c_str(),
+                     output.c_str(), actualImage->width, actualImage->height,
+                     actualImage->components, expectedImage->width, expectedImage->height,
+                     expectedImage->components);
                 caseFailed = true;
                 continue;
             }
 
             const Comparison comparison =
-                Compare(*actualImage, *expectedImage, testCase->tolerance,
+                Compare(*actualImage, *expectedImage, static_cast<u32_t>(testCase->tolerance),
                         actual + "/" + output + "_diff.png");
             if (comparison.differingSamples != 0) {
                 Fail("%s/%s: %llu sample(s) differ by more than %u, worst difference %u",
-                     name.c_str(), output,
+                     name.c_str(), output.c_str(),
                      static_cast<unsigned long long>(comparison.differingSamples),
-                     testCase->tolerance, comparison.maximumDifference);
+                     static_cast<u32_t>(testCase->tolerance), comparison.maximumDifference);
                 caseFailed = true;
             } else {
-                std::printf("     %s matches (worst difference %u, tolerance %u)\n", output,
-                            comparison.maximumDifference, testCase->tolerance);
+                std::printf("     %s matches (worst difference %u, tolerance %u)\n",
+                            output.c_str(), comparison.maximumDifference,
+                            static_cast<u32_t>(testCase->tolerance));
             }
         }
 

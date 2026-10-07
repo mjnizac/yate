@@ -16,26 +16,11 @@
 
 ## Next
 
-- [ ] Capture a Tracy session of `test_datasets` and confirm the memory view shows every CPU and VRAM
-      pool with correct reserved and used values. The events are emitted; nobody has looked at the
-      graphs yet.
+- [ ] Confirm the Tracy memory view shows every CPU and VRAM pool with correct reserved and used
+      values. The GPU zones now reach the profiler and the CPU zones were already there; the memory
+      graphs are the part nobody has read.
 - [ ] Route what is still landing in `CPU/Untracked new` at shutdown (about 1.4 MB in 8k allocations,
       mostly spdlog and VMA internals) through named allocators.
-
-## Milestone 5 — remaining
-
-The graph, the compiler, the op registry and the evaluator are in, and the export runs off the
-compiled graph. What is left before the milestone can be called accepted:
-
-- [ ] A CPU reference comparison for the pointwise ops, not only for noise. `EvalPointwise` already
-      exists and the compiler uses it for folding; a `test_kernels` dispatching each op and comparing
-      against it is the missing piece.
-- [ ] A dataset case per op, and one per common mapping (`R2->R1`, `R2->R2`, `R2->R3`, `R3->R1`).
-      Only `basic_fbm` exists.
-- [ ] `R3` has no end-to-end path: `RunExport` always builds an `R2` graph, and the raw volume writer
-      is never exercised.
-- [ ] A neighbourhood op, so halo propagation is tested against something other than zero.
-      `test_compiler` currently pins "every halo is zero", which is correct but weak.
 
 ## Carried over
 

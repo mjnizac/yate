@@ -368,7 +368,7 @@ Status PngWriter::Finish() {
 // --- Raw volumes --------------------------------------------------------------------------------
 
 Result<RawVolumeWriter> RawVolumeWriter::Create(std::string_view path, u32_t width, u32_t height,
-                                              u32_t depth, u8_t components) {
+                                              u32_t depth, u32_t components) {
     if (width == 0 || height == 0 || depth == 0 || components == 0) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
                     "volume is {}x{}x{} with {} component(s)", width, height, depth, components);

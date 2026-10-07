@@ -1,0 +1,19 @@
+{
+  "description": "Ridged noise with normalization off, so both the base-function variant and the unnormalized accumulation path are covered.",
+  "seed": 31337,
+  "resolution": 1.0,
+  "section": 128,
+  "bounds": { "min_x": 1024.0, "min_z": -2048.0, "max_x": 1280.0, "max_z": -1792.0 },
+  "params": {
+    "kind": "ridged",
+    "frequency": "0.008",
+    "octaves": "4",
+    "persistence": "0.6",
+    "amplitude": "300",
+    "normalize": "0",
+    "range": "0,900"
+  },
+  "outputs": ["height.png"],
+  "tolerance": 0,
+  "performance": { "passes": 3, "warn_slower": 0.10, "fail_slower": 0.25 }
+}

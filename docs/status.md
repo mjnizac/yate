@@ -6,7 +6,7 @@
 | 2 | Memory system | **done**, accepted |
 | 3 | Vulkan context in Headless mode | **done**, accepted |
 | 4 | First export | **done**, accepted |
-| 5 | Graph and compiler, without Lua | in progress |
+| 5 | Graph and compiler, without Lua | **done**, pending acceptance |
 | 6 | Lua bindings | not started |
 | 7 | Sections and streaming | not started |
 | 8 | Iterative kernels | not started |
@@ -14,7 +14,7 @@
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 6 of 6 in each:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 8 of 8 in each:
 
 ```
 test_allocators ......... Passed
@@ -23,14 +23,19 @@ test_errors ............. Passed
 test_compiler ........... Passed
 test_compute_roundtrip .. Passed
 test_noise .............. Passed
+test_kernels ............ Passed
 test_datasets ........... Passed
 ```
+
+Every GPU test also fails if the Vulkan debug messenger reported anything at error severity, so the
+suite doubles as a validation run.
 
 Everything GPU-side ran on a GeForce GTX 1070 reporting Vulkan 1.4.312, with a dedicated compute
 queue family and calibrated timestamps available.
 
-Still open: capture a Tracy session and confirm the memory view shows every CPU and VRAM pool with
-correct reserved and used values. The events are emitted; nobody has looked at the graphs yet.
+Still open: read the Tracy memory view and confirm every CPU and VRAM pool reports correct reserved
+and used values. CPU zones, GPU zones and allocation events all reach the profiler; the memory graphs
+are the part nobody has looked at.
 
 ## 1. Skeleton
 
@@ -117,11 +122,10 @@ The first case, `basic_fbm`, is a 512x512 heightmap plus normals over 2x2 sectio
 - Encoding dominates the wall time: a 2048x2048 export with normals takes about 5.7 s in Release, of
   which the GPU accounts for 3.2 ms and zlib for nearly all the rest.
 
-## 5. Graph and compiler (in progress)
+## 5. Graph and compiler
 
 The graph, the compiler, the op registry and the evaluator are in, and `terrain_export` runs off the
-compiled graph rather than a hardcoded pair of dispatches. `docs/todo.md` lists what is left before
-the milestone can be called accepted.
+compiled graph rather than a hardcoded pair of dispatches.
 
 **Graph.** Lazy, fixed-capacity node storage with typed handles, multi-output channels and a source
 location on every node. Each builder validates its inputs' mappings on the spot, so a mismatch is
@@ -142,8 +146,8 @@ broadcasting, folding counts, CSE merging identical noise nodes while leaving di
 dead nodes and unrequested channels dropped, and a seven-link chain of same-mapping curves planned
 into **two** buffers.
 
-**Ops.** Nine kernels on one uniform interface: `Const`, `Coords`, `Noise`, `Normals`, `Arith`,
-`Curve`, `Blend`, `SlopeMask` and `Vector`. Variants come from byte-packed fields in a node's
+**Ops.** Ten kernels on one uniform interface: `Const`, `Coords`, `Noise`, `Normals`, `Arith`,
+`Curve`, `Blend`, `SlopeMask`, `Vector` and `Blur`. Variants come from byte-packed fields in a node's
 `variant`, each mapping to one specialization constant, so a change of code shape costs a pipeline
 and no shader compilation.
 
@@ -170,3 +174,27 @@ one octave stays inside its declared band.
 - **Reordering a float multiply changed the output by one 16-bit unit.** The dataset golden caught it,
   which is exactly what it is for.
 - **f32 coordinates lose precision far from the origin.** Quantified in `docs/todo.md`.
+- **One halo per dispatch was not enough.** Halo propagation gives a producer a wider halo than its
+  own consumer needs, so a kernel's inputs and outputs can have different row strides. The push
+  constant now carries one halo byte per input slot. Keeping the block at its asserted 128 bytes meant
+  merging `domain` and `channelMask` into one `flags` word, which costs nothing because both were
+  already read through accessors.
+- **`TracyVkCollect` was called on a command buffer that was never begun.** Validation said so and the
+  GPU zones never reached the profiler at all. With the collection properly recorded and submitted the
+  trace grew from 31 KB to 43 KB at an identical CPU zone count.
+
+**Neighbourhood ops and halos.** `Blur` is a separable-radius box filter that reads its input with
+halo-aware indexing, which is what exercises halo propagation end to end: `test_kernels` dispatches it
+with an input halo wider than the output and `test_compiler` checks the propagated radii. A producer's
+halo is the maximum over its consumers of consumer halo plus consumer radius.
+
+**Dataset coverage.** Five cases, all bit-exact: `basic_fbm` (`R2->R1` plus normals), `gradient_r2`
+(`R2->R2` written as 16-bit RGB), `ridged_r2` (a different base function with normalization off),
+`blurred_r2` (a nonzero halo through the whole pipeline) and `volume_r3` (`R3->R1` as a raw `f32`
+volume). The runner reads the output file names from `case.json` and dispatches on the extension, so a
+case declares whatever set of outputs it produces; volumes are compared sample by sample in raw units
+instead of 16-bit steps, since there is no useful 2D difference image for a 3D output.
+
+**`R3` end to end.** `terrain_export` builds an `R3` graph when the job asks for it, evaluates it brick
+by brick in y, z, x order and streams each brick into `RawVolumeWriter` with `fseek`, so a volume is
+never fully resident.

@@ -1,0 +1,17 @@
+{
+  "description": "The analytic gradient exported directly as an R2->R2 value, which the writer stores as a 16-bit RGB PNG with blue at zero.",
+  "seed": 4242,
+  "resolution": 1.0,
+  "section": 128,
+  "bounds": { "min_x": -512.0, "min_z": 256.0, "max_x": -128.0, "max_z": 640.0 },
+  "params": {
+    "frequency": "0.006",
+    "octaves": "3",
+    "amplitude": "120",
+    "range": "-120,120",
+    "gradient": "1"
+  },
+  "outputs": ["height.png", "gradient.png"],
+  "tolerance": 0,
+  "performance": { "passes": 3, "warn_slower": 0.10, "fail_slower": 0.25 }
+}

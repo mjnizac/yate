@@ -98,7 +98,7 @@ public:
     ENGINE_NO_COPY(RawVolumeWriter);
 
     [[nodiscard]] static Result<RawVolumeWriter> Create(std::string_view path, u32_t width,
-                                                      u32_t height, u32_t depth, u8_t components);
+                                                      u32_t height, u32_t depth, u32_t components);
 
     /// Copies one brick into place. `brick` holds `extent` samples in the kernel layout, and
     /// `origin` is where its first sample belongs in the volume.
@@ -117,7 +117,7 @@ private:
     u32_t m_width     = 0;
     u32_t m_height    = 0;
     u32_t m_depth     = 0;
-    u8_t  m_components = 1;
+    u32_t m_components = 1;
     u64_t m_samplesWritten = 0;
 };
 
