@@ -22,8 +22,14 @@
       - Wrapping the noise-space coordinate by a power of two, which is the only option that shrinks
         every magnitude involved. It costs periodicity per octave: with a wrap of K noise units, the
         finest octave of a 6-octave fBm at frequency 2e-3 and lacunarity 2 repeats every K/0.064
-        metres, so K = 256 repeats every 4 km. **Deferred to milestone 7**, where the actual world
-        size is known and the trade can be made against it rather than guessed.
+        metres, so K = 256 repeats every 4 km.
+
+      **Decided in milestone 7: not implemented, and the limit is stated instead.** The jitter works
+      out to about `2e-7 * |world|` metres regardless of frequency, which matches the 0.05 m measured
+      at 5e5 m. A 16k map at 1 m resolution reaches 8192 m, where that is 0.0016 m, so nothing the
+      engine can export today is affected. The exporter warns when the jitter passes a tenth of a
+      sample, so the limit is visible rather than lurking. Revisit only if a job genuinely needs
+      coordinates past a few hundred kilometres, where the periodicity would be the lesser evil.
 
 ## Next
 

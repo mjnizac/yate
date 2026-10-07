@@ -8,7 +8,7 @@
 | 4 | First export | **done**, accepted |
 | 5 | Graph and compiler, without Lua | **done**, pending acceptance |
 | 6 | Lua bindings | **done**, accepted |
-| 7 | Sections and streaming | not started |
+| 7 | Sections and streaming | **done**, accepted |
 | 8 | Iterative kernels | not started |
 | 9 | Viewer (Graphics mode) | not started |
 
@@ -25,6 +25,7 @@ test_lua_errors ......... Passed
 test_compute_roundtrip .. Passed
 test_noise .............. Passed
 test_kernels ............ Passed
+test_seams .............. Passed
 test_datasets ........... Passed
 ```
 
@@ -116,7 +117,6 @@ The first case, `basic_fbm`, is a 512x512 heightmap plus normals over 2x2 sectio
 
 ### Not in this milestone
 
-- `--tiles` is rejected with a clear error; one file per tile arrives with streaming (milestone 7).
 - `graph_compilation` in the sidecar is 0 until there is a graph to compile (milestone 5).
 - `gpu` in the sidecar is the total of the per-section timestamp pairs. The per-op breakdown needs the
   evaluator (milestone 5).
@@ -273,3 +273,58 @@ that asked for it. Running the script itself costs 1.14 ms.
 - Hot reload is viewer work (milestone 9). Reloading is already just another `RunScript` call, which
   creates and destroys its own state.
 - `Terrain.Normals` has no `R2->R1` overload: it would need a finite-difference gradient op.
+
+## 7. Sections and streaming
+
+**Seams and determinism, pinned.** `test_seams` is the acceptance test, and it compares f32 samples
+straight out of the section buffers rather than encoded PNGs, because 16-bit quantization would hide
+exactly the one-LSB differences it exists to find. Every case is bit-identical: `R2` noise as one
+128x128 section against 4x4 sections of 32, a region of 100x70 that is not a whole number of sections,
+blur radii 1, 3 and 8, a three-dispatch graph with a slope mask and a blend, `R3` noise and blur as one
+32³ brick against 4x4x4 bricks of 8, and the same graph evaluated twice.
+
+**The 16k acceptance run.** A 16384x16384 export with normals, run three times: twice with 512-sample
+sections and once with 1024. All six files come out with the same SHA-256, so 268 million samples agree
+across both the repeat and the section layout. It takes about 68 s and writes 1.1 GB of PNG.
+
+**Encoding moved off the main loop, because that is where the time is.** Measured first: on a
+4096x4096 export the GPU accounts for 21 ms and the readback for 76 ms of 3846 ms, so overlapping
+dispatches with the CPU could chase under 4%. Encoding was 96%. Each PNG output now has its own worker
+thread and two bands: one is filled from the readback ring while the other is deflated, and the two
+outputs of a typical job no longer wait on each other. The same export went from 3846 ms to 2417 ms,
+with the dataset goldens still bit-exact.
+
+The sidecar reports `encode_stall` alongside `encode_and_write`, which is the number that says whether
+the pipeline is deep enough: 1974 ms of the 2417 ms are still the main loop waiting for a free band, so
+the critical path is now one output's own deflate stream. Two bands is enough; going deeper would not
+help, because a deflate stream is sequential and cannot be split.
+
+**Sections in flight.** One on the GPU, two bands per output on the CPU. One is enough for the reason
+measured above, and the engine now says so out loud: before allocating anything it compares the planned
+VRAM per section against the device-local budget, logs how many would fit, and refuses a job that
+cannot run with the numbers rather than failing inside VMA:
+
+```
+a 16384 section of this graph needs 7168 MiB of VRAM but only 6453 MiB of 6453 MiB are available;
+use a smaller --section
+```
+
+**`--tiles`.** One file per section instead of one stitched image: `height_0_256.png` for a tile,
+`height_0_16_0.raw` for a brick. A tile needs no band and no stitching, because its rows are already
+contiguous in the readback buffer and it is a complete image, so it is opened, written and closed in
+the loop. A tile of a region is byte-identical to the stitched export of that same region, which is how
+the mode is checked. The cost is that encoding goes back on the main loop: one deflate stream per tile
+cannot be fed from a worker that owns a single stream.
+
+**The f32 range is now a stated number, not a worry.** The jitter an f32 world coordinate carries works
+out to about `2e-7 * |world|` metres, independent of frequency, which is the 0.05 m that `test_noise`
+measures at 5e5 m. The exporter warns when that passes a tenth of a sample:
+
+```
+the bounds reach 999256 m from the origin, where an f32 coordinate carries about 0.200 m of jitter
+against a 1.000 m sample
+```
+
+That makes the limit visible where it matters and costs nothing. The periodic wrap that would push it
+further is still in `docs/todo.md`, now with a concrete reason to leave it there: a 16k map at 1 m
+resolution reaches 8192 m, where the jitter is 0.0016 m.

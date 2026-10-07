@@ -206,6 +206,25 @@ struct Grid {
     return domain;
 }
 
+/// Builds the path of one tile: `<directory><name>_<x>_<z>.<extension>`, with a y component only for
+/// a volume, so a 2D set of tiles sorts the way a reader expects.
+void MakeTilePath(std::array<char, 256>& out, std::string_view directory, std::string_view name,
+                  const char* extension, b8_t volume, u32_t x, u32_t y, u32_t z) {
+    const b8_t needsSeparator =
+        !directory.empty() && directory.back() != '/' && directory.back() != '\\';
+    if (volume) {
+        std::snprintf(out.data(), out.size(), "%.*s%s%.*s_%u_%u_%u.%s",
+                      static_cast<int>(directory.size()), directory.data(),
+                      needsSeparator ? "/" : "", static_cast<int>(name.size()), name.data(), x, y, z,
+                      extension);
+    } else {
+        std::snprintf(out.data(), out.size(), "%.*s%s%.*s_%u_%u.%s",
+                      static_cast<int>(directory.size()), directory.data(),
+                      needsSeparator ? "/" : "", static_cast<int>(name.size()), name.data(), x, z,
+                      extension);
+    }
+}
+
 /// Everything one compiled output needs on the CPU side.
 ///
 /// A 2D output is staged through a band and encoded on its own worker thread; a volume is written
@@ -224,7 +243,54 @@ struct OutputChannel {
     OutputFormat                              format   = OutputFormat::Grayscale16;
     f32_t                                     rangeMin = 0.0f;
     f32_t                                     rangeMax = 1.0f;
+    /// Samples clamped across every tile, in tiles mode. The per-tile writers are gone by the time the
+    /// sidecar is written, so the count is accumulated as they are closed.
+    u64_t tileClamped = 0;
 };
+
+/// Writes one section as its own file.
+///
+/// Tiles mode needs no band and no encoder pipeline: a tile's rows are already contiguous in the
+/// readback buffer and the tile is a complete image, so it is opened, written and closed here. That
+/// does put encoding back on the main loop, which is the cost of the mode rather than an oversight:
+/// one deflate stream per tile cannot be fed from a worker that owns a single stream.
+[[nodiscard]] Status WriteTile(OutputChannel& out, const ExportJob& job, const f32_t* samples,
+                               u32_t sectionStride, std::array<u32_t, 3> extent,
+                               std::array<u32_t, 3> origin) {
+    std::array<char, 256> path{};
+    MakeTilePath(path, job.outputDirectory, out.name.data(), ExtensionFor(out.format), out.isVolume,
+                 origin[0], origin[1], origin[2]);
+
+    if (out.isVolume) {
+        Result<RawVolumeWriter> writer =
+            RawVolumeWriter::Create(path.data(), extent[0], extent[1], extent[2], out.components);
+        if (!writer) {
+            return std::unexpected(writer.error());
+        }
+        if (Status written = writer->WriteBrick({0, 0, 0}, extent,
+                                                {sectionStride, sectionStride, sectionStride},
+                                                samples);
+            !written) {
+            return std::unexpected(written.error());
+        }
+        return writer->Finish();
+    }
+
+    Result<PngWriter> writer = PngWriter::Create(path.data(), extent[0], extent[2], out.mapping,
+                                                out.rangeMin, out.rangeMax, job.png);
+    if (!writer) {
+        return std::unexpected(writer.error());
+    }
+    for (u32_t row = 0; row < extent[2]; ++row) {
+        if (Status written = writer->WriteRow(
+                samples + static_cast<u64_t>(row) * sectionStride * out.components);
+            !written) {
+            return std::unexpected(written.error());
+        }
+    }
+    out.tileClamped += writer->ClampedSamples();
+    return writer->Finish();
+}
 
 /// Builds `<directory><name>.<extension>` into `out`.
 void MakePath(std::array<char, 256>& out, std::string_view directory, std::string_view name,
@@ -263,11 +329,6 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
 #endif
     const Clock::time_point jobStart = Clock::now();
 
-    if (job.tiles) {
-        ENGINE_FAIL(ErrorCode::Unsupported, ErrorStage::Export,
-                    "--tiles is not implemented yet; see docs/status.md (milestone 7)");
-    }
-
     // The script runs before anything is sized, because what it builds is what decides the domain,
     // and the domain decides the grid, the section shape and the output formats.
     Graph                     graph;
@@ -295,6 +356,26 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     Result<Grid> grid = MakeGrid(job, domain);
     if (!grid) {
         return std::unexpected(grid.error());
+    }
+
+    // How far out f32 world coordinates stay trustworthy.
+    //
+    // Derived rather than picked: a kernel's noise-space position is `world * frequency`, the simplex
+    // skewing term is about 1.7 times that, and its rounding error is one ulp, so the error in the
+    // position is about `1.2e-7 * 1.7 * world * frequency`. Dividing back by the frequency to get
+    // world units cancels it entirely and leaves a jitter of roughly `2e-7 * |world|`, independent of
+    // the frequency. `test_noise` measures 0.05 m at 5e5 m, which is that figure. The warning fires
+    // when the jitter passes a tenth of a sample, because below that no output can see it.
+    constexpr f64_t kJitterPerMetre = 2e-7;
+    const f64_t     furthest =
+        std::max(std::max(std::fabs(job.minX), std::fabs(job.maxX)),
+                 std::max(std::fabs(job.minZ), std::fabs(job.maxZ)));
+    const f64_t jitter = furthest * kJitterPerMetre;
+    if (jitter > job.resolution * 0.1) {
+        LOG_WARN("the bounds reach {:.0f} m from the origin, where an f32 coordinate carries about "
+                 "{:.3f} m of jitter against a {:.3f} m sample; noise values stay in range but "
+                 "sub-sample slopes there are not meaningful (docs/todo.md)",
+                 furthest, jitter, job.resolution);
     }
 
     vulkan::Context& context = VulkanContext(application);
@@ -390,6 +471,16 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                         "output {} is {} but the job domain is {}", info.name.data(),
                         ToString(info.mapping), domain == Domain::R3 ? "R3" : "R2");
         }
+        // In tiles mode each section is its own file, so `path` holds the pattern rather than a file
+        // that exists, and no writer is opened until a section has been evaluated. A tile needs no
+        // band and no stitching: its rows are already contiguous in the readback buffer.
+        if (job.tiles) {
+            MakeTilePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(*format),
+                         out.isVolume, 0, 0, 0);
+            detail::CopyBounded(summary.files[summary.fileCount++], out.path.data());
+            continue;
+        }
+
         MakePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(*format));
 
         if (out.isVolume) {
@@ -505,7 +596,16 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                     const auto* samples = static_cast<const f32_t*>(
                         context.Readback().MappedAt(readbackOffsets[i]));
 
-                    if (outputs[i].isVolume) {
+                    if (job.tiles) {
+                        const Clock::time_point writeStart = Clock::now();
+                        if (Status written = WriteTile(outputs[i], job, samples, section,
+                                                      {tileColumns, layers, bandRows},
+                                                      {tileX0, originY, bandZ0});
+                            !written) {
+                            return std::unexpected(written.error());
+                        }
+                        encodeMs += MillisecondsSince(writeStart);
+                    } else if (outputs[i].isVolume) {
                         const Clock::time_point writeStart = Clock::now();
                         if (Status written = outputs[i].raw.WriteBrick(
                                 {tileX0, originY, bandZ0}, {tileColumns, layers, bandRows},
@@ -527,6 +627,9 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             // The bands are complete across the full width. Handing one over returns as soon as the
             // worker has a free band, so the next band is filled while this one is being deflated and
             // the outputs no longer wait on each other.
+            if (job.tiles) {
+                continue;
+            }
             const Clock::time_point handoffStart = Clock::now();
             for (usize_t i = 0; i < outputCount; ++i) {
                 if (outputs[i].isVolume) {
@@ -547,8 +650,10 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     }
 
     for (usize_t i = 0; i < outputCount; ++i) {
-        u64_t clamped = 0;
-        if (outputs[i].isVolume) {
+        u64_t clamped = outputs[i].tileClamped;
+        if (job.tiles) {
+            // Each tile was opened, written and closed inside the loop; only the count survives.
+        } else if (outputs[i].isVolume) {
             if (Status finished = outputs[i].raw.Finish(); !finished) {
                 return std::unexpected(finished.error());
             }
