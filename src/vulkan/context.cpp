@@ -4,6 +4,7 @@
 #include <engine/log.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -49,6 +50,14 @@ const char* ResultName(VkResult result) noexcept {
     static thread_local std::array<char, 24> unknown{};
     std::snprintf(unknown.data(), unknown.size(), "VkResult(%d)", static_cast<int>(result));
     return unknown.data();
+}
+
+namespace {
+std::atomic<u64_t> g_validationErrors{0};
+} // namespace
+
+u64_t ValidationErrorCount() noexcept {
+    return g_validationErrors.load(std::memory_order_relaxed);
 }
 
 Error MakeVulkanError(VkResult result, const char* call) noexcept {
@@ -139,10 +148,19 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
                                              const VkDebugUtilsMessengerCallbackDataEXT* data,
                                              void* userData) {
     // Never throws: this crosses a C boundary (spec section 3).
-    (void)types;
     (void)userData;
     const char* message = data != nullptr && data->pMessage != nullptr ? data->pMessage : "";
     if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
+        // Only validation and performance messages are counted. The loader also reports at error
+        // severity about things that are not our API usage at all, such as a third-party layer with
+        // a broken manifest installed on the machine, and counting those would make the test gate
+        // fail for reasons no change to this codebase could fix.
+        constexpr VkDebugUtilsMessageTypeFlagsEXT kOurs =
+            VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+            | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        if ((types & kOurs) != 0) {
+            g_validationErrors.fetch_add(1, std::memory_order_relaxed);
+        }
         LOG_ERROR("[vulkan] {}", message);
     } else if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0) {
         LOG_WARN("[vulkan] {}", message);

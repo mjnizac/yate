@@ -4,7 +4,7 @@
 // The `coords` kernel is used on purpose: its output pins down the sample layout, the halo offset
 // and the integer section origin at the same time, so an indexing mistake cannot pass unnoticed.
 
-#include "test_support.hpp"
+#include "gpu_support.hpp"
 
 #include <engine/application.hpp>
 #include <engine/engine.hpp>
@@ -35,49 +35,6 @@ constexpr u32_t kExtent  = 16;
 constexpr u32_t kHalo    = 2;
 
 constexpr u64_t kTimeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
-
-/// Dispatches one kernel into `slot`, copies the result into the readback ring and waits.
-/// Returns the offset of the data inside the ring.
-[[nodiscard]] Result<VkDeviceSize> RunKernel(Context& context, const ComputePipeline& pipeline,
-                                             const SectionSlot&         slot,
-                                             const KernelPushConstants& constants,
-                                             VkDeviceSize               byteCount) {
-    Result<VkDeviceSize> readbackOffset = context.Readback().Reserve(byteCount, 16);
-    if (!readbackOffset) {
-        return std::unexpected(readbackOffset.error());
-    }
-
-    Queue&                        queue    = context.ComputeQueue();
-    Result<VkCommandBuffer>       commands = queue.BeginOneShot();
-    if (!commands) {
-        return std::unexpected(commands.error());
-    }
-
-    pipeline.Bind(*commands, constants);
-    const std::array<u32_t, 3> groups =
-        DispatchSize(constants.Domain(), constants.extent, constants.halo);
-    vkCmdDispatch(*commands, groups[0], groups[1], groups[2]);
-
-    ComputeToTransferBarrier(*commands, slot.buffer, slot.offset, slot.size);
-
-    const VkBufferCopy copy{
-        .srcOffset = slot.offset, .dstOffset = *readbackOffset, .size = byteCount};
-    vkCmdCopyBuffer(*commands, slot.buffer, context.Readback().GetBuffer().handle, 1, &copy);
-
-    Result<u64_t> submitted = queue.EndAndSubmit(*commands);
-    if (!submitted) {
-        return std::unexpected(submitted.error());
-    }
-    if (Status waited = queue.WaitTimeline(*submitted, kTimeoutNanoseconds); !waited) {
-        return std::unexpected(waited.error());
-    }
-    if (Status invalidated = context.Memory().InvalidateBuffer(context.Readback().GetBuffer(),
-                                                              *readbackOffset, byteCount);
-        !invalidated) {
-        return std::unexpected(invalidated.error());
-    }
-    return *readbackOffset;
-}
 
 } // namespace
 
@@ -144,11 +101,10 @@ int main() {
         constants.SetChannelMask(1);
         constants.outputs[0]  = slot->address;
 
-        Result<VkDeviceSize> offset = RunKernel(context, *coords, *slot, constants, coordsBytes);
-        REQUIRE_OK(offset);
-
-        const auto* values =
-            static_cast<const f32_t*>(context.Readback().MappedAt(*offset));
+        Result<test::Readback> coordsRead =
+            test::RunKernel(context, *coords, *slot, constants, coordsBytes);
+        REQUIRE_OK(coordsRead);
+        const f32_t* values = coordsRead->data;
         const u32_t padded    = kExtent + 2 * kHalo;
         u32_t       mismatches = 0;
         for (u32_t localZ = 0; localZ < padded; ++localZ) {
@@ -192,11 +148,10 @@ int main() {
         fill.params[4] = 1; // component count
 
         const u64_t        scalarBytes = ValueSize(Mapping{Domain::R2, 1}, extent, kHalo);
-        Result<VkDeviceSize> fillOffset = RunKernel(context, *constant, *slot, fill, scalarBytes);
-        REQUIRE_OK(fillOffset);
-
-        const auto* filled =
-            static_cast<const f32_t*>(context.Readback().MappedAt(*fillOffset));
+        Result<test::Readback> fillRead =
+            test::RunKernel(context, *constant, *slot, fill, scalarBytes);
+        REQUIRE_OK(fillRead);
+        const f32_t* filled = fillRead->data;
         u32_t wrong = 0;
         for (u64_t i = 0; i < samples; ++i) {
             if (filled[i] != wanted) {
@@ -228,5 +183,6 @@ int main() {
         std::printf("FAIL engine::shutdown: %s\n", closed.error().Format().data());
         return 1;
     }
+    test::CheckNoValidationErrors();
     return result != 0 ? result : test::Summary("test_compute_roundtrip");
 }

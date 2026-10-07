@@ -15,6 +15,21 @@ namespace test {
 
 inline constexpr engine::u64_t kGpuTimeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
 
+/// Fails the suite if the Vulkan debug messenger reported anything at error severity.
+///
+/// Without this a validation error only shows up as a log line, which is easy to filter out and easy
+/// to miss: a real one sat in the output for a while because every test still passed. Calling this at
+/// the end of a GPU test makes the whole suite a validation run.
+inline void CheckNoValidationErrors() {
+    ++g_checks;
+    const engine::u64_t errors = engine::vulkan::ValidationErrorCount();
+    if (errors != 0) {
+        ++g_failures;
+        std::printf("FAIL the Vulkan debug messenger reported %llu error(s); see the log above\n",
+                    static_cast<unsigned long long>(errors));
+    }
+}
+
 /// A readback window: the mapped samples plus the ring offset the caller must release.
 struct Readback {
     const engine::f32_t* data   = nullptr;

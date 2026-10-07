@@ -14,6 +14,12 @@ namespace engine::vulkan {
 /// Spelling of a `VkResult` enumerator, or `VK_RESULT_<number>` for unknown values.
 [[nodiscard]] const char* ResultName(VkResult result) noexcept;
 
+/// Number of error-severity messages the debug messenger has reported this process.
+///
+/// Exposed so a test can fail on a validation error instead of only logging it. Every GPU test
+/// checks it, which turns the whole suite into a validation run.
+[[nodiscard]] u64_t ValidationErrorCount() noexcept;
+
 /// Builds an `Error` that names the failing call and the result.
 [[nodiscard]] Error MakeVulkanError(VkResult result, const char* call) noexcept;
 

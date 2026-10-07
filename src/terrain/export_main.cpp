@@ -19,8 +19,8 @@ void PrintUsage() {
         "\n"
         "  --script <file>        terrain script to evaluate (required)\n"
         "  --seed <n>             random seed (default 0)\n"
-        "  --min <x>,<z>          world-space minimum (default 0,0)\n"
-        "  --max <x>,<z>          world-space maximum (default 1024,1024)\n"
+        "  --min <x>[,<y>],<z>    world-space minimum (default 0,0)\n"
+        "  --max <x>[,<y>],<z>    world-space maximum (default 1024,1024)\n"
         "  --resolution <meters>  meters per pixel (default 1.0)\n"
         "  --section <n>          section size in samples, a power of two (default 512)\n"
         "  --out <dir>            output directory (default out/)\n"
@@ -32,27 +32,47 @@ void PrintUsage() {
         "\n"
         "Until the Lua runtime lands (milestone 6) the graph is a single fBm node driven by\n"
         "--param: frequency, octaves, lacunarity, persistence, amplitude, offset,\n"
-        "range=<min>,<max>, normalize=0 and normals=1.\n"
+        "range=<min>,<max>, normalize=0, normals=1, blur=<radius>, kind=<simplex|ridged|billow>\n"
+        "and domain=3 for a volume, which also needs a y component on --min and --max.\n"
         "and normals=1.\n",
         stderr);
 }
 
-/// Parses `<a>,<b>` into two doubles.
-[[nodiscard]] b8_t ParsePair(std::string_view text, f64_t& first, f64_t& second) {
-    const usize_t comma = text.find(',');
-    if (comma == std::string_view::npos) {
-        return false;
+/// Parses `<x>,<z>` or `<x>,<y>,<z>`. The three-component form is what an `R3` export needs, and the
+/// two-component form stays exactly as the spec documents it.
+[[nodiscard]] b8_t ParseBound(std::string_view text, f64_t& x, f64_t& y, f64_t& z) {
+    std::array<f64_t, 3> values{};
+    usize_t              count = 0;
+    usize_t              start = 0;
+    while (count < 3) {
+        const usize_t    comma = text.find(',', start);
+        std::string_view part =
+            comma == std::string_view::npos ? text.substr(start) : text.substr(start, comma - start);
+        std::array<char, 64> buffer{};
+        detail::CopyBounded(buffer, part);
+        char* end        = nullptr;
+        values[count]    = std::strtod(buffer.data(), &end);
+        if (end == buffer.data()) {
+            return false;
+        }
+        ++count;
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
     }
-    std::array<char, 64> buffer{};
-    detail::CopyBounded(buffer, text.substr(0, comma));
-    char* end = nullptr;
-    first     = std::strtod(buffer.data(), &end);
-    if (end == buffer.data()) {
-        return false;
+    if (count == 2) {
+        x = values[0];
+        z = values[1];
+        return true;
     }
-    detail::CopyBounded(buffer, text.substr(comma + 1));
-    second = std::strtod(buffer.data(), &end);
-    return end != buffer.data();
+    if (count == 3) {
+        x = values[0];
+        y = values[1];
+        z = values[2];
+        return true;
+    }
+    return false;
 }
 
 struct Options {
@@ -91,14 +111,14 @@ struct Options {
         } else if (argument == "--section") {
             options.job.sectionSize = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
         } else if (argument == "--min") {
-            if (!ParsePair(value, options.job.minX, options.job.minZ)) {
+            if (!ParseBound(value, options.job.minX, options.job.minY, options.job.minZ)) {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                            "--min expects <x>,<z>, got {}", value);
+                            "--min expects <x>,<z> or <x>,<y>,<z>, got {}", value);
             }
         } else if (argument == "--max") {
-            if (!ParsePair(value, options.job.maxX, options.job.maxZ)) {
+            if (!ParseBound(value, options.job.maxX, options.job.maxY, options.job.maxZ)) {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                            "--max expects <x>,<z>, got {}", value);
+                            "--max expects <x>,<z> or <x>,<y>,<z>, got {}", value);
             }
         } else if (argument == "--param") {
             if (!options.job.params.Assign(value)) {

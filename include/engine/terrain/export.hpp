@@ -54,6 +54,10 @@ struct ExportJob {
     f64_t            minZ            = 0.0;
     f64_t            maxX            = 1024.0;
     f64_t            maxZ            = 1024.0;
+    /// Vertical extent, used only by an `R3` graph. The spec takes the brick height from the y range
+    /// of the bounds, so it lives with the other bounds rather than with the parameters.
+    f64_t minY = 0.0;
+    f64_t maxY = 256.0;
     f64_t            resolution      = 1.0;
     u32_t            sectionSize     = 512;
     /// One file per tile instead of one stitched image.
@@ -67,8 +71,11 @@ struct ExportSummary {
 
     u32_t width        = 0;
     u32_t height       = 0;
-    u32_t sectionsX    = 0;
-    u32_t sectionsZ    = 0;
+    /// Samples along y. One for an `R2` export.
+    u32_t depth     = 1;
+    u32_t sectionsX = 0;
+    u32_t sectionsY = 1;
+    u32_t sectionsZ = 0;
     u64_t sectionCount = 0;
     /// Samples the declared output range clamped, summed over every output.
     u64_t clampedSamples = 0;

@@ -568,5 +568,6 @@ int main() {
         std::printf("FAIL engine::shutdown: %s\n", closed.error().Format().data());
         return 1;
     }
+    test::CheckNoValidationErrors();
     return result != 0 ? result : test::Summary("test_kernels");
 }

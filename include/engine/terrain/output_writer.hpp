@@ -80,8 +80,46 @@ private:
     u64_t                 m_clamped  = 0;
 };
 
-/// Writes raw little-endian `f32` samples, for `R3` volumes.
-[[nodiscard]] Status WriteRawVolume(std::string_view path, const f32_t* samples, u64_t count);
+/// Writes a raw little-endian `f32` volume one brick at a time.
+///
+/// A raw volume has a trivial layout, so a brick can be written straight into its place with a seek
+/// instead of being staged through a full-size buffer. That keeps CPU memory at one brick no matter
+/// how large the volume is, which is the same property the progressive PNG path gives the 2D
+/// outputs.
+///
+/// Sample order is x fastest, then z, then y, matching what the kernels write.
+class RawVolumeWriter {
+public:
+    RawVolumeWriter() = default;
+    ~RawVolumeWriter();
+
+    RawVolumeWriter(RawVolumeWriter&& other) noexcept;
+    RawVolumeWriter& operator=(RawVolumeWriter&& other) noexcept;
+    ENGINE_NO_COPY(RawVolumeWriter);
+
+    [[nodiscard]] static Result<RawVolumeWriter> Create(std::string_view path, u32_t width,
+                                                      u32_t height, u32_t depth, u8_t components);
+
+    /// Copies one brick into place. `brick` holds `extent` samples in the kernel layout, and
+    /// `origin` is where its first sample belongs in the volume.
+    [[nodiscard]] Status WriteBrick(std::array<u32_t, 3> origin, std::array<u32_t, 3> extent,
+                                   std::array<u32_t, 3> sourceStride, const f32_t* brick);
+
+    [[nodiscard]] Status Finish();
+
+    [[nodiscard]] u64_t SamplesWritten() const noexcept { return m_samplesWritten; }
+
+private:
+    void Release() noexcept;
+
+    /// Opaque `FILE*`, so this header does not pull <cstdio> in.
+    void* m_file      = nullptr;
+    u32_t m_width     = 0;
+    u32_t m_height    = 0;
+    u32_t m_depth     = 0;
+    u8_t  m_components = 1;
+    u64_t m_samplesWritten = 0;
+};
 
 /// Everything the metadata sidecar records (spec section 12).
 ///
@@ -124,6 +162,8 @@ struct ExportMetadata {
     u32_t sectionSize = 0;
     u32_t width       = 0;
     u32_t height      = 0;
+    /// Samples along y. One for a 2D export; the brick height for a volume.
+    u32_t depth = 1;
 
     std::array<Output, kMaxOutputs> outputs{};
     usize_t                         outputCount = 0;

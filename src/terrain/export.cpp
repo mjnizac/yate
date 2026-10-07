@@ -118,25 +118,34 @@ f64_t MillisecondsSince(Clock::time_point start) {
 ///
 /// The origin is an integer sample index, never a float: every kernel derives its world position
 /// from it, which is what keeps neighbouring sections bit-identical at their borders.
+///
+/// A 2D grid has one sample along y and one section row there, so the brick loop below is the same
+/// code for both domains.
 struct Grid {
     i64_t originX     = 0;
+    i64_t originY     = 0;
     i64_t originZ     = 0;
     u32_t width       = 0;
+    u32_t depth       = 1;
     u32_t height      = 0;
     u32_t sectionSize = 0;
     u32_t sectionsX   = 0;
+    u32_t sectionsY   = 1;
     u32_t sectionsZ   = 0;
 };
 
-[[nodiscard]] Result<Grid> MakeGrid(const ExportJob& job) {
+[[nodiscard]] Result<Grid> MakeGrid(const ExportJob& job, Domain domain) {
     if (job.resolution <= 0.0) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
                     "resolution must be positive, got {}", job.resolution);
     }
-    const i64_t minX = static_cast<i64_t>(std::llround(job.minX / job.resolution));
-    const i64_t minZ = static_cast<i64_t>(std::llround(job.minZ / job.resolution));
-    const i64_t maxX = static_cast<i64_t>(std::llround(job.maxX / job.resolution));
-    const i64_t maxZ = static_cast<i64_t>(std::llround(job.maxZ / job.resolution));
+    const auto samples = [&](f64_t world) {
+        return static_cast<i64_t>(std::llround(world / job.resolution));
+    };
+    const i64_t minX = samples(job.minX);
+    const i64_t minZ = samples(job.minZ);
+    const i64_t maxX = samples(job.maxX);
+    const i64_t maxZ = samples(job.maxZ);
     if (maxX <= minX || maxZ <= minZ) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
                     "bounds span {}x{} samples at resolution {}", maxX - minX, maxZ - minZ,
@@ -155,6 +164,19 @@ struct Grid {
     grid.sectionSize = job.sectionSize;
     grid.sectionsX   = (grid.width + job.sectionSize - 1) / job.sectionSize;
     grid.sectionsZ   = (grid.height + job.sectionSize - 1) / job.sectionSize;
+
+    if (domain == Domain::R3) {
+        const i64_t minY = samples(job.minY);
+        const i64_t maxY = samples(job.maxY);
+        if (maxY <= minY) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                        "an R3 export needs a y range; got {} to {} at resolution {}", job.minY,
+                        job.maxY, job.resolution);
+        }
+        grid.originY   = minY;
+        grid.depth     = static_cast<u32_t>(maxY - minY);
+        grid.sectionsY = (grid.depth + job.sectionSize - 1) / job.sectionSize;
+    }
     return grid;
 }
 
@@ -162,8 +184,9 @@ struct Grid {
 ///
 /// This is the graph-built-from-C++ of milestone 5. The Lua runtime replaces this one function in
 /// milestone 6, and nothing downstream of it changes when it does.
-[[nodiscard]] Status BuildJobGraph(Graph& graph, const Params& params) {
+[[nodiscard]] Status BuildJobGraph(Graph& graph, const Params& params, Domain domain) {
     Graph::NoiseParams noise;
+    noise.domain      = domain;
     noise.frequency   = static_cast<f32_t>(params.Number("frequency", noise.frequency));
     noise.octaves     = static_cast<u32_t>(params.Number("octaves", noise.octaves));
     noise.lacunarity  = static_cast<f32_t>(params.Number("lacunarity", noise.lacunarity));
@@ -190,6 +213,16 @@ struct Grid {
         return std::unexpected(value.error());
     }
 
+    // An optional blur, which is what puts a halo on the graph and makes the padded sections real.
+    const u32_t blurRadius = static_cast<u32_t>(params.Number("blur", 0.0));
+    if (blurRadius != 0) {
+        Result<Value> blurred = graph.AddBlur(*value, blurRadius, location);
+        if (!blurred) {
+            return std::unexpected(blurred.error());
+        }
+        value = blurred;
+    }
+
     // The range defaults to the band the kernel actually produces, so a forgotten range parameter
     // does not silently clamp the whole map.
     f64_t rangeMin = noise.offset - noise.amplitude;
@@ -204,14 +237,19 @@ struct Grid {
     if (params.Number("normals", 0.0) == 0.0) {
         return {};
     }
+    if (domain != Domain::R2) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
+                    "normals are a surface property and need an R2 graph");
+    }
 
-    // Channel 1 is the analytic gradient the same dispatch already produced.
-    Result<Value> gradient = graph.Channel(*value, 1);
-    if (!gradient) {
-        return std::unexpected(gradient.error());
+    // Channel 1 of the noise node is the analytic gradient that same dispatch already produced. A
+    // blur would have consumed only the value, so the gradient is taken from the noise directly.
+    Result<Value> noiseValue = graph.Channel(Value{.node = 0, .channel = 0, .mapping = {}}, 1);
+    if (!noiseValue) {
+        return std::unexpected(noiseValue.error());
     }
     Result<Value> normals = graph.AddNormals(
-        *gradient, static_cast<f32_t>(params.Number("vertical_scale", 1.0)), location);
+        *noiseValue, static_cast<f32_t>(params.Number("vertical_scale", 1.0)), location);
     if (!normals) {
         return std::unexpected(normals.error());
     }
@@ -269,15 +307,21 @@ private:
 };
 
 /// Everything one compiled output needs on the CPU side.
+///
+/// A 2D output is staged through a band and streamed into a PNG; a volume is written brick by brick
+/// straight into the raw file, because a raw layout can be seeked into and needs no staging.
 struct OutputChannel {
     std::array<char, 256>                     path{};
     std::array<char, OutputRequest::kMaxName> name{};
-    PngWriter                                 writer;
+    PngWriter                                 png;
+    RawVolumeWriter                           raw;
     Band                                      band;
+    b8_t                                      isVolume   = false;
     u32_t                                     buffer     = kInvalidBuffer;
     u32_t                                     components = 1;
     u64_t                                     bytes      = 0;
     Mapping                                   mapping;
+    OutputFormat                              format   = OutputFormat::Grayscale16;
     f32_t                                     rangeMin = 0.0f;
     f32_t                                     rangeMax = 1.0f;
 };
@@ -324,20 +368,31 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                     "--tiles is not implemented yet; see docs/status.md (milestone 7)");
     }
 
-    Result<Grid> grid = MakeGrid(job);
+    const f64_t  requestedDomain = job.params.Number("domain", 2.0);
+    const Domain domain = requestedDomain == 3.0 ? Domain::R3 : Domain::R2;
+    if (requestedDomain != 2.0 && requestedDomain != 3.0) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "domain must be 2 or 3, got {}", requestedDomain);
+    }
+
+    Result<Grid> grid = MakeGrid(job, domain);
     if (!grid) {
         return std::unexpected(grid.error());
     }
 
-    vulkan::Context&    context = VulkanContext(application);
-    const u32_t         section = grid->sectionSize;
-    const SectionExtent extent{.x = section, .y = 1, .z = section};
+    vulkan::Context& context = VulkanContext(application);
+    const u32_t      section = grid->sectionSize;
+    // An R2 section is a tile with one sample of height; an R3 section is a cubic brick.
+    const SectionExtent extent{.x = section,
+                               .y = domain == Domain::R3 ? section : 1,
+                               .z = section};
 
-    LOG_INFO("export: {}x{} samples, {}x{} section(s) of {}, resolution {} m/px", grid->width,
-             grid->height, grid->sectionsX, grid->sectionsZ, section, job.resolution);
+    LOG_INFO("export: {}x{}x{} samples, {}x{}x{} section(s) of {}, resolution {} m/px, {}",
+             grid->width, grid->depth, grid->height, grid->sectionsX, grid->sectionsY,
+             grid->sectionsZ, section, job.resolution, domain == Domain::R3 ? "R3" : "R2");
 
     Graph graph;
-    if (Status built = BuildJobGraph(graph, job.params); !built) {
+    if (Status built = BuildJobGraph(graph, job.params, domain); !built) {
         return std::unexpected(built.error());
     }
 
@@ -348,7 +403,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         return std::unexpected(compiled.error());
     }
 
-    KernelLibrary& kernels = KernelsOf(application);
+    KernelLibrary&           kernels   = KernelsOf(application);
     Result<SectionResources> resources = SectionResources::Create(context, *compiled);
     if (!resources) {
         return std::unexpected(resources.error());
@@ -365,12 +420,14 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     ExportSummary summary;
     summary.width        = grid->width;
     summary.height       = grid->height;
+    summary.depth        = grid->depth;
     summary.sectionsX    = grid->sectionsX;
+    summary.sectionsY    = grid->sectionsY;
     summary.sectionsZ    = grid->sectionsZ;
-    summary.sectionCount = static_cast<u64_t>(grid->sectionsX) * grid->sectionsZ;
+    summary.sectionCount = static_cast<u64_t>(grid->sectionsX) * grid->sectionsY * grid->sectionsZ;
 
-    // One writer and one band per compiled output. Fixed storage, because a writer and a band are
-    // neither copyable nor movable and the maximum is small and known.
+    // One writer per compiled output. Fixed storage, because a writer and a band are neither
+    // copyable nor movable and the maximum is small and known.
     std::array<OutputChannel, ExportSummary::kMaxOutputs> outputs{};
     const usize_t outputCount =
         compiled->outputs.size() < outputs.size() ? compiled->outputs.size() : outputs.size();
@@ -383,23 +440,38 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         out.components = info.mapping.components;
         out.rangeMin   = info.rangeMin;
         out.rangeMax   = info.rangeMax;
-        out.bytes      = ValueSize(info.mapping, extent, 0);
+        out.bytes      = ValueSize(info.mapping, extent, compiled->buffers[info.buffer].halo);
 
         Result<OutputFormat> format = FormatFor(info.mapping);
         if (!format) {
             return std::unexpected(format.error());
         }
+        out.format   = *format;
+        out.isVolume = *format == OutputFormat::RawF32;
+        if (out.isVolume != (domain == Domain::R3)) {
+            ENGINE_FAIL(ErrorCode::Unsupported, ErrorStage::Export,
+                        "output {} is {} but the job domain is {}", info.name.data(),
+                        ToString(info.mapping), domain == Domain::R3 ? "R3" : "R2");
+        }
         MakePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(*format));
 
-        Result<PngWriter> writer = PngWriter::Create(out.path.data(), grid->width, grid->height,
-                                                    info.mapping, info.rangeMin, info.rangeMax);
-        if (!writer) {
-            return std::unexpected(writer.error());
-        }
-        out.writer = std::move(*writer);
-
-        if (Status created = out.band.Create(grid->width, section, out.components); !created) {
-            return std::unexpected(created.error());
+        if (out.isVolume) {
+            Result<RawVolumeWriter> writer = RawVolumeWriter::Create(
+                out.path.data(), grid->width, grid->depth, grid->height, out.components);
+            if (!writer) {
+                return std::unexpected(writer.error());
+            }
+            out.raw = std::move(*writer);
+        } else {
+            Result<PngWriter> writer = PngWriter::Create(out.path.data(), grid->width, grid->height,
+                                                        info.mapping, info.rangeMin, info.rangeMax);
+            if (!writer) {
+                return std::unexpected(writer.error());
+            }
+            out.png = std::move(*writer);
+            if (Status created = out.band.Create(grid->width, section, out.components); !created) {
+                return std::unexpected(created.error());
+            }
         }
         detail::CopyBounded(summary.files[summary.fileCount++], out.path.data());
     }
@@ -411,92 +483,118 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
 
     vulkan::Queue& queue = context.ComputeQueue();
 
-    for (u32_t bandIndex = 0; bandIndex < grid->sectionsZ; ++bandIndex) {
-        const u32_t bandZ0   = bandIndex * section;
-        const u32_t bandRows = grid->height - bandZ0 < section ? grid->height - bandZ0 : section;
+    for (u32_t brickY = 0; brickY < grid->sectionsY; ++brickY) {
+        const u32_t originY = brickY * section;
+        const u32_t layers =
+            domain == Domain::R3
+                ? (grid->depth - originY < section ? grid->depth - originY : section)
+                : 1;
 
-        for (u32_t tileIndex = 0; tileIndex < grid->sectionsX; ++tileIndex) {
+        for (u32_t bandIndex = 0; bandIndex < grid->sectionsZ; ++bandIndex) {
+            const u32_t bandZ0 = bandIndex * section;
+            const u32_t bandRows =
+                grid->height - bandZ0 < section ? grid->height - bandZ0 : section;
+
+            for (u32_t tileIndex = 0; tileIndex < grid->sectionsX; ++tileIndex) {
 #ifdef TRACY_ENABLE
-            FrameMarkNamed("Section");
+                FrameMarkNamed("Section");
 #endif
-            const u32_t tileX0 = tileIndex * section;
-            const u32_t tileColumns =
-                grid->width - tileX0 < section ? grid->width - tileX0 : section;
+                const u32_t tileX0 = tileIndex * section;
+                const u32_t tileColumns =
+                    grid->width - tileX0 < section ? grid->width - tileX0 : section;
 
-            Result<VkCommandBuffer> commands = queue.BeginOneShot();
-            if (!commands) {
-                return std::unexpected(commands.error());
-            }
-
-            // Every section is dispatched over the full section extent and only its useful interior
-            // is kept, so an edge section computes exactly what an interior one does and the result
-            // cannot depend on where the edges fall.
-            const SectionJob sectionJob{
-                .origin = {static_cast<i32_t>(grid->originX + tileX0), 0,
-                           static_cast<i32_t>(grid->originZ + bandZ0)},
-                .extent = extent,
-                .seed   = static_cast<u32_t>(job.seed)};
-            if (Status recorded =
-                    RecordSection(queue, kernels, *compiled, *resources, *timers, *commands, sectionJob);
-                !recorded) {
-                return std::unexpected(recorded.error());
-            }
-
-            // Every requested output is copied into the readback ring in the same submission.
-            std::array<VkDeviceSize, ExportSummary::kMaxOutputs> readbackOffsets{};
-            for (usize_t i = 0; i < outputCount; ++i) {
-                const vulkan::SectionSlot& slot = resources->Slot(outputs[i].buffer);
-                vulkan::ComputeToTransferBarrier(*commands, slot.buffer, slot.offset, slot.size);
-                Result<VkDeviceSize> offset = context.Readback().Reserve(outputs[i].bytes, 16);
-                if (!offset) {
-                    return std::unexpected(offset.error());
+                Result<VkCommandBuffer> commands = queue.BeginOneShot();
+                if (!commands) {
+                    return std::unexpected(commands.error());
                 }
-                readbackOffsets[i] = *offset;
-                const VkBufferCopy copy{
-                    .srcOffset = slot.offset, .dstOffset = *offset, .size = outputs[i].bytes};
-                vkCmdCopyBuffer(*commands, slot.buffer, context.Readback().GetBuffer().handle, 1,
-                                &copy);
-            }
 
-            const Clock::time_point waitStart = Clock::now();
-            Result<u64_t>           submitted = queue.EndAndSubmit(*commands);
-            if (!submitted) {
-                return std::unexpected(submitted.error());
-            }
-            if (Status waited = queue.WaitTimeline(*submitted, kGpuTimeoutNanoseconds); !waited) {
-                return std::unexpected(waited.error());
-            }
-            readbackMs += MillisecondsSince(waitStart);
-            timers->Accumulate(gpuPerDispatch);
-
-            // Released in reverse, because the ring is FIFO and these were reserved in order.
-            for (usize_t i = outputCount; i-- > 0;) {
-                if (Status invalidated = context.Memory().InvalidateBuffer(
-                        context.Readback().GetBuffer(), readbackOffsets[i], outputs[i].bytes);
-                    !invalidated) {
-                    return std::unexpected(invalidated.error());
+                // Every section is dispatched over the full section extent and only its useful
+                // interior is kept, so an edge section computes exactly what an interior one does and
+                // the result cannot depend on where the edges fall.
+                const SectionJob sectionJob{
+                    .origin = {static_cast<i32_t>(grid->originX + tileX0),
+                               static_cast<i32_t>(grid->originY + originY),
+                               static_cast<i32_t>(grid->originZ + bandZ0)},
+                    .extent = extent,
+                    .seed   = static_cast<u32_t>(job.seed)};
+                if (Status recorded = RecordSection(queue, kernels, *compiled, *resources, *timers,
+                                                    *commands, sectionJob);
+                    !recorded) {
+                    return std::unexpected(recorded.error());
                 }
-                outputs[i].band.Absorb(
-                    static_cast<const f32_t*>(context.Readback().MappedAt(readbackOffsets[i])),
-                    section, tileX0, bandRows, tileColumns);
-                context.Readback().ReleaseOldest();
+
+                // Every requested output is copied into the readback ring in the same submission.
+                std::array<VkDeviceSize, ExportSummary::kMaxOutputs> readbackOffsets{};
+                for (usize_t i = 0; i < outputCount; ++i) {
+                    const vulkan::SectionSlot& slot = resources->Slot(outputs[i].buffer);
+                    vulkan::ComputeToTransferBarrier(*commands, slot.buffer, slot.offset,
+                                                     slot.size);
+                    Result<VkDeviceSize> offset = context.Readback().Reserve(outputs[i].bytes, 16);
+                    if (!offset) {
+                        return std::unexpected(offset.error());
+                    }
+                    readbackOffsets[i] = *offset;
+                    const VkBufferCopy copy{
+                        .srcOffset = slot.offset, .dstOffset = *offset, .size = outputs[i].bytes};
+                    vkCmdCopyBuffer(*commands, slot.buffer, context.Readback().GetBuffer().handle,
+                                    1, &copy);
+                }
+
+                const Clock::time_point waitStart = Clock::now();
+                Result<u64_t>           submitted = queue.EndAndSubmit(*commands);
+                if (!submitted) {
+                    return std::unexpected(submitted.error());
+                }
+                if (Status waited = queue.WaitTimeline(*submitted, kGpuTimeoutNanoseconds);
+                    !waited) {
+                    return std::unexpected(waited.error());
+                }
+                readbackMs += MillisecondsSince(waitStart);
+                timers->Accumulate(gpuPerDispatch);
+
+                // Released in reverse, because the ring is FIFO and these were reserved in order.
+                for (usize_t i = outputCount; i-- > 0;) {
+                    if (Status invalidated = context.Memory().InvalidateBuffer(
+                            context.Readback().GetBuffer(), readbackOffsets[i], outputs[i].bytes);
+                        !invalidated) {
+                        return std::unexpected(invalidated.error());
+                    }
+                    const auto* samples = static_cast<const f32_t*>(
+                        context.Readback().MappedAt(readbackOffsets[i]));
+
+                    if (outputs[i].isVolume) {
+                        const Clock::time_point writeStart = Clock::now();
+                        if (Status written = outputs[i].raw.WriteBrick(
+                                {tileX0, originY, bandZ0}, {tileColumns, layers, bandRows},
+                                {section, section, section}, samples);
+                            !written) {
+                            return std::unexpected(written.error());
+                        }
+                        encodeMs += MillisecondsSince(writeStart);
+                    } else {
+                        outputs[i].band.Absorb(samples, section, tileX0, bandRows, tileColumns);
+                    }
+                    context.Readback().ReleaseOldest();
+                }
+
+                context.EndTick();
             }
 
-            context.EndTick();
+            // The bands are complete across the full width: stream their rows out and reuse them.
+            const Clock::time_point encodeStart = Clock::now();
+            for (u32_t row = 0; row < bandRows; ++row) {
+                for (usize_t i = 0; i < outputCount; ++i) {
+                    if (outputs[i].isVolume) {
+                        continue;
+                    }
+                    if (Status written = outputs[i].png.WriteRow(outputs[i].band.Row(row));
+                        !written) {
+                        return std::unexpected(written.error());
+                    }
+                }
+            }
+            encodeMs += MillisecondsSince(encodeStart);
         }
-
-        // The bands are complete across the full width: stream their rows out and reuse them.
-        const Clock::time_point encodeStart = Clock::now();
-        for (u32_t row = 0; row < bandRows; ++row) {
-            for (usize_t i = 0; i < outputCount; ++i) {
-                if (Status written = outputs[i].writer.WriteRow(outputs[i].band.Row(row));
-                    !written) {
-                    return std::unexpected(written.error());
-                }
-            }
-        }
-        encodeMs += MillisecondsSince(encodeStart);
-        LOG_DEBUG("band {} of {} written ({} rows)", bandIndex + 1, grid->sectionsZ, bandRows);
     }
 
     ExportMetadata metadata;
@@ -506,16 +604,21 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     }
 
     for (usize_t i = 0; i < outputCount; ++i) {
-        const u64_t clamped = outputs[i].writer.ClampedSamples();
-        if (Status finished = outputs[i].writer.Finish(); !finished) {
-            return std::unexpected(finished.error());
+        u64_t clamped = 0;
+        if (outputs[i].isVolume) {
+            if (Status finished = outputs[i].raw.Finish(); !finished) {
+                return std::unexpected(finished.error());
+            }
+        } else {
+            clamped = outputs[i].png.ClampedSamples();
+            if (Status finished = outputs[i].png.Finish(); !finished) {
+                return std::unexpected(finished.error());
+            }
         }
         summary.clampedSamples += clamped;
-
-        Result<OutputFormat> format = FormatFor(outputs[i].mapping);
         (void)metadata.AddOutput(outputs[i].name.data(), outputs[i].path.data(),
-                                 outputs[i].mapping, format ? *format : OutputFormat::Grayscale16,
-                                 outputs[i].rangeMin, outputs[i].rangeMax, clamped);
+                                 outputs[i].mapping, outputs[i].format, outputs[i].rangeMin,
+                                 outputs[i].rangeMax, clamped);
     }
 
     detail::CopyBounded(metadata.scriptPath, job.script);
@@ -529,6 +632,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     metadata.sectionSize        = section;
     metadata.width              = grid->width;
     metadata.height             = grid->height;
+    metadata.depth              = grid->depth;
     metadata.timings.compileMs  = compiled->stats.milliseconds;
     metadata.timings.pipelineMs = kernels.CreationMilliseconds();
     metadata.timings.gpuMs      = gpuMs;
@@ -543,8 +647,8 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     // GPU time per op, summed over every section. This is the measurement that decides whether
     // kernel fusion is worth building (spec section 9).
     for (usize_t i = 0; i < compiled->dispatches.size() && i < gpuPerDispatch.size(); ++i) {
-        LOG_INFO("  gpu {} {:.3f} ms over {} section(s)",
-                 ToString(compiled->dispatches[i].kind), gpuPerDispatch[i], summary.sectionCount);
+        LOG_INFO("  gpu {} {:.3f} ms over {} section(s)", ToString(compiled->dispatches[i].kind),
+                 gpuPerDispatch[i], summary.sectionCount);
     }
 
     MakePath(summary.metadataFile, job.outputDirectory, "metadata", "json");

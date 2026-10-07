@@ -584,6 +584,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (const u64_t errors = vulkan::ValidationErrorCount(); errors != 0) {
+        Fail("the Vulkan debug messenger reported %llu error(s); see the log above",
+             static_cast<unsigned long long>(errors));
+    }
+
     std::printf("test_datasets: %u failure(s), %u warning(s)\n", g_failures, g_warnings);
     return g_failures == 0 ? 0 : 1;
 }

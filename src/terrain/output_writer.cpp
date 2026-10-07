@@ -367,18 +367,118 @@ Status PngWriter::Finish() {
 
 // --- Raw volumes --------------------------------------------------------------------------------
 
-Status WriteRawVolume(std::string_view path, const f32_t* samples, u64_t count) {
+Result<RawVolumeWriter> RawVolumeWriter::Create(std::string_view path, u32_t width, u32_t height,
+                                              u32_t depth, u8_t components) {
+    if (width == 0 || height == 0 || depth == 0 || components == 0) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "volume is {}x{}x{} with {} component(s)", width, height, depth, components);
+    }
+
     std::array<char, 512> nullTerminated{};
     detail::CopyBounded(nullTerminated, path);
     std::FILE* file = std::fopen(nullTerminated.data(), "wb");
     if (file == nullptr) {
         ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not open {} for writing", path);
     }
-    const usize_t written = std::fwrite(samples, sizeof(f32_t), static_cast<usize_t>(count), file);
-    std::fclose(file);
-    if (written != count) {
-        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "wrote {} of {} samples to {}", written,
-                    count, path);
+
+    RawVolumeWriter writer;
+    writer.m_file       = file;
+    writer.m_width      = width;
+    writer.m_height     = height;
+    writer.m_depth      = depth;
+    writer.m_components = components;
+
+    LOG_DEBUG("writing {} ({}x{}x{}, {} component(s), raw f32)", path, width, height, depth,
+              components);
+    return writer;
+}
+
+RawVolumeWriter::~RawVolumeWriter() { Release(); }
+
+void RawVolumeWriter::Release() noexcept {
+    if (m_file != nullptr) {
+        std::fclose(static_cast<std::FILE*>(m_file));
+        m_file = nullptr;
+    }
+}
+
+RawVolumeWriter::RawVolumeWriter(RawVolumeWriter&& other) noexcept { *this = std::move(other); }
+
+RawVolumeWriter& RawVolumeWriter::operator=(RawVolumeWriter&& other) noexcept {
+    if (this != &other) {
+        Release();
+        m_file           = other.m_file;
+        m_width          = other.m_width;
+        m_height         = other.m_height;
+        m_depth          = other.m_depth;
+        m_components     = other.m_components;
+        m_samplesWritten = other.m_samplesWritten;
+        other.m_file     = nullptr;
+    }
+    return *this;
+}
+
+Status RawVolumeWriter::WriteBrick(std::array<u32_t, 3> origin, std::array<u32_t, 3> extent,
+                                  std::array<u32_t, 3> sourceStride, const f32_t* brick) {
+    if (m_file == nullptr) {
+        ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Export, "writing to a closed volume");
+    }
+    auto* file = static_cast<std::FILE*>(m_file);
+
+    // One fwrite per run of contiguous samples along x, which is the longest run the layout allows.
+    for (u32_t y = 0; y < extent[1]; ++y) {
+        const u64_t volumeY = origin[1] + y;
+        if (volumeY >= m_height) {
+            break;
+        }
+        for (u32_t z = 0; z < extent[2]; ++z) {
+            const u64_t volumeZ = origin[2] + z;
+            if (volumeZ >= m_depth) {
+                break;
+            }
+            const u32_t columns =
+                origin[0] + extent[0] <= m_width ? extent[0] : m_width - origin[0];
+            if (columns == 0) {
+                continue;
+            }
+
+            const u64_t destSample =
+                ((volumeY * m_depth) + volumeZ) * m_width + origin[0];
+            const u64_t destOffset = destSample * m_components * sizeof(f32_t);
+            if (std::fseek(file, static_cast<long>(destOffset), SEEK_SET) != 0) {
+                ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export,
+                            "could not seek to offset {} in the volume", destOffset);
+            }
+
+            const u64_t sourceSample =
+                (static_cast<u64_t>(y) * sourceStride[2] + z) * sourceStride[0];
+            const usize_t written =
+                std::fwrite(brick + sourceSample * m_components, sizeof(f32_t),
+                            static_cast<usize_t>(columns) * m_components, file);
+            if (written != static_cast<usize_t>(columns) * m_components) {
+                ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export,
+                            "wrote {} of {} samples of a volume row", written,
+                            columns * m_components);
+            }
+            m_samplesWritten += columns;
+        }
+    }
+    return {};
+}
+
+Status RawVolumeWriter::Finish() {
+    if (m_file == nullptr) {
+        return {};
+    }
+    const u64_t expected = static_cast<u64_t>(m_width) * m_height * m_depth;
+    if (m_samplesWritten != expected) {
+        ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Export,
+                    "{} of {} volume samples were written", m_samplesWritten, expected);
+    }
+    const b8_t ok = std::ferror(static_cast<std::FILE*>(m_file)) == 0;
+    Release();
+    if (!ok) {
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "writing the volume failed");
     }
     return {};
 }
@@ -445,6 +545,7 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
     json.Key("section_size", metadata.sectionSize);
     json.Key("width", metadata.width);
     json.Key("height", metadata.height);
+    json.Key("depth", metadata.depth);
 
     json.BeginObject("bounds");
     json.Key("min_x", metadata.minX);

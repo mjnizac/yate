@@ -450,9 +450,26 @@ Status Queue::WaitTimeline(u64_t value, u64_t timeoutNanoseconds) {
 
 void Queue::CollectGpuZones() {
 #ifdef TRACY_ENABLE
-    if (m_tracyContext != nullptr) {
-        TracyVkCollect(m_tracyContext, m_tracyCommands);
+    if (m_tracyContext == nullptr) {
+        return;
     }
+    // TracyVkCollect records a query-pool reset and a result copy, so the command buffer has to be
+    // in the recording state and the caller has to submit it. Handing it a buffer that was never
+    // begun is a validation error, and worse, it means the timestamps are never read back: the GPU
+    // zones simply never reach the profiler.
+    Result<VkCommandBuffer> commands = BeginOneShot();
+    if (!commands) {
+        LOG_WARN("could not collect GPU zones on queue {}: {}", m_name,
+                 commands.error().Format().data());
+        return;
+    }
+    TracyVkCollect(m_tracyContext, *commands);
+    Result<u64_t> submitted = EndAndSubmit(*commands);
+    if (!submitted) {
+        LOG_WARN("could not submit the GPU zone collection on queue {}: {}", m_name,
+                 submitted.error().Format().data());
+    }
+    // Not waited on here: it is recycled by the next WaitTimeline, which every section already does.
 #endif
 }
 
