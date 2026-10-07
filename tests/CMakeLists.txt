@@ -28,8 +28,10 @@ engine_add_unit_test(test_compiler)
 # Needs a Vulkan 1.4 device and the compiled shaders.
 engine_add_unit_test(test_compute_roundtrip)
 engine_add_unit_test(test_noise)
+engine_add_unit_test(test_kernels)
 add_dependencies(test_compute_roundtrip engine_shaders)
 add_dependencies(test_noise engine_shaders)
+add_dependencies(test_kernels engine_shaders)
 
 # --- Dataset runner ------------------------------------------------------------------------------
 # Golden comparison plus performance regression. Also white-box, so it can drive the export path
