@@ -299,6 +299,28 @@ u64_t Allocator::CategoryBytes(VramCategory category) const noexcept {
     return index < kCategoryCount ? m_categoryBytes[index] : 0;
 }
 
+Allocator::HeapBudget Allocator::DeviceLocalBudget() const {
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(m_allocator, budgets.data());
+
+    const VkPhysicalDeviceMemoryProperties* properties = nullptr;
+    vmaGetMemoryProperties(m_allocator, &properties);
+    if (properties == nullptr) {
+        return {};
+    }
+
+    HeapBudget largest;
+    for (u32_t heap = 0; heap < properties->memoryHeapCount && heap < VK_MAX_MEMORY_HEAPS; ++heap) {
+        const b8_t deviceLocal = (properties->memoryHeaps[heap].flags
+                                  & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                                 != 0;
+        if (deviceLocal && budgets[heap].budget > largest.budget) {
+            largest = HeapBudget{budgets[heap].usage, budgets[heap].budget};
+        }
+    }
+    return largest;
+}
+
 b8_t Allocator::UpdateBudgets() {
     std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
     vmaGetHeapBudgets(m_allocator, budgets.data());

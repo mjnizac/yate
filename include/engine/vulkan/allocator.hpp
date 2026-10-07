@@ -111,6 +111,22 @@ public:
     /// Total bytes of `VkDeviceMemory` the driver has handed VMA across the process.
     [[nodiscard]] static u64_t ReservedDeviceMemory() noexcept;
 
+    /// What a heap has left: bytes in use and the driver's budget for it.
+    struct HeapBudget {
+        u64_t usage  = 0;
+        u64_t budget = 0;
+
+        [[nodiscard]] u64_t Available() const noexcept {
+            return budget > usage ? budget - usage : 0;
+        }
+    };
+
+    /// The device-local heap with the largest budget, which is where section buffers come from.
+    ///
+    /// Used before the first dispatch to decide whether a section's planned VRAM fits at all, so a
+    /// job that cannot run says so with the numbers rather than failing inside VMA.
+    [[nodiscard]] HeapBudget DeviceLocalBudget() const;
+
     /// Queries `vmaGetHeapBudgets`, plots usage and budget per heap and warns above 90%.
     /// Returns true while every heap stays under the pressure threshold.
     [[nodiscard]] b8_t UpdateBudgets();

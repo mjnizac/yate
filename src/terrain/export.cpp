@@ -206,66 +206,16 @@ struct Grid {
     return domain;
 }
 
-/// A band of full-width rows held in CPU RAM while its sections are evaluated, then streamed into
-/// the PNG. Bounds CPU memory to one section row rather than the whole image.
-class Band {
-public:
-    Band() = default;
-
-    [[nodiscard]] Status Create(u32_t width, u32_t rows, u32_t components) {
-        m_width      = width;
-        m_components = components;
-        m_samples    = static_cast<u64_t>(width) * rows * components;
-        m_data       = static_cast<f32_t*>(memory::General().Allocate(
-            static_cast<usize_t>(m_samples) * sizeof(f32_t), alignof(f32_t)));
-        if (m_data == nullptr) {
-            ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export,
-                        "could not allocate a {}x{} band of {} component(s)", width, rows,
-                        components);
-        }
-        return {};
-    }
-
-    ~Band() {
-        if (m_data != nullptr) {
-            memory::General().Free(m_data);
-        }
-    }
-
-    ENGINE_NO_COPY(Band);
-    ENGINE_NO_MOVE(Band);
-
-    [[nodiscard]] f32_t* Row(u32_t row) noexcept {
-        return m_data + static_cast<u64_t>(row) * m_width * m_components;
-    }
-
-    /// Copies the interior of one section into the band at column `column`.
-    void Absorb(const f32_t* section, u32_t sectionStride, u32_t column, u32_t rows,
-                u32_t columns) {
-        for (u32_t row = 0; row < rows; ++row) {
-            std::memcpy(Row(row) + static_cast<u64_t>(column) * m_components,
-                        section + static_cast<u64_t>(row) * sectionStride * m_components,
-                        static_cast<usize_t>(columns) * m_components * sizeof(f32_t));
-        }
-    }
-
-private:
-    f32_t* m_data       = nullptr;
-    u32_t  m_width      = 0;
-    u32_t  m_components = 1;
-    u64_t  m_samples    = 0;
-};
-
 /// Everything one compiled output needs on the CPU side.
 ///
-/// A 2D output is staged through a band and streamed into a PNG; a volume is written brick by brick
-/// straight into the raw file, because a raw layout can be seeked into and needs no staging.
+/// A 2D output is staged through a band and encoded on its own worker thread; a volume is written
+/// brick by brick straight into the raw file, because a raw layout can be seeked into, needs no
+/// staging, and costs a memcpy rather than a deflate.
 struct OutputChannel {
     std::array<char, 256>                     path{};
     std::array<char, OutputRequest::kMaxName> name{};
-    PngWriter                                 png;
+    BandEncoder                               encoder;
     RawVolumeWriter                           raw;
-    Band                                      band;
     b8_t                                      isVolume   = false;
     u32_t                                     buffer     = kInvalidBuffer;
     u32_t                                     components = 1;
@@ -365,6 +315,31 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         return std::unexpected(compiled.error());
     }
 
+    // How many sections the device could hold at once, checked before anything is allocated.
+    //
+    // The evaluator keeps one set of section buffers, so one section is what is actually in flight on
+    // the GPU; the reason that is enough is measured rather than assumed. On a 4096x4096 export with
+    // normals the GPU accounts for 21 ms of 2417 ms and the readback for 76 ms, so overlapping
+    // dispatches would chase under 4% of the wall time. The pipeline that pays is on the CPU, where
+    // encoding is 96% of the work and each output has its own worker with two bands. What this check
+    // is for is the other direction: a section that does not fit should say so, with the numbers, and
+    // not fail somewhere inside VMA.
+    const vulkan::Allocator::HeapBudget vram = context.Memory().DeviceLocalBudget();
+    const u64_t                         plannedBytes = compiled->stats.peakSectionBytes;
+    const u64_t sectionsThatFit =
+        plannedBytes == 0 ? 0 : vram.Available() / plannedBytes;
+    if (vram.budget != 0 && sectionsThatFit == 0) {
+        ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Evaluate,
+                    "a {} section of this graph needs {} MiB of VRAM but only {} MiB of {} MiB are "
+                    "available; use a smaller --section",
+                    section, plannedBytes / (1024 * 1024), vram.Available() / (1024 * 1024),
+                    vram.budget / (1024 * 1024));
+    }
+    LOG_INFO("VRAM budget: {} MiB available of {} MiB, {} KiB planned per section ({} would fit), "
+             "1 section in flight on the GPU and 2 bands per output on the CPU",
+             vram.Available() / (1024 * 1024), vram.budget / (1024 * 1024), plannedBytes / 1024,
+             sectionsThatFit);
+
     KernelLibrary&           kernels   = KernelsOf(application);
     Result<SectionResources> resources = SectionResources::Create(context, *compiled);
     if (!resources) {
@@ -431,9 +406,10 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             if (!writer) {
                 return std::unexpected(writer.error());
             }
-            out.png = std::move(*writer);
-            if (Status created = out.band.Create(grid->width, section, out.components); !created) {
-                return std::unexpected(created.error());
+            if (Status started = out.encoder.Start(std::move(*writer), grid->width, section,
+                                                   out.components);
+                !started) {
+                return std::unexpected(started.error());
             }
         }
         detail::CopyBounded(summary.files[summary.fileCount++], out.path.data());
@@ -442,7 +418,11 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     std::pmr::vector<f64_t> gpuPerDispatch(compiled->stats.dispatchCount, 0.0,
                                            &memory::General().Resource());
     f64_t readbackMs = 0.0;
-    f64_t encodeMs   = 0.0;
+    // Time the main loop spent writing: `encodeMs` is a volume's own fwrite work, and `stallMs` is how
+    // long handing a band over had to wait for a free one, which is the only part of PNG encoding that
+    // is still on the critical path.
+    f64_t encodeMs = 0.0;
+    f64_t stallMs  = 0.0;
 
     vulkan::Queue& queue = context.ComputeQueue();
 
@@ -535,7 +515,8 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                         }
                         encodeMs += MillisecondsSince(writeStart);
                     } else {
-                        outputs[i].band.Absorb(samples, section, tileX0, bandRows, tileColumns);
+                        outputs[i].encoder.Filling().Absorb(samples, section, tileX0, bandRows,
+                                                            tileColumns);
                     }
                     context.Readback().ReleaseOldest();
                 }
@@ -543,20 +524,19 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                 context.UpdatePlots();
             }
 
-            // The bands are complete across the full width: stream their rows out and reuse them.
-            const Clock::time_point encodeStart = Clock::now();
-            for (u32_t row = 0; row < bandRows; ++row) {
-                for (usize_t i = 0; i < outputCount; ++i) {
-                    if (outputs[i].isVolume) {
-                        continue;
-                    }
-                    if (Status written = outputs[i].png.WriteRow(outputs[i].band.Row(row));
-                        !written) {
-                        return std::unexpected(written.error());
-                    }
+            // The bands are complete across the full width. Handing one over returns as soon as the
+            // worker has a free band, so the next band is filled while this one is being deflated and
+            // the outputs no longer wait on each other.
+            const Clock::time_point handoffStart = Clock::now();
+            for (usize_t i = 0; i < outputCount; ++i) {
+                if (outputs[i].isVolume) {
+                    continue;
+                }
+                if (Status submitted = outputs[i].encoder.Submit(bandRows); !submitted) {
+                    return std::unexpected(submitted.error());
                 }
             }
-            encodeMs += MillisecondsSince(encodeStart);
+            stallMs += MillisecondsSince(handoffStart);
         }
     }
 
@@ -573,10 +553,12 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                 return std::unexpected(finished.error());
             }
         } else {
-            clamped = outputs[i].png.ClampedSamples();
-            if (Status finished = outputs[i].png.Finish(); !finished) {
+            // Drains the queue and joins, so the clamped count is final by the time it is read.
+            if (Status finished = outputs[i].encoder.Finish(); !finished) {
                 return std::unexpected(finished.error());
             }
+            clamped = outputs[i].encoder.ClampedSamples();
+            encodeMs += outputs[i].encoder.EncodeMilliseconds();
         }
         summary.clampedSamples += clamped;
         (void)metadata.AddOutput(outputs[i].name.data(), outputs[i].path.data(),
@@ -601,7 +583,8 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     metadata.timings.pipelineMs = kernels.CreationMilliseconds();
     metadata.timings.gpuMs      = gpuMs;
     metadata.timings.readbackMs = readbackMs;
-    metadata.timings.encodeMs   = encodeMs;
+    metadata.timings.encodeMs      = encodeMs;
+    metadata.timings.encodeStallMs = stallMs;
     FillEnvironment(metadata, context);
 
     summary.gpuMs            = gpuMs;

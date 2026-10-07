@@ -149,6 +149,81 @@ private:
     u64_t m_samplesWritten = 0;
 };
 
+/// A full-width strip of f32 samples, filled section by section and encoded as a unit.
+class BandBuffer {
+public:
+    BandBuffer() = default;
+    ~BandBuffer();
+
+    ENGINE_NO_COPY(BandBuffer);
+    ENGINE_NO_MOVE(BandBuffer);
+
+    [[nodiscard]] Status Create(u32_t width, u32_t rows, u32_t components);
+
+    [[nodiscard]] f32_t* Row(u32_t row) noexcept;
+
+    /// Copies the interior of one section into the band at column `column`.
+    void Absorb(const f32_t* section, u32_t sectionStride, u32_t column, u32_t rows,
+                u32_t columns);
+
+private:
+    f32_t* m_data       = nullptr;
+    u32_t  m_width      = 0;
+    u32_t  m_components = 1;
+    u64_t  m_samples    = 0;
+};
+
+/// Encodes bands into a `PngWriter` on a worker thread, one thread per output.
+///
+/// Encoding is 96% of an export's wall time and the GPU is half a percent of it, so overlapping the
+/// GPU with the CPU buys almost nothing; what pays is getting the two outputs of a typical job off
+/// each other's critical path and off the main loop's. The depth is two bands: one being filled from
+/// the readback ring while the other is being deflated.
+///
+/// Rows still reach libspng strictly in order, because one output has one worker and a band is handed
+/// over whole. That is what keeps progressive encoding valid.
+class BandEncoder {
+public:
+    BandEncoder() = default;
+    ~BandEncoder();
+
+    ENGINE_NO_COPY(BandEncoder);
+    ENGINE_NO_MOVE(BandEncoder);
+
+    /// Takes ownership of `writer` and starts the worker.
+    [[nodiscard]] Status Start(PngWriter&& writer, u32_t width, u32_t rows, u32_t components);
+
+    /// The band the caller fills next. Valid until `Submit`.
+    [[nodiscard]] BandBuffer& Filling() noexcept;
+
+    /// Hands the filled band to the worker and swaps to the other one.
+    ///
+    /// Blocks while the worker still holds the other band, which is what bounds memory to two bands
+    /// per output no matter how far ahead the GPU gets.
+    [[nodiscard]] Status Submit(u32_t rows);
+
+    /// Waits for the queue to drain, finalizes the PNG and joins the worker.
+    [[nodiscard]] Status Finish();
+
+    /// Samples the encoder had to clamp, available after `Finish`.
+    [[nodiscard]] u64_t ClampedSamples() const noexcept;
+
+    /// Milliseconds the worker spent encoding, which is wall time on the worker rather than on the
+    /// main loop. Reported separately for exactly that reason.
+    [[nodiscard]] f64_t EncodeMilliseconds() const noexcept;
+
+private:
+    /// Everything the worker and the producer share. Defined in the source file, so this header needs
+    /// no <thread> or <condition_variable>.
+    struct State;
+
+    static void RunWorker(State& state);
+
+    void Release() noexcept;
+
+    State* m_state = nullptr;
+};
+
 /// Everything the metadata sidecar records (spec section 12).
 ///
 /// Fixed-size inline storage: the sidecar is filled across the engine boundary and written in one
@@ -176,7 +251,13 @@ struct ExportMetadata {
         f64_t pipelineMs = 0.0;
         f64_t gpuMs      = 0.0;
         f64_t readbackMs = 0.0;
-        f64_t encodeMs   = 0.0;
+        /// Encoding, measured where it happens: on the band-encoder workers for a PNG, on the main
+        /// loop for a volume. It overlaps the rest of the export, so it does not add up to `totalMs`.
+        f64_t encodeMs = 0.0;
+        /// How long the main loop had to wait for a free band. This is the only part of encoding that
+        /// is still on the critical path, so it is the number that says whether the pipeline is deep
+        /// enough.
+        f64_t encodeStallMs = 0.0;
     };
 
     std::array<char, kMaxPath> scriptPath{};

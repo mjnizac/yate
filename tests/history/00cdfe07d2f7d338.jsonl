@@ -67,3 +67,9 @@
 {"case":"gradient_r2","commit":"cc96148","total_ms":41.6696,"gpu_ms":0.0826}
 {"case":"ridged_r2","commit":"cc96148","total_ms":15.0928,"gpu_ms":0.0460}
 {"case":"volume_r3","commit":"cc96148","total_ms":25.1384,"gpu_ms":0.0958}
+{"case":"basic_fbm","commit":"d44d548","total_ms":43.4280,"gpu_ms":0.1670}
+{"case":"blended_r2","commit":"d44d548","total_ms":14.3267,"gpu_ms":0.1848}
+{"case":"blurred_r2","commit":"d44d548","total_ms":14.4035,"gpu_ms":0.1063}
+{"case":"gradient_r2","commit":"d44d548","total_ms":19.3132,"gpu_ms":0.0755}
+{"case":"ridged_r2","commit":"d44d548","total_ms":11.2149,"gpu_ms":0.0421}
+{"case":"volume_r3","commit":"d44d548","total_ms":22.5674,"gpu_ms":0.0792}

@@ -4,11 +4,17 @@
 #include <engine/engine.hpp>
 #include <engine/log.hpp>
 #include <engine/memory/general.hpp>
+#include <engine/platform.hpp>
 
 #include <spng.h>
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
+#include <new>
+#include <thread>
 #include <cstring>
 #include <utility>
 
@@ -518,6 +524,190 @@ Status RawVolumeWriter::Finish() {
     return {};
 }
 
+// --- BandBuffer ---------------------------------------------------------------------------------
+
+BandBuffer::~BandBuffer() {
+    if (m_data != nullptr) {
+        memory::General().Free(m_data);
+    }
+}
+
+Status BandBuffer::Create(u32_t width, u32_t rows, u32_t components) {
+    m_width      = width;
+    m_components = components;
+    m_samples    = static_cast<u64_t>(width) * rows * components;
+    m_data       = static_cast<f32_t*>(
+        memory::General().Allocate(static_cast<usize_t>(m_samples) * sizeof(f32_t), alignof(f32_t)));
+    if (m_data == nullptr) {
+        ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export,
+                    "could not allocate a {}x{} band of {} component(s)", width, rows, components);
+    }
+    return {};
+}
+
+f32_t* BandBuffer::Row(u32_t row) noexcept {
+    return m_data + static_cast<u64_t>(row) * m_width * m_components;
+}
+
+void BandBuffer::Absorb(const f32_t* section, u32_t sectionStride, u32_t column, u32_t rows,
+                        u32_t columns) {
+    for (u32_t row = 0; row < rows; ++row) {
+        std::memcpy(Row(row) + static_cast<u64_t>(column) * m_components,
+                    section + static_cast<u64_t>(row) * sectionStride * m_components,
+                    static_cast<usize_t>(columns) * m_components * sizeof(f32_t));
+    }
+}
+
+// --- BandEncoder --------------------------------------------------------------------------------
+
+/// Everything the worker and the producer share.
+///
+/// Held behind a pointer so the header needs no <thread> or <condition_variable>, which would reach
+/// every translation unit that writes an output.
+struct BandEncoder::State {
+    PngWriter   writer;
+    BandBuffer  bands[2];
+    std::thread worker;
+
+    std::mutex              mutex;
+    std::condition_variable readyToEncode;
+    std::condition_variable readyToFill;
+
+    /// Index of the band the worker should encode, or -1 when there is nothing queued.
+    int   queued      = -1;
+    u32_t queuedRows  = 0;
+    int   filling     = 0;
+    b8_t  finishing   = false;
+    /// The first error the worker hit. Reported to the producer on its next call, because a failed
+    /// write must stop the export rather than let it finish and look successful.
+    Error failure;
+    b8_t  failed = false;
+    f64_t encodeMilliseconds = 0.0;
+};
+
+/// Drains the queue, writing each band's rows in order.
+void BandEncoder::RunWorker(State& state) {
+    platform::SetThreadName("engine-encode");
+    for (;;) {
+        int   band = -1;
+        u32_t rows = 0;
+        {
+            std::unique_lock<std::mutex> lock(state.mutex);
+            state.readyToEncode.wait(lock,
+                                     [&state] { return state.queued >= 0 || state.finishing; });
+            if (state.queued < 0) {
+                return; // Finishing with nothing left.
+            }
+            band = state.queued;
+            rows = state.queuedRows;
+        }
+
+        const auto             start = std::chrono::steady_clock::now();
+        Status                 written;
+        for (u32_t row = 0; row < rows && written; ++row) {
+            written = state.writer.WriteRow(state.bands[band].Row(row));
+        }
+        const f64_t milliseconds =
+            std::chrono::duration<f64_t, std::milli>(std::chrono::steady_clock::now() - start)
+                .count();
+
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.encodeMilliseconds += milliseconds;
+            if (!written && !state.failed) {
+                state.failed  = true;
+                state.failure = written.error();
+            }
+            state.queued = -1;
+        }
+        state.readyToFill.notify_one();
+    }
+}
+
+BandEncoder::~BandEncoder() { Release(); }
+
+void BandEncoder::Release() noexcept {
+    if (m_state == nullptr) {
+        return;
+    }
+    if (m_state->worker.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->finishing = true;
+        }
+        m_state->readyToEncode.notify_one();
+        m_state->worker.join();
+    }
+    m_state->~State();
+    memory::General().Free(m_state);
+    m_state = nullptr;
+}
+
+Status BandEncoder::Start(PngWriter&& writer, u32_t width, u32_t rows, u32_t components) {
+    Release();
+    void* storage = memory::General().Allocate(sizeof(State), alignof(State));
+    if (storage == nullptr) {
+        ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export,
+                    "could not allocate the band encoder state");
+    }
+    m_state = new (storage) State{};
+    m_state->writer = std::move(writer);
+    for (BandBuffer& band : m_state->bands) {
+        if (Status created = band.Create(width, rows, components); !created) {
+            return created;
+        }
+    }
+    m_state->worker = std::thread(&BandEncoder::RunWorker, std::ref(*m_state));
+    return {};
+}
+
+BandBuffer& BandEncoder::Filling() noexcept {
+    ENGINE_ASSERT(m_state != nullptr, "the band encoder was never started");
+    return m_state->bands[m_state->filling];
+}
+
+Status BandEncoder::Submit(u32_t rows) {
+    ENGINE_ASSERT_RETURN(Status{}, m_state != nullptr, "the band encoder was never started");
+    {
+        std::unique_lock<std::mutex> lock(m_state->mutex);
+        // Waiting here is what bounds the pipeline to two bands per output: the producer cannot run
+        // further ahead than one band, however fast the GPU is.
+        m_state->readyToFill.wait(lock, [this] { return m_state->queued < 0; });
+        if (m_state->failed) {
+            return std::unexpected(m_state->failure);
+        }
+        m_state->queued     = m_state->filling;
+        m_state->queuedRows = rows;
+        m_state->filling    = 1 - m_state->filling;
+    }
+    m_state->readyToEncode.notify_one();
+    return {};
+}
+
+Status BandEncoder::Finish() {
+    ENGINE_ASSERT_RETURN(Status{}, m_state != nullptr, "the band encoder was never started");
+    {
+        std::unique_lock<std::mutex> lock(m_state->mutex);
+        m_state->readyToFill.wait(lock, [this] { return m_state->queued < 0; });
+        m_state->finishing = true;
+    }
+    m_state->readyToEncode.notify_one();
+    m_state->worker.join();
+
+    if (m_state->failed) {
+        return std::unexpected(m_state->failure);
+    }
+    return m_state->writer.Finish();
+}
+
+u64_t BandEncoder::ClampedSamples() const noexcept {
+    return m_state != nullptr ? m_state->writer.ClampedSamples() : 0;
+}
+
+f64_t BandEncoder::EncodeMilliseconds() const noexcept {
+    return m_state != nullptr ? m_state->encodeMilliseconds : 0.0;
+}
+
 // --- Metadata -----------------------------------------------------------------------------------
 
 b8_t ExportMetadata::AddOutput(std::string_view name, std::string_view file, Mapping mapping,
@@ -612,6 +802,7 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
     json.Key("gpu", metadata.timings.gpuMs);
     json.Key("readback", metadata.timings.readbackMs);
     json.Key("encode_and_write", metadata.timings.encodeMs);
+    json.Key("encode_stall", metadata.timings.encodeStallMs);
     json.End();
 
     json.BeginObject("peak_memory_bytes");
