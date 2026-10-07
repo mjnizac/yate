@@ -85,5 +85,24 @@ device and the compiled shaders.
 
 ## Profile
 
-Start `tracy-profiler` before the process you want to capture: the build does not use
-`TRACY_ON_DEMAND`, so events are produced from startup and the memory graphs are complete.
+Tracy does not support cross-version connections, so the profiler and the client must match.
+`cmake/engine_dependencies.cmake` pins the client; check it against your tools:
+
+```bash
+tracy-capture --version
+```
+
+Start the server **before** the process you want to capture. The build does not use
+`TRACY_ON_DEMAND`, so events are produced from process start and anything emitted before the
+connection would be lost, which would make the memory graphs wrong:
+
+```bash
+tracy-capture -o traces/export.tracy -f
+```
+
+```bash
+build/Release/bin/terrain_export --script assets/scripts/basic.lua --min 0,0 --max 2048,2048 --resolution 1.0 --section 512 --out out/ --param normals=1
+```
+
+`tracy-profiler` instead of `tracy-capture` shows it live. `tracy-csvexport <trace>` dumps the zone
+statistics as text, which is the quickest way to check a trace without opening the UI.

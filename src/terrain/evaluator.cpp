@@ -228,7 +228,7 @@ void EmitBarriers(VkCommandBuffer commands, const Dispatch& dispatch,
 
 } // namespace
 
-Status RecordSection(KernelLibrary& kernels, const CompiledGraph& compiled,
+Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const CompiledGraph& compiled,
                      const SectionResources& resources, const DispatchTimers& timers,
                      VkCommandBuffer commands, const SectionJob& job) {
 #ifdef TRACY_ENABLE
@@ -276,12 +276,16 @@ Status RecordSection(KernelLibrary& kernels, const CompiledGraph& compiled,
         }
 
 #ifdef TRACY_ENABLE
-        // Labelled with the op and its script line: this is the data that decides whether kernel
-        // fusion is worth building (spec section 9).
+        // Labelled with the op and its script line, on the CPU timeline and on the GPU one. The GPU
+        // zones are the measurement that decides whether kernel fusion is worth building: they say
+        // how much of a section is spent in pointwise dispatches (spec sections 9 and 13).
         std::array<char, 64> zoneName{};
         std::snprintf(zoneName.data(), zoneName.size(), "%s:%u", ToString(dispatch.kind),
                       dispatch.location.line);
         ZoneTransientN(dispatchZone, zoneName.data(), true);
+        TracyVkZoneTransient(queue.TracyContext(), gpuZone, commands, zoneName.data(), true);
+#else
+        (void)queue;
 #endif
 
         timers.Begin(commands, static_cast<u32_t>(i));

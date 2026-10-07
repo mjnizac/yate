@@ -1,5 +1,19 @@
 # Open tasks
 
+## Findings to act on
+
+- [ ] **f32 coordinate precision far from the origin.** `test_noise` measures it: about 5e5 metres
+      out, `d0 = p - cellOrigin` is a difference of two numbers around 5e3 in noise space where the
+      f32 step is 5e-4, so the cell offset keeps roughly three good digits and the noise value is
+      accurate to about 1e-2 relative. Near the origin the same comparison agrees to 1e-6. Every op
+      downstream of noise inherits that budget. The usual fix is to wrap the lattice coordinate by a
+      large power of two before converting to float, which makes the noise periodic at a scale far
+      beyond any map while keeping the float coordinates small. Decide before milestone 7, which is
+      where large worlds arrive.
+- [ ] Total export time is about 18% above the pre-milestone-5 baseline and the cause is not
+      identified. Pipeline creation was one part and is fixed; the rest is unexplained. PNG encoding
+      dominates the wall time, so measure before optimising.
+
 ## Next
 
 - [ ] Capture a Tracy session of `test_datasets` and confirm the memory view shows every CPU and VRAM
@@ -8,22 +22,20 @@
 - [ ] Route what is still landing in `CPU/Untracked new` at shutdown (about 1.4 MB in 8k allocations,
       mostly spdlog and VMA internals) through named allocators.
 
-## Milestone 5 — Graph and compiler
+## Milestone 5 — remaining
 
-- [ ] `terrain/graph.cpp`: node storage in a pool allocator, typed handles, channels, source
-      locations.
-- [ ] `terrain/compiler.cpp`: validation, constant folding, CSE by structural hash, dead-node
-      removal, classification, halo propagation.
-- [ ] `terrain/kernels.cpp`: op registry, pipeline map keyed by `(op, variant)`, specialization
-      constants.
-- [ ] `terrain/evaluator.cpp`: topological order, liveness analysis over the section pool, peak
-      intermediate VRAM computed before evaluation, one command buffer per section, a Tracy GPU zone
-      and a timestamp pair per dispatch so the sidecar can report GPU time per op.
-- [ ] Replace the hardcoded fBm-and-normals chain in `RunExport` with the compiled graph.
-- [ ] A CPU reference implementation per op kernel, compared on small inputs.
+The graph, the compiler, the op registry and the evaluator are in, and the export runs off the
+compiled graph. What is left before the milestone can be called accepted:
+
+- [ ] A CPU reference comparison for the pointwise ops, not only for noise. `EvalPointwise` already
+      exists and the compiler uses it for folding; a `test_kernels` dispatching each op and comparing
+      against it is the missing piece.
 - [ ] A dataset case per op, and one per common mapping (`R2->R1`, `R2->R2`, `R2->R3`, `R3->R1`).
-- [ ] Ops to cover: arithmetic, curves and clamps, `Combine.Blend`, `Masks.Slope`, `Noises.Ridged`,
-      `Vec.Combine` and component extraction.
+      Only `basic_fbm` exists.
+- [ ] `R3` has no end-to-end path: `RunExport` always builds an `R2` graph, and the raw volume writer
+      is never exercised.
+- [ ] A neighbourhood op, so halo propagation is tested against something other than zero.
+      `test_compiler` currently pins "every halo is zero", which is correct but weak.
 
 ## Carried over
 

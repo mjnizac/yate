@@ -8,6 +8,7 @@
 #    include <engine/terrain/compiler.hpp>
 #    include <engine/terrain/kernels.hpp>
 #    include <engine/vulkan/buffer_pool.hpp>
+#    include <engine/vulkan/device.hpp>
 
 #    include <array>
 #    include <memory_resource>
@@ -88,9 +89,10 @@ struct SectionJob {
 
 /// Records every dispatch of one section, in topological order, with a buffer memory barrier
 /// wherever two dispatches actually depend on each other (spec section 9, stage 6).
-[[nodiscard]] Status RecordSection(KernelLibrary& kernels, const CompiledGraph& compiled,
-                                   const SectionResources& resources, const DispatchTimers& timers,
-                                   VkCommandBuffer commands, const SectionJob& job);
+[[nodiscard]] Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels,
+                                  const CompiledGraph& compiled, const SectionResources& resources,
+                                  const DispatchTimers& timers, VkCommandBuffer commands,
+                                  const SectionJob& job);
 
 } // namespace engine::terrain
 

@@ -5,3 +5,5 @@ out_release/
 .vscode/
 *.spv
 tests/datasets/*/actual/
+traces/
+out_trace/

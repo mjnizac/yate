@@ -6,7 +6,7 @@
 | 2 | Memory system | **done**, accepted |
 | 3 | Vulkan context in Headless mode | **done**, accepted |
 | 4 | First export | **done**, accepted |
-| 5 | Graph and compiler, without Lua | not started |
+| 5 | Graph and compiler, without Lua | in progress |
 | 6 | Lua bindings | not started |
 | 7 | Sections and streaming | not started |
 | 8 | Iterative kernels | not started |
@@ -20,6 +20,7 @@ Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` pas
 test_allocators ......... Passed
 test_mapping ............ Passed
 test_errors ............. Passed
+test_compiler ........... Passed
 test_compute_roundtrip .. Passed
 test_noise .............. Passed
 test_datasets ........... Passed
@@ -115,3 +116,57 @@ The first case, `basic_fbm`, is a 512x512 heightmap plus normals over 2x2 sectio
   evaluator (milestone 5).
 - Encoding dominates the wall time: a 2048x2048 export with normals takes about 5.7 s in Release, of
   which the GPU accounts for 3.2 ms and zlib for nearly all the rest.
+
+## 5. Graph and compiler (in progress)
+
+The graph, the compiler, the op registry and the evaluator are in, and `terrain_export` runs off the
+compiled graph rather than a hardcoded pair of dispatches. `docs/todo.md` lists what is left before
+the milestone can be called accepted.
+
+**Graph.** Lazy, fixed-capacity node storage with typed handles, multi-output channels and a source
+location on every node. Each builder validates its inputs' mappings on the spot, so a mismatch is
+reported at the line that caused it rather than surfacing later:
+
+```
+terrain.lua:42: [validation] Normals expects R2->R2 input, got R2->R1
+```
+
+**Compiler.** Validation, constant folding, common-subexpression elimination by structural hash,
+dead-node removal, classification, halo propagation, topological scheduling and buffer planning with
+liveness-based reuse. Every stage is its own Tracy zone. Liveness is tracked per channel, not per
+node, so a multi-output op whose value feeds an output while its gradient is consumed and finished
+does not pin the gradient buffer for the whole section.
+
+`test_compiler` covers it with 140 checks: the exact error text and line for every mapping mismatch,
+broadcasting, folding counts, CSE merging identical noise nodes while leaving different ones alone,
+dead nodes and unrequested channels dropped, and a seven-link chain of same-mapping curves planned
+into **two** buffers.
+
+**Ops.** Nine kernels on one uniform interface: `Const`, `Coords`, `Noise`, `Normals`, `Arith`,
+`Curve`, `Blend`, `SlopeMask` and `Vector`. Variants come from byte-packed fields in a node's
+`variant`, each mapping to one specialization constant, so a change of code shape costs a pipeline
+and no shader compilation.
+
+**fBm is generic over its base function.** `lib/fbm.lib.glsl` holds the algorithm once and names no
+base function; `ops/fbm.comp.glsl` lists the instantiations. Ridged and billow are base functions in
+their own right rather than a second axis, each carrying its own exact derivative. Parameters are the
+point, the octave count, the amplitude, the persistence, the frequency and the lacunarity, with the
+last three required to be strictly positive.
+
+**Verification.** `test_noise` checks three independent things with 153 checks: that the analytic
+derivative is the derivative (a central-difference sweep on the CPU, worst best-case error 0.02% to
+0.09% across all six base-and-domain combinations), that the kernel matches the CPU reference sample
+for sample (0 divergent samples and a worst error around 1e-6 for simplex near the origin), and that
+one octave stays inside its declared band.
+
+### What that verification found
+
+- **3D simplex used the wrong kernel radius.** `r^2 = 0.6` is the classic constant and overshoots the
+  critical radius, so the corner being swapped at a cell boundary still had a nonzero contribution
+  and the noise was discontinuous. The fractal chain-rule check went from a 28% worst error to
+  0.08% on `r^2 = 0.5`. The 3D normalization constant was recalibrated from 32 to 78 to match the
+  smaller support, measured rather than guessed.
+- **The pipeline map was being rebuilt per job.** It now lives with the device, as the spec intends.
+- **Reordering a float multiply changed the output by one 16-bit unit.** The dataset golden caught it,
+  which is exactly what it is for.
+- **f32 coordinates lose precision far from the origin.** Quantified in `docs/todo.md`.

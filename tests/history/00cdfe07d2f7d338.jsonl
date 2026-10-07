@@ -5,3 +5,4 @@
 {"case":"basic_fbm","commit":"746c24b","total_ms":395.8663,"gpu_ms":0.1666}
 {"case":"basic_fbm","commit":"746c24b","total_ms":379.2170,"gpu_ms":0.1676}
 {"case":"basic_fbm","commit":"746c24b","total_ms":338.8653,"gpu_ms":0.1696}
+{"case":"basic_fbm","commit":"4009239","total_ms":356.5472,"gpu_ms":0.1703}

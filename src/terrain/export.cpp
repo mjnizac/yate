@@ -437,7 +437,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                 .extent = extent,
                 .seed   = static_cast<u32_t>(job.seed)};
             if (Status recorded =
-                    RecordSection(kernels, *compiled, *resources, *timers, *commands, sectionJob);
+                    RecordSection(queue, kernels, *compiled, *resources, *timers, *commands, sectionJob);
                 !recorded) {
                 return std::unexpected(recorded.error());
             }

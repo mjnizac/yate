@@ -25,7 +25,7 @@ set(TRACY_ON_DEMAND OFF CACHE BOOL "" FORCE)   # Memory graphs need every event 
 set(TRACY_CALLSTACK ${ENGINE_TRACY_CALLSTACKS} CACHE BOOL "" FORCE)
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-    GIT_TAG        v0.11.1
+    GIT_TAG        v0.14.1
     GIT_SHALLOW    TRUE
 )
 
