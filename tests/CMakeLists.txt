@@ -30,9 +30,11 @@ engine_add_unit_test(test_lua_errors)
 engine_add_unit_test(test_compute_roundtrip)
 engine_add_unit_test(test_noise)
 engine_add_unit_test(test_kernels)
+engine_add_unit_test(test_seams)
 add_dependencies(test_compute_roundtrip engine_shaders)
 add_dependencies(test_noise engine_shaders)
 add_dependencies(test_kernels engine_shaders)
+add_dependencies(test_seams engine_shaders)
 
 # --- Dataset runner ------------------------------------------------------------------------------
 # Golden comparison plus performance regression. Also white-box, so it can drive the export path
