@@ -6,6 +6,8 @@
 #include <engine/application.hpp>
 #include <engine/engine.hpp>
 #include <engine/log.hpp>
+#include <engine/render/renderer.hpp>
+#include <engine/terrain/export.hpp>
 #include <engine/window_layer.hpp>
 
 #include <cstdio>
@@ -22,6 +24,13 @@ void PrintUsage() {
                "Usage: terrain_viewer [options]\n"
                "\n"
                "Options:\n"
+               "  --script <file>        terrain script to preview and watch (required)\n"
+               "  --seed <n>             random seed (default 0)\n"
+               "  --extent <meters>      side of the previewed square (default 2048)\n"
+               "  --resolution <meters>  meters per sample (default 2.0)\n"
+               "  --section <n>          samples per tile side (default 128)\n"
+               "  --grid <n>             drawn vertices per tile side (default 128)\n"
+               "  --param key=value      script parameter, repeatable\n"
                "  --width <n>            window width in pixels (default 1600)\n"
                "  --height <n>           window height in pixels (default 900)\n"
                "  --frames <n>           present n frames and exit; 0 runs until closed\n"
@@ -29,15 +38,21 @@ void PrintUsage() {
                "  --log-format <text|json>  log encoding (default text)\n"
                "  --help                 print this message\n"
                "\n"
+               "Left-drag turns, middle-drag pans, the wheel zooms, F switches between orbit\n"
+               "and fly, WASDQE moves in fly mode and shift goes faster. R reloads the\n"
+               "script, which also happens on its own when the file changes.\n"
+               "\n"
                "--frames is what makes the viewer testable without a human: it opens the window,\n"
                "presents that many frames and exits with the usual exit codes.\n",
                stderr);
 }
 
 struct Options {
-    WindowDesc       window;
-    std::string_view deviceUuid;
-    log::Format      logFormat = log::Format::Text;
+    WindowDesc            window;
+    ViewerLayer::Settings viewer;
+    terrain::Params       params;
+    std::string_view      deviceUuid;
+    log::Format           logFormat = log::Format::Text;
     /// Zero runs until the window is closed.
     u64_t frames = 0;
 };
@@ -57,7 +72,26 @@ struct Options {
         }
         const std::string_view value = argv[++i];
 
-        if (argument == "--width") {
+        if (argument == "--script") {
+            options.viewer.script = value;
+        } else if (argument == "--seed") {
+            options.viewer.seed = std::strtoull(value.data(), nullptr, 10);
+        } else if (argument == "--extent") {
+            options.viewer.extent = std::strtod(value.data(), nullptr);
+        } else if (argument == "--resolution") {
+            options.viewer.resolution = std::strtod(value.data(), nullptr);
+        } else if (argument == "--section") {
+            options.viewer.sectionSize =
+                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+        } else if (argument == "--grid") {
+            options.viewer.gridVertices =
+                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+        } else if (argument == "--param") {
+            if (!options.params.Assign(value)) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--param expects key=value, got {}", value);
+            }
+        } else if (argument == "--width") {
             options.window.width = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
         } else if (argument == "--height") {
             options.window.height = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
@@ -81,6 +115,22 @@ struct Options {
     if (options.window.width == 0 || options.window.height == 0) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "window is {}x{}",
                     options.window.width, options.window.height);
+    }
+    if (options.viewer.script.empty()) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "--script is required");
+    }
+    if (!(options.viewer.resolution > 0.0)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                    "--resolution must be positive, got {}", options.viewer.resolution);
+    }
+    if (!(options.viewer.extent > 0.0)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                    "--extent must be positive, got {}", options.viewer.extent);
+    }
+    if (options.viewer.sectionSize < 2 || !IsPowerOfTwo(options.viewer.sectionSize)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                    "--section must be a power of two of at least 2, got {}",
+                    options.viewer.sectionSize);
     }
     return options;
 }
@@ -109,6 +159,14 @@ int main(int argc, char** argv) {
 
     WindowLayer& window = (*application)->PushLayer<WindowLayer>();
     window.StopAfter(options->frames);
+
+    // The settings hold a pointer to the parameters, which live in `options` for the whole run. Bound
+    // here rather than in the parser, because the parser returns its result by value and the address
+    // would be the dead temporary's.
+    ViewerLayer::Settings viewerSettings = options->viewer;
+    viewerSettings.params                = &options->params;
+    // Pushed above the window layer, which owns the frame; the viewer registers a recorder with it.
+    (*application)->PushLayer<ViewerLayer>(viewerSettings);
 
     (*application)->Run();
     const ExitCode exit = (*application)->Exit();

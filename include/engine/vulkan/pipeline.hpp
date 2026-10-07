@@ -185,6 +185,66 @@ private:
     VkPipeline       m_pipeline = VK_NULL_HANDLE;
 };
 
+/// What the terrain vertex shader reads. Must match the push-constant block in
+/// `viewer/terrain.vert.glsl` field for field under scalar block layout.
+struct TerrainPushConstants {
+    /// Column-major, which is what GLSL expects, so it goes across without a transpose.
+    std::array<std::array<f32_t, 4>, 4> viewProjection{};
+    /// World position of the tile's first sample, in metres.
+    std::array<f32_t, 3> tileOrigin{};
+    f32_t                resolution = 1.0f;
+    /// Samples per side of the tile.
+    u32_t samples = 0;
+    /// Vertices per side of the rendered grid, which may be coarser than `samples`.
+    u32_t gridVertices = 0;
+    u32_t pad0         = 0;
+    u32_t pad1         = 0;
+    VkDeviceAddress heights = 0;
+    VkDeviceAddress normals = 0;
+};
+
+// Two 64-bit addresses at the end, so the block is padded to an 8-byte multiple either way; asserting
+// the number keeps the C++ and the GLSL from drifting apart silently.
+static_assert(sizeof(TerrainPushConstants) == 112,
+              "TerrainPushConstants must match viewer/terrain.vert.glsl");
+
+/// One graphics pipeline for the terrain preview, built against the viewer's render pass.
+///
+/// Fixed state rather than configurable: there is one way the terrain is drawn, and a builder with
+/// twenty setters would be describing possibilities that do not exist. What the pipeline *does* encode
+/// is explained where it is set, because every one of those choices is invisible from the call site.
+class GraphicsPipeline {
+public:
+    GraphicsPipeline() = default;
+    ~GraphicsPipeline();
+
+    GraphicsPipeline(GraphicsPipeline&& other) noexcept;
+    GraphicsPipeline& operator=(GraphicsPipeline&& other) noexcept;
+    ENGINE_NO_COPY(GraphicsPipeline);
+
+    /// Paths are relative to `<executable dir>/shaders/`, for example `viewer/terrain.vert.spv`.
+    [[nodiscard]] static Result<GraphicsPipeline> Create(VkDevice device, VkRenderPass renderPass,
+                                                        std::string_view vertexSpirv,
+                                                        std::string_view fragmentSpirv,
+                                                        VkPipelineCache  cache);
+
+    [[nodiscard]] VkPipeline       Handle() const noexcept { return m_pipeline; }
+    [[nodiscard]] VkPipelineLayout Layout() const noexcept { return m_layout; }
+    [[nodiscard]] b8_t             IsValid() const noexcept { return m_pipeline != VK_NULL_HANDLE; }
+
+    /// Binds the pipeline, sets the viewport and scissor to `extent` and uploads `constants`.
+    void Bind(VkCommandBuffer commands, VkExtent2D extent,
+              const TerrainPushConstants& constants) const;
+
+    /// Uploads `constants` without rebinding, for the second and later tiles of a frame.
+    void Push(VkCommandBuffer commands, const TerrainPushConstants& constants) const;
+
+private:
+    VkDevice         m_device   = VK_NULL_HANDLE;
+    VkPipelineLayout m_layout   = VK_NULL_HANDLE;
+    VkPipeline       m_pipeline = VK_NULL_HANDLE;
+};
+
 /// Inserts the buffer memory barrier placed between two dependent dispatches
 /// (spec section 9, stage 6).
 void ComputeToComputeBarrier(VkCommandBuffer commands, VkBuffer buffer, VkDeviceSize offset,

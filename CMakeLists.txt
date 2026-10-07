@@ -71,6 +71,9 @@ add_library(engine_objects OBJECT
     src/memory/new_delete.cpp
     src/memory/pool.cpp
     src/platform/platform.cpp
+    src/render/camera.cpp
+    src/render/input.cpp
+    src/render/renderer.cpp
     src/terrain/mapping.cpp
     src/terrain/export.cpp
     src/terrain/graph.cpp

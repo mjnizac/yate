@@ -15,6 +15,9 @@
 #include <engine/application.hpp>
 #include <engine/engine.hpp>
 #include <engine/log.hpp>
+#include <engine/platform.hpp>
+#include <engine/render/renderer.hpp>
+#include <engine/terrain/export.hpp>
 #include <engine/vulkan/context.hpp>
 #include <engine/vulkan/swapchain.hpp>
 #include <engine/vulkan/window.hpp>
@@ -22,6 +25,7 @@
 
 #include <array>
 #include <cstdio>
+#include <string>
 
 using namespace engine;
 
@@ -31,6 +35,41 @@ namespace {
 constexpr int kSkip = 77;
 
 constexpr u64_t kFrames = 12;
+
+constexpr const char* kDirectory = "out/test_viewer";
+
+/// A script small enough to compile and evaluate in a test, with both outputs the viewer wants.
+constexpr const char* kScript = R"(local function main(params)
+    local base = Noises.fBm{
+        frequency = 0.004,
+        octaves   = 4,
+        amplitude = params.amplitude or 80.0,
+    }
+    return {
+        height  = { value = base.value, range = { -120, 120 } },
+        normals = { value = Terrain.Normals{ input = base.gradient } },
+    }
+end
+return main
+)";
+
+/// Only a height, so the viewer has to synthesize the normals itself.
+constexpr const char* kHeightOnlyScript = R"(local function main()
+    local base = Noises.fBm{ frequency = 0.004, octaves = 3, amplitude = 60.0 }
+    return { height = { value = base.value, range = { -90, 90 } } }
+end
+return main
+)";
+
+[[nodiscard]] b8_t WriteFile(const std::string& path, std::string_view text) {
+    std::FILE* file = std::fopen(path.c_str(), "wb");
+    if (file == nullptr) {
+        return false;
+    }
+    const usize_t written = std::fwrite(text.data(), 1, text.size(), file);
+    (void)std::fclose(file);
+    return written == text.size();
+}
 
 /// True when the failure is "there is no window system here" rather than a real defect.
 ///
@@ -65,6 +104,13 @@ int main() {
     }
 
     vulkan::Context& context = VulkanContext(**application);
+    // MakeDirectory does not create parents, and ctest runs from the build directory.
+    if (Status made = platform::MakeDirectory("out"); !made) {
+        std::printf("FAIL could not create out/: %s\n", made.error().Format().data());
+    }
+    if (Status made = platform::MakeDirectory(kDirectory); !made) {
+        std::printf("FAIL could not create %s: %s\n", kDirectory, made.error().Format().data());
+    }
 
     const int result = [&]() -> int {
         test::Section("Graphics mode brings up a window, a surface and a swapchain");
@@ -116,6 +162,71 @@ int main() {
         window.StopAfter(window.FramesPresented() + kFrames);
         (*application)->Run();
         CHECK(window.FramesPresented() >= 2 * kFrames);
+
+        test::Section("the viewer evaluates a script and draws its tiles");
+        {
+            const std::string scriptPath = std::string(kDirectory) + "/preview.lua";
+            CHECK(WriteFile(scriptPath, kScript));
+
+            terrain::Params params;
+            CHECK(params.Set("amplitude", "80"));
+
+            ViewerLayer::Settings settings;
+            settings.script      = scriptPath;
+            settings.extent      = 512.0;
+            settings.resolution  = 4.0;
+            settings.sectionSize = 32;
+            settings.gridVertices = 32;
+            settings.params      = &params;
+
+            ViewerLayer& viewer = (*application)->PushLayer<ViewerLayer>(settings);
+            // 512 m at 4 m/sample is 128 samples, which is 4x4 tiles of 32.
+            CHECK_EQ(viewer.TileCount(), u32_t{16});
+            CHECK_EQ(viewer.LoadCount(), u64_t{1});
+            CHECK(viewer.LastError().empty());
+
+            const u64_t before = window.FramesPresented();
+            window.StopAfter(before + kFrames);
+            (*application)->Run();
+
+            // The camera is framed on the preview when it loads, so every tile should be in front of it.
+            // Asserting *something* was drawn is the part that matters: a culling bug that rejected
+            // everything would otherwise look exactly like a successful empty frame, which is how this
+            // whole class of error hides.
+            std::printf("     %u of %u tile(s) drawn\n", viewer.TilesDrawn(), viewer.TileCount());
+            CHECK(viewer.TilesDrawn() > 0);
+            CHECK(viewer.TilesDrawn() <= viewer.TileCount());
+
+            test::Section("a reload picks up a changed script");
+            CHECK(WriteFile(scriptPath, kHeightOnlyScript));
+            viewer.RequestReload();
+            window.StopAfter(window.FramesPresented() + 2);
+            (*application)->Run();
+            viewer.WaitForReload();
+            CHECK_EQ(viewer.LoadCount(), u64_t{2});
+            // No normals output in that script, so the viewer appended a measured gradient and the
+            // normals from it rather than refusing to show it.
+            CHECK(viewer.LastError().empty());
+            CHECK_EQ(viewer.TileCount(), u32_t{16});
+
+            test::Section("a broken script keeps the previous terrain on screen");
+            CHECK(WriteFile(scriptPath, "local function main( return {} end\nreturn main\n"));
+            viewer.RequestReload();
+            window.StopAfter(window.FramesPresented() + 2);
+            (*application)->Run();
+            viewer.WaitForReload();
+            // Still two loads: the third one failed, so nothing was swapped.
+            CHECK_EQ(viewer.LoadCount(), u64_t{2});
+            CHECK(!viewer.LastError().empty());
+            std::printf("     reload rejected with: %.*s\n",
+                        static_cast<int>(viewer.LastError().size()), viewer.LastError().data());
+            CHECK(viewer.TileCount() == 16);
+
+            // And it still draws, which is the actual promise: a bad edit must not blank the window.
+            window.StopAfter(window.FramesPresented() + kFrames);
+            (*application)->Run();
+            CHECK(viewer.TilesDrawn() > 0);
+        }
 
         // The whole point: none of the above may have produced a validation error.
         ++test::g_checks;

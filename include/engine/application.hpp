@@ -109,7 +109,14 @@ struct ApplicationState {
     /// Pipeline map, which must outlive any single job: a pipeline is created on first use and kept
     /// for the life of the device (spec section 9, stage 5).
     terrain::KernelLibrary kernels;
-    std::atomic<b8_t>            running{false};
+    std::atomic<b8_t> running{false};
+    /// Set by `Stop`, cleared by nothing.
+    ///
+    /// Separate from `running` because `Stop` can be called before `Run`: a layer's `OnAttach` runs
+    /// during `PushLayer`, and a fatal error there used to be thrown away when `Run` set `running` to
+    /// true a moment later. The viewer failing to load its script looked like a successful run of sixty
+    /// empty frames.
+    std::atomic<b8_t> stopRequested{false};
     u64_t                        tick = 0;
     ExitCode                     exit = ExitCode::Success;
     std::pmr::vector<LayerEntry> layers;

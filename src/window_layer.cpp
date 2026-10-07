@@ -12,14 +12,25 @@
 #endif
 
 #include <array>
+#include <chrono>
 #include <new>
 
 namespace engine {
+namespace {
+using Clock = std::chrono::steady_clock;
+}
 
 /// Everything the layer needs beyond what the application already owns.
 struct WindowLayer::State {
     vulkan::Window*    window    = nullptr;
     vulkan::Swapchain* swapchain = nullptr;
+    Recorder           recorder  = nullptr;
+    void*              recorderUser = nullptr;
+    /// Set on the first update, so the first frame reports a delta of zero rather than the time since
+    /// the process started.
+    b8_t  timing = false;
+    f64_t lastFrameSeconds = 0.0;
+    f64_t deltaSeconds     = 0.0;
     /// Stops the application after this many presents. Zero runs until the window is closed.
     u64_t stopAfter = 0;
     /// The window is shown only after the first present, so the user never sees an unpainted rectangle
@@ -85,6 +96,17 @@ void WindowLayer::StopAfter(u64_t frames) noexcept {
     }
 }
 
+f64_t WindowLayer::DeltaSeconds() const noexcept {
+    return m_state != nullptr ? m_state->deltaSeconds : 0.0;
+}
+
+void WindowLayer::SetRecorder(Recorder recorder, void* user) noexcept {
+    if (m_state != nullptr) {
+        m_state->recorder     = recorder;
+        m_state->recorderUser = user;
+    }
+}
+
 void WindowLayer::OnUpdate() {
 #ifdef TRACY_ENABLE
     ZoneScopedN("WindowLayer::OnUpdate");
@@ -95,6 +117,14 @@ void WindowLayer::OnUpdate() {
 
     vulkan::Window&    window    = *m_state->window;
     vulkan::Swapchain& swapchain = *m_state->swapchain;
+
+    // Measured here rather than around the whole loop, so a frame that was skipped for a minimized
+    // window does not hand the next one a huge delta and fling the camera across the world.
+    const f64_t now = std::chrono::duration<f64_t>(Clock::now().time_since_epoch()).count();
+    m_state->deltaSeconds =
+        m_state->timing ? now - m_state->lastFrameSeconds : 0.0;
+    m_state->lastFrameSeconds = now;
+    m_state->timing           = true;
 
     vulkan::Window::PollEvents();
     if (window.ShouldClose()) {
@@ -166,8 +196,13 @@ void WindowLayer::OnUpdate() {
         .pClearValues    = clears.data()};
     vkCmdBeginRenderPass(frame.commands, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Layers above this one draw here, in push order, by recording into `frame.commands`. Nothing does
-    // yet, which is why an empty viewer is a clear colour.
+    if (m_state->recorder != nullptr) {
+        const FrameContext context{.commands     = frame.commands,
+                                   .extent       = swapchain.Extent(),
+                                   .frameIndex   = swapchain.ImageIndex(),
+                                   .deltaSeconds = m_state->deltaSeconds};
+        m_state->recorder(context, m_state->recorderUser);
+    }
     vkCmdEndRenderPass(frame.commands);
 
     if (vkEndCommandBuffer(frame.commands) != VK_SUCCESS) {

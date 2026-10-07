@@ -377,8 +377,21 @@ void Queue::Destroy() noexcept {
 
 Result<VkCommandBuffer> Queue::BeginOneShot() {
     if (m_pendingCount == kMaxPending) {
+        // Full means nobody has waited on this queue in a while, not necessarily that the GPU is behind.
+        // The viewer is the case that proved it: its frames go through the graphics queue, so nothing
+        // ever calls `WaitTimeline` on the compute one, and the per-frame GPU zone collection filled the
+        // pool after sixteen frames and then failed for the rest of the run. Polling the counter here
+        // costs one call on a path that was about to fail outright, and makes the pool self-healing for
+        // every caller instead of only for the ones that happen to wait.
+        u64_t completed = 0;
+        if (vkGetSemaphoreCounterValue(m_device, m_timeline, &completed) == VK_SUCCESS) {
+            RecyclePending(completed);
+        }
+    }
+    if (m_pendingCount == kMaxPending) {
         ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Vulkan,
-                    "queue {} already has {} command buffers in flight", m_name, kMaxPending);
+                    "queue {} already has {} command buffers in flight and none have completed",
+                    m_name, kMaxPending);
     }
 
     VkCommandBuffer                   commands = VK_NULL_HANDLE;

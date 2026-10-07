@@ -51,6 +51,10 @@ void Application::DetachLayers() noexcept {
 }
 
 void Application::Run() {
+    if (m_state.stopRequested.load(std::memory_order_acquire)) {
+        LOG_INFO("not entering the update loop: a layer asked to stop while attaching");
+        return;
+    }
     m_state.running.store(true, std::memory_order_release);
     LOG_INFO("entering the update loop with {} layer(s)", m_state.layers.size());
 
@@ -85,7 +89,16 @@ void Application::Run() {
              static_cast<i32_t>(m_state.exit));
 }
 
-void Application::Stop() noexcept { m_state.running.store(false, std::memory_order_release); }
+void Application::Stop() noexcept {
+    // The flag is only set when there is no loop to stop. Stopping *during* a run is the ordinary end of
+    // that run and must not poison a later one, which is what a flag set unconditionally does: the first
+    // `StopAfter` would make every subsequent `Run` return immediately. Set outside a run, it means a
+    // layer failed while attaching and the loop must not start at all.
+    if (!m_state.running.load(std::memory_order_acquire)) {
+        m_state.stopRequested.store(true, std::memory_order_release);
+    }
+    m_state.running.store(false, std::memory_order_release);
+}
 
 b8_t Application::IsRunning() const noexcept {
     return m_state.running.load(std::memory_order_acquire);
