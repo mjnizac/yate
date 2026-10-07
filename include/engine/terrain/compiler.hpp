@@ -47,6 +47,9 @@ struct Dispatch {
     /// writes the node's own output, so the pair only has to hold what is still in flight.
     std::array<u32_t, 2> scratchBuffers{kInvalidBuffer, kInvalidBuffer};
     u8_t                 scratchCount = 0;
+    /// Shape of the intermediate state, which is not always what the node produces: hydraulic erosion
+    /// carries height, water and sediment between iterations and hands back a height.
+    Mapping stateMapping{};
     /// Halo the intermediate state carries, which is this dispatch's halo plus its influence radius.
     ///
     /// Not the same as `halo`, and the difference is the whole correctness argument for an iterative

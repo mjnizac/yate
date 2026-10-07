@@ -116,6 +116,16 @@ constexpr OpInfo kOps[] = {
      // it against a CPU box blur of its own.
      .hasReference   = false,
      .specFieldCount = 0},
+    {.kind           = OpKind::Gradient,
+     .name           = "Gradient",
+     .shader         = "ops/gradient.comp.spv",
+     .nodeClass      = NodeClass::Neighborhood,
+     .maxInputs      = 1,
+     .maxChannels    = 1,
+     // It differentiates over a spacing, so it needs to know the sample spacing in metres.
+     .resolutionWord = 0,
+     .hasReference   = false,
+     .specFieldCount = 0},
     {.kind           = OpKind::ThermalErosion,
      .name           = "ThermalErosion",
      .shader         = "ops/thermal_erosion.comp.spv",
@@ -127,8 +137,33 @@ constexpr OpInfo kOps[] = {
      // host, and it can never have constant inputs in practice anyway.
      .hasReference   = false,
      .specFieldCount = 0},
+    {.kind           = OpKind::HydraulicErosion,
+     .name           = "HydraulicErosion",
+     .shader         = "ops/hydraulic_erosion.comp.spv",
+     .nodeClass      = NodeClass::Iterative,
+     .maxInputs      = 1,
+     .maxChannels    = 1,
+     .resolutionWord = kMaxNodeParams,
+     .hasReference   = false,
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
+
+/// The registry is indexed by the enumerator's own value, so every entry has to sit at its own ordinal.
+///
+/// Worth a check rather than a convention: adding an op in the wrong place in this array silently hands
+/// every later op a different kernel, and the symptom is not a crash. It cost one debugging round to
+/// find out that a misplaced entry turned thermal erosion into a no-op, because it ran the hydraulic
+/// shader with thermal parameters and every rate landed on zero.
+[[nodiscard]] constexpr b8_t RegistryIsOrdered() {
+    for (usize_t i = 0; i < ArrayCount(kOps); ++i) {
+        if (kOps[i].kind != static_cast<OpKind>(i)) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(RegistryIsOrdered(), "kOps entries must be in OpKind order");
 
 [[nodiscard]] f32_t UnpackFloat(const std::array<u32_t, kMaxNodeParams>& params, usize_t word) {
     f32_t value = 0.0f;

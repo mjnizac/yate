@@ -160,6 +160,159 @@ constexpr std::array<i32_t, 3> kOrigin{311, 0, -907};
     return false;
 }
 
+/// The checks below each build a `Graph`, which keeps fixed-capacity storage for 1024 nodes and so is
+/// around 150 KiB. Six of them on one frame overflowed the default 1 MiB stack in Debug, so each one gets
+/// its own frame. `graph.hpp` has a static_assert pinning the size for the same reason.
+
+void CheckThermalBuilderRefusals(Context& context, KernelLibrary& kernels) {
+    (void)context;
+    (void)kernels;
+
+            Graph                graph;
+            Result<Value>        value = graph.AddNoise(Graph::NoiseParams{}, At(3));
+            REQUIRE_OK_VOID(value);
+            Graph::ThermalParams params;
+
+            // The iteration count is the halo, and the halo is one byte per slot.
+            params.iterations = kMaxHalo + 1;
+            CHECK(!graph.AddThermalErosion(*value, params, At(4)).has_value());
+            params.iterations = 0;
+            CHECK(!graph.AddThermalErosion(*value, params, At(5)).has_value());
+
+            // Above one half the scheme oscillates instead of settling.
+            params.iterations = 4;
+            params.strength   = 0.75f;
+            CHECK(!graph.AddThermalErosion(*value, params, At(6)).has_value());
+            params.strength = 0.0f;
+            CHECK(!graph.AddThermalErosion(*value, params, At(7)).has_value());
+
+            // A vector field is not a height field.
+            params.strength            = 0.25f;
+            Result<Value> gradient     = graph.Channel(*value, 1);
+            REQUIRE_OK_VOID(gradient);
+            Result<Value> wrongMapping = graph.AddThermalErosion(*gradient, params, At(8));
+            CHECK(!wrongMapping.has_value());
+            if (!wrongMapping) {
+                CHECK_EQ(wrongMapping.error().line, u32_t{8});
+            }
+        
+}
+
+void CheckChainedHaloRefused(Context& context, KernelLibrary& kernels) {
+    (void)context;
+    (void)kernels;
+
+            // Two 200-iteration erosions in series need 400 samples of padding on every side, which the
+            // one-byte halo cannot express. The compiler must say so rather than truncate.
+            Graph                graph;
+            Result<Value>        value = graph.AddNoise(Graph::NoiseParams{}, At(9));
+            REQUIRE_OK_VOID(value);
+            Graph::ThermalParams params;
+            params.iterations = 200;
+            Result<Value> once = graph.AddThermalErosion(*value, params, At(10));
+            REQUIRE_OK_VOID(once);
+            Result<Value> twice = graph.AddThermalErosion(*once, params, At(11));
+            REQUIRE_OK_VOID(twice);
+            REQUIRE_OK_VOID(graph.RequestOutput("height", *twice, -1.0f, 1.0f));
+
+            Result<CompiledGraph> compiled = Compile(
+                graph, CompileOptions{.extent = SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
+                                      .resolution = 1.0f});
+            CHECK(!compiled.has_value());
+            if (!compiled) {
+                std::printf("     refused with: %s\n", compiled.error().Format().data());
+                CHECK_EQ(compiled.error().line, u32_t{9});
+            }
+        
+}
+
+void CheckIterativeBufferPlan(Context& context, KernelLibrary& kernels) {
+    (void)context;
+    (void)kernels;
+
+            Graph graph;
+            REQUIRE_OK_VOID(BuildGraph(graph, 64, 0.01f, 0.4f));
+            Result<CompiledGraph> compiled = Compile(
+                graph, CompileOptions{.extent = SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
+                                      .resolution = 1.0f});
+            REQUIRE_OK_VOID(compiled);
+            // Noise and erosion, whatever the iteration count.
+            CHECK_EQ(compiled->stats.dispatchCount, u32_t{2});
+            const Dispatch& erosion = compiled->dispatches[1];
+            CHECK_EQ(erosion.iterations, u32_t{64});
+            CHECK_EQ(erosion.scratchCount, u8_t{2});
+            // The state is computed over the dispatch halo plus the influence radius, which is what
+            // makes the result exact out to the dispatch halo after the last iteration.
+            CHECK_EQ(erosion.stateHalo, erosion.halo + 64);
+            // The noise feeding it was given the same halo, so the first iteration reads a field of the
+            // same shape as the state it writes.
+            CHECK_EQ(compiled->dispatches[0].halo, erosion.stateHalo);
+            // Three values ever live at once: the noise, the output, and the two scratch halves, with
+            // the noise buffer freed after the first iteration reads it.
+            CHECK(compiled->stats.bufferCount <= 4);
+        
+}
+
+void CheckHydraulicBufferPlan(Context& context, KernelLibrary& kernels) {
+    (void)context;
+    (void)kernels;
+
+            Graph                  graph;
+            Result<Value>          noise = graph.AddNoise(Graph::NoiseParams{}, At(20));
+            REQUIRE_OK_VOID(noise);
+            Graph::HydraulicParams hydraulic;
+            hydraulic.iterations = 32;
+            Result<Value> carvedValue = graph.AddHydraulicErosion(*noise, hydraulic, At(21));
+            REQUIRE_OK_VOID(carvedValue);
+            REQUIRE_OK_VOID(graph.RequestOutput("height", *carvedValue, -1.0f, 1.0f));
+
+            Result<CompiledGraph> compiled = Compile(
+                graph, CompileOptions{.extent = SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
+                                      .resolution = 1.0f});
+            REQUIRE_OK_VOID(compiled);
+            const Dispatch& dispatch = compiled->dispatches[1];
+            // The state is three components wide while the node produces one, and the compiler has to
+            // size the scratch pair from the state rather than from the output. Getting that wrong would
+            // under-allocate by a factor of three.
+            CHECK_EQ(dispatch.stateMapping.components, u8_t{3});
+            CHECK_EQ(dispatch.channels[0].components, u8_t{1});
+            CHECK_EQ(compiled->buffers[dispatch.scratchBuffers[0]].mapping.components, u8_t{3});
+            CHECK_EQ(compiled->buffers[dispatch.outputBuffers[0]].mapping.components, u8_t{1});
+            CHECK_EQ(dispatch.stateHalo, dispatch.halo + 32);
+        
+}
+
+void CheckHydraulicBuilderRefusals(Context& context, KernelLibrary& kernels) {
+    (void)context;
+    (void)kernels;
+
+            Graph                  graph;
+            Result<Value>          noise = graph.AddNoise(Graph::NoiseParams{}, At(25));
+            REQUIRE_OK_VOID(noise);
+            Graph::HydraulicParams params;
+
+            // Above a quarter the four outflows of a cell can exceed the water it has.
+            params.flowRate = 0.4f;
+            CHECK(!graph.AddHydraulicErosion(*noise, params, At(26)).has_value());
+            params.flowRate = 0.15f;
+
+            params.evaporation = 1.0f;
+            CHECK(!graph.AddHydraulicErosion(*noise, params, At(27)).has_value());
+            params.evaporation = 0.05f;
+
+            params.deposition = 1.5f;
+            CHECK(!graph.AddHydraulicErosion(*noise, params, At(28)).has_value());
+            params.deposition = 0.3f;
+
+            params.iterations = kMaxHalo + 1;
+            Result<Value> tooMany = graph.AddHydraulicErosion(*noise, params, At(29));
+            CHECK(!tooMany.has_value());
+            if (!tooMany) {
+                CHECK_EQ(tooMany.error().line, u32_t{29});
+            }
+        
+}
+
 } // namespace
 
 int main() {
@@ -248,84 +401,54 @@ int main() {
         CHECK_EQ(differing, u64_t{0});
 
         test::Section("the builder refuses what the interface cannot carry");
-        {
-            Graph                graph;
-            Result<Value>        value = graph.AddNoise(Graph::NoiseParams{}, At(3));
-            REQUIRE_OK(value);
-            Graph::ThermalParams params;
-
-            // The iteration count is the halo, and the halo is one byte per slot.
-            params.iterations = kMaxHalo + 1;
-            CHECK(!graph.AddThermalErosion(*value, params, At(4)).has_value());
-            params.iterations = 0;
-            CHECK(!graph.AddThermalErosion(*value, params, At(5)).has_value());
-
-            // Above one half the scheme oscillates instead of settling.
-            params.iterations = 4;
-            params.strength   = 0.75f;
-            CHECK(!graph.AddThermalErosion(*value, params, At(6)).has_value());
-            params.strength = 0.0f;
-            CHECK(!graph.AddThermalErosion(*value, params, At(7)).has_value());
-
-            // A vector field is not a height field.
-            params.strength            = 0.25f;
-            Result<Value> gradient     = graph.Channel(*value, 1);
-            REQUIRE_OK(gradient);
-            Result<Value> wrongMapping = graph.AddThermalErosion(*gradient, params, At(8));
-            CHECK(!wrongMapping.has_value());
-            if (!wrongMapping) {
-                CHECK_EQ(wrongMapping.error().line, u32_t{8});
-            }
-        }
+        CheckThermalBuilderRefusals(context, kernels);
 
         test::Section("chained iterative ops are refused when the halo would not fit");
-        {
-            // Two 200-iteration erosions in series need 400 samples of padding on every side, which the
-            // one-byte halo cannot express. The compiler must say so rather than truncate.
-            Graph                graph;
-            Result<Value>        value = graph.AddNoise(Graph::NoiseParams{}, At(9));
-            REQUIRE_OK(value);
-            Graph::ThermalParams params;
-            params.iterations = 200;
-            Result<Value> once = graph.AddThermalErosion(*value, params, At(10));
-            REQUIRE_OK(once);
-            Result<Value> twice = graph.AddThermalErosion(*once, params, At(11));
-            REQUIRE_OK(twice);
-            REQUIRE_OK(graph.RequestOutput("height", *twice, -1.0f, 1.0f));
-
-            Result<CompiledGraph> compiled = Compile(
-                graph, CompileOptions{.extent = SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
-                                      .resolution = 1.0f});
-            CHECK(!compiled.has_value());
-            if (!compiled) {
-                std::printf("     refused with: %s\n", compiled.error().Format().data());
-                CHECK_EQ(compiled.error().line, u32_t{9});
-            }
-        }
+        CheckChainedHaloRefused(context, kernels);
 
         test::Section("an iterative dispatch costs two buffers, not one per iteration");
+        CheckIterativeBufferPlan(context, kernels);
+
+        test::Section("hydraulic erosion carves and keeps the terrain finite");
+        CheckHydraulicBufferPlan(context, kernels);
+
+        // The same noise the thermal checks use, so the comparison is against `bare` and the slopes are
+        // real: with the default low-frequency noise the steepest step is 0.016, and erosion driven by
+        // slope has almost nothing to work with.
+        Graph hydraulicGraph;
         {
-            Graph graph;
-            REQUIRE_OK(BuildGraph(graph, 64, 0.01f, 0.4f));
-            Result<CompiledGraph> compiled = Compile(
-                graph, CompileOptions{.extent = SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
-                                      .resolution = 1.0f});
-            REQUIRE_OK(compiled);
-            // Noise and erosion, whatever the iteration count.
-            CHECK_EQ(compiled->stats.dispatchCount, u32_t{2});
-            const Dispatch& erosion = compiled->dispatches[1];
-            CHECK_EQ(erosion.iterations, u32_t{64});
-            CHECK_EQ(erosion.scratchCount, u8_t{2});
-            // The state is computed over the dispatch halo plus the influence radius, which is what
-            // makes the result exact out to the dispatch halo after the last iteration.
-            CHECK_EQ(erosion.stateHalo, erosion.halo + 64);
-            // The noise feeding it was given the same halo, so the first iteration reads a field of the
-            // same shape as the state it writes.
-            CHECK_EQ(compiled->dispatches[0].halo, erosion.stateHalo);
-            // Three values ever live at once: the noise, the output, and the two scratch halves, with
-            // the noise buffer freed after the first iteration reads it.
-            CHECK(compiled->stats.bufferCount <= 4);
+            Graph::NoiseParams noise;
+            noise.frequency     = 0.04f;
+            noise.octaves       = 4;
+            noise.amplitude     = 1.0f;
+            Result<Value> value = hydraulicGraph.AddNoise(noise, At(22));
+            REQUIRE_OK(value);
+            Graph::HydraulicParams hydraulic;
+            hydraulic.iterations = 32;
+            Result<Value> carvedValue =
+                hydraulicGraph.AddHydraulicErosion(*value, hydraulic, At(23));
+            REQUIRE_OK(carvedValue);
+            REQUIRE_OK(hydraulicGraph.RequestOutput("height", *carvedValue, -1.0f, 1.0f));
         }
+        Result<Field> carved =
+            Evaluate(context, kernels, hydraulicGraph,
+                     SectionExtent{.x = kExtent, .y = 1, .z = kExtent}, kExtent, 1, kExtent, 1.0f,
+                     kOrigin, kSeed);
+        REQUIRE_OK(carved);
+        CHECK(!AnyNotFinite(*carved));
+
+        const f64_t carvedChange = MeanDifference(*bare, *carved);
+        std::printf("     hydraulic, 32 iterations: mean change %.6g, maximum slope %.6f against "
+                    "%.6f\n",
+                    carvedChange, MaximumSlope(*carved), bareSlope);
+        CHECK(carvedChange > 1e-4);
+        // Unlike thermal erosion, hydraulic erosion is not expected to flatten: it cuts channels, which
+        // can leave the steepest single step as steep as it was. What must not happen is a blow-up, so
+        // the bound is on the magnitude rather than on the slope.
+        CHECK(Magnitude(*carved) < Magnitude(*bare) * 4.0);
+
+        test::Section("hydraulic erosion refuses an unstable configuration");
+        CheckHydraulicBuilderRefusals(context, kernels);
 
         test::CheckNoValidationErrors();
         return 0;

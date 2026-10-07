@@ -82,13 +82,24 @@ Channel 0 is the value, channel 1 the analytic gradient, both out of one evaluat
 | Call | Mapping | Keys |
 | --- | --- | --- |
 | `Terrain.Normals` | `R2->R2` in, `R2->R3` out | `input`, `vertical_scale` (1.0) |
+| `Terrain.Gradient` | `Rn->R1` in, `Rn->Rn` out | `input` |
 | `Terrain.Coords` | `Rn->Rn` | `domain` (2) |
 | `Terrain.Const` | `Rn->R1` | `domain` (2), `value` (0.0) |
 
-`Terrain.Normals` takes a gradient. Given an `R2->R1` whose node exposes one, it resolves the
-gradient channel, so `Terrain.Normals{ input = base }` works for a noise handle. For anything else it
-says so and names `.gradient`: there is no gradient op for an arbitrary field, because computing one
-would mean finite differences.
+`Terrain.Normals` takes a gradient. Given an `R2->R1` whose node exposes one, it resolves the gradient
+channel, so `Terrain.Normals{ input = base }` works for a noise handle.
+
+`Terrain.Gradient` measures a gradient by central differences, and it is the only op in the engine that
+is not analytic. Use it for a field that came out of blends, curves or erosion, where there is no closed
+form left to differentiate. For anything that has an analytic derivative, use that instead: a noise
+node's `.gradient` is exact and comes out of the same evaluation as its value.
+
+```lua
+-- exact, same dispatch as the value
+Terrain.Normals{ input = base.gradient }
+-- measured, radius 1, for terrain that has been through erosion
+Terrain.Normals{ input = Terrain.Gradient{ input = eroded } }
+```
 
 ### Masks, Combine, Curves, Filters, Vec
 
@@ -104,8 +115,35 @@ would mean finite differences.
 | `Filters.Blur` | `input`, `radius` (1, in [1, 32]) |
 | `Vec.Combine` | a positional list of 2 to 4 scalars |
 
-`Filters.Blur` is the only neighbourhood op so far, so it is what puts a halo on the graph: its
-radius propagates backwards to everything that feeds it.
+### Erosion
+
+Iterative ops. The iteration count is not only a quality knob: material moves one cell per iteration, so
+the count **is** the influence radius, and therefore the halo every section computes beyond its own
+interior. 24 iterations on a 512 section means computing 560x560 samples instead of 512x512; 200 would
+mean 912x912. Chaining two iterative ops adds their radii, and the engine refuses a graph whose halo
+passes 255, which is what the kernel interface can carry:
+
+```
+terrain.lua:9: [compile] Noise would need a halo of 400, over the limit of 255; every op between here
+and an output adds its radius, and an iterative op contributes one per iteration
+```
+
+| Call | Keys |
+| --- | --- |
+| `Erosion.Thermal` | `input`, `iterations` (16), `talus` (0.02), `strength` (0.25, in (0, 0.5]) |
+| `Erosion.Hydraulic` | `input`, `iterations` (32), `rain` (0.02), `evaporation` (0.05), `capacity` (4.0), `erosion_rate` (0.3), `deposition` (0.3), `flow_rate` (0.15, in (0, 0.25]) |
+
+Both take an `Rn -> R1` height and produce one. Thermal erosion slides material downhill wherever the
+slope passes the talus angle. Hydraulic erosion rains, routes water, carries sediment and evaporates;
+the water and sediment live only between iterations, in a buffer the compiler allocates and the rest of
+the graph never sees.
+
+The upper bounds are stability conditions, not style limits, and the error says which one was broken: a
+thermal `strength` above one half lets a cell overshoot its neighbour and oscillate instead of settling,
+and a hydraulic `flow_rate` above a quarter lets the four outflows of a cell exceed the water it has.
+
+`Filters.Blur`, `Terrain.Gradient` and the erosion ops are what put a halo on a graph: their radii
+propagate backwards to everything that feeds them.
 
 ## Mappings
 

@@ -20,7 +20,9 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::SlopeMask: return "SlopeMask";
         case OpKind::Vector: return "Vector";
         case OpKind::Blur: return "Blur";
+        case OpKind::Gradient: return "Gradient";
         case OpKind::ThermalErosion: return "ThermalErosion";
+        case OpKind::HydraulicErosion: return "HydraulicErosion";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -388,23 +390,59 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location)
     return Append(node, location);
 }
 
-Result<Value> Graph::AddThermalErosion(Value input, const ThermalParams& params,
+/// Shared by both erosion builders: an iteration count that is also a halo, and a height field.
+[[nodiscard]] Status CheckErosionInput(OpKind kind, Value input, u32_t iterations,
                                        SourceLocation location) {
-    if (Status checked = CheckValue(input, "ThermalErosion input", location); !checked) {
+    if (input.mapping.components != 1) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "{} expects an Rn->R1 height field, got {}", ToString(kind),
+            ToString(input.mapping)));
+    }
+    if (iterations == 0 || iterations > kMaxHalo) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "{} expects iterations in [1, {}], got {}; the iteration count is the influence radius "
+            "and therefore the halo, so a section would have to compute {} extra samples on each side",
+            ToString(kind), kMaxHalo, iterations, iterations));
+    }
+    return {};
+}
+
+Result<Value> Graph::AddGradient(Value input, SourceLocation location) {
+    if (Status checked = CheckValue(input, "Gradient input", location); !checked) {
         return std::unexpected(checked.error());
     }
     if (input.mapping.components != 1) {
         return std::unexpected(MakeScriptError(
             ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
-            "{} expects an Rn->R1 height field, got {}", ToString(OpKind::ThermalErosion),
+            "{} expects an Rn->R1 field, got {}", ToString(OpKind::Gradient),
             ToString(input.mapping)));
     }
-    if (params.iterations == 0 || params.iterations > kMaxHalo) {
-        return std::unexpected(MakeScriptError(
-            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
-            "{} expects iterations in [1, {}], got {}; the iteration count is the influence radius "
-            "and therefore the halo, so a section would have to compute {} extra samples on each side",
-            ToString(OpKind::ThermalErosion), kMaxHalo, params.iterations, params.iterations));
+
+    Node node;
+    node.kind         = OpKind::Gradient;
+    node.nodeClass    = NodeClass::Neighborhood;
+    node.radius       = 1;
+    node.inputCount   = 1;
+    node.inputs[0]    = input;
+    node.channelCount = 1;
+    // One component per axis of the domain, which is what makes the result usable by Normals and
+    // SlopeMask without a conversion.
+    node.channels[0] = Mapping{input.mapping.domain,
+                               static_cast<u8_t>(input.mapping.domain == Domain::R3 ? 3 : 2)};
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddThermalErosion(Value input, const ThermalParams& params,
+                                       SourceLocation location) {
+    if (Status checked = CheckValue(input, "ThermalErosion input", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (Status checked =
+            CheckErosionInput(OpKind::ThermalErosion, input, params.iterations, location);
+        !checked) {
+        return std::unexpected(checked.error());
     }
     if (!(params.talus >= 0.0f)) {
         return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
@@ -431,8 +469,70 @@ Result<Value> Graph::AddThermalErosion(Value input, const ThermalParams& params,
     node.inputs[0]    = input;
     node.channelCount = 1;
     node.channels[0]  = input.mapping;
+    // The state is just the height, but it is stated rather than inferred: see Node::stateMapping.
+    node.stateMapping = input.mapping;
     std::memcpy(&node.params[0], &params.talus, sizeof(f32_t));
     std::memcpy(&node.params[1], &params.strength, sizeof(f32_t));
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddHydraulicErosion(Value input, const HydraulicParams& params,
+                                         SourceLocation location) {
+    if (Status checked = CheckValue(input, "HydraulicErosion input", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (Status checked =
+            CheckErosionInput(OpKind::HydraulicErosion, input, params.iterations, location);
+        !checked) {
+        return std::unexpected(checked.error());
+    }
+
+    // Each bound is a stability condition rather than a matter of taste, so each one says why.
+    struct Range {
+        const char* name;
+        f32_t       value;
+        f32_t       minimum;
+        f32_t       maximum;
+        const char* why;
+    };
+    const Range ranges[] = {
+        {"rain", params.rain, 0.0f, 1e6f, "water cannot be negative"},
+        {"evaporation", params.evaporation, 0.0f, 0.999f,
+         "evaporating everything would leave nothing to carry sediment"},
+        {"capacity", params.capacity, 0.0f, 1e6f, "a negative capacity would deposit without limit"},
+        {"erosion_rate", params.erosionRate, 0.0f, 1.0f,
+         "above one an iteration would cut deeper than the sediment deficit"},
+        {"deposition", params.deposition, 0.0f, 1.0f,
+         "above one an iteration would lay down more than is suspended"},
+        {"flow_rate", params.flowRate, 1e-6f, 0.25f,
+         "above a quarter the four outflows of a cell can exceed the water it has"},
+    };
+    for (const Range& range : ranges) {
+        if (!(range.value >= range.minimum) || !(range.value <= range.maximum)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "{} expects {} in [{}, {}], got {}: {}", ToString(OpKind::HydraulicErosion),
+                range.name, range.minimum, range.maximum, range.value, range.why));
+        }
+    }
+
+    Node node;
+    node.kind         = OpKind::HydraulicErosion;
+    node.nodeClass    = NodeClass::Iterative;
+    node.iterations   = params.iterations;
+    node.radius       = params.iterations;
+    node.inputCount   = 1;
+    node.inputs[0]    = input;
+    node.channelCount = 1;
+    node.channels[0]  = input.mapping;
+    // Height, water and sediment, carried between iterations and invisible to the rest of the graph.
+    node.stateMapping = Mapping{input.mapping.domain, 3};
+    std::memcpy(&node.params[0], &params.rain, sizeof(f32_t));
+    std::memcpy(&node.params[1], &params.evaporation, sizeof(f32_t));
+    std::memcpy(&node.params[2], &params.capacity, sizeof(f32_t));
+    std::memcpy(&node.params[3], &params.erosionRate, sizeof(f32_t));
+    std::memcpy(&node.params[4], &params.deposition, sizeof(f32_t));
+    std::memcpy(&node.params[5], &params.flowRate, sizeof(f32_t));
     return Append(node, location);
 }
 

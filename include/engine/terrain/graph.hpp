@@ -17,6 +17,13 @@ inline constexpr usize_t kMaxNodeChannels = 2;
 /// Words of op parameters, matching `vulkan::KernelPushConstants::params`.
 inline constexpr usize_t kMaxNodeParams = 10;
 
+/// Parameter word the evaluator overwrites with the total iteration count of an iterative op.
+///
+/// A kernel whose first and last iterations differ from the rest needs both the index and the count to
+/// know where it is, and neither can come from a specialization constant: that would mean one pipeline
+/// per iteration count.
+inline constexpr usize_t kIterationCountWord = kMaxNodeParams - 2;
+
 /// Parameter word the evaluator overwrites with the current iteration index of an iterative op.
 ///
 /// Reserved rather than allocated per op: the evaluator writes it without knowing which op it is
@@ -58,11 +65,17 @@ enum class OpKind : u16_t {
     SlopeMask,
     /// Component extraction and assembly.
     Vector,
-    /// Box blur over a declared radius. The only neighbourhood op so far.
+    /// Box blur over a declared radius.
     Blur,
+    /// Gradient of a scalar field by central differences. The only op that is not analytic, for fields
+    /// that have no closed form left to differentiate.
+    Gradient,
     /// Thermal erosion: material slides downhill wherever the slope passes the talus angle.
     /// Iterative, one cell of influence per iteration.
     ThermalErosion,
+    /// Hydraulic erosion: rain, flow, sediment transport and evaporation. Iterative, one cell of
+    /// influence per iteration, carrying water and sediment between them.
+    HydraulicErosion,
     Count,
 };
 
@@ -167,6 +180,15 @@ public:
         std::array<Mapping, kMaxNodeChannels> channels{};
         /// Raw parameter bits, copied straight into the kernel push constants.
         std::array<u32_t, kMaxNodeParams> params{};
+        /// Shape of the state an iterative op carries between iterations, which is not always what the
+        /// node produces: hydraulic erosion takes a height, carries height, water and sediment through
+        /// the iterations, and hands back a height.
+        ///
+        /// Every iterative builder sets this, including the ones for which it equals channel 0. There
+        /// is deliberately no "unset" value to test against: `Mapping{}` defaults to a perfectly valid
+        /// `R2 -> R1`, so a sentinel check would silently accept it and give an `R3` node `R2` state
+        /// buffers. That bug existed for exactly one commit and the seam test caught it.
+        Mapping stateMapping{};
 
         SourceLocation location;
     };
@@ -252,6 +274,38 @@ public:
     [[nodiscard]] Result<Value> AddThermalErosion(Value input, const ThermalParams& params,
                                                  SourceLocation location);
 
+    struct HydraulicParams {
+        /// Iterations to run. Also the influence radius, and therefore the halo.
+        u32_t iterations = 32;
+        /// Water added to every cell per iteration.
+        f32_t rain = 0.02f;
+        /// Fraction of the water lost per iteration, in [0, 1).
+        f32_t evaporation = 0.05f;
+        /// Sediment a unit of flow can hold per unit of slope.
+        f32_t capacity = 4.0f;
+        /// How fast a shortfall in sediment is taken out of the bed, in (0, 1].
+        f32_t erosionRate = 0.3f;
+        /// How fast an excess is laid back down, in (0, 1].
+        f32_t deposition = 0.3f;
+        /// Fraction of a surface drop that moves per iteration, in (0, 0.25]. Above a quarter the four
+        /// outflows of a cell can exceed the water it has, and the scheme stops being stable.
+        f32_t flowRate = 0.15f;
+    };
+
+    /// Hydraulic erosion of an `Rn -> R1` height field, producing an `Rn -> R1` height.
+    ///
+    /// Water and sediment live only between iterations, in a three-component state the compiler
+    /// allocates and nothing else can see. What comes out is terrain.
+    [[nodiscard]] Result<Value> AddHydraulicErosion(Value input, const HydraulicParams& params,
+                                                   SourceLocation location);
+
+    /// Gradient of an `Rn -> R1` field by central differences, producing `Rn -> Rn`.
+    ///
+    /// For anything with an analytic derivative, use that instead: a noise node's `.gradient` channel is
+    /// exact and comes out of the same evaluation as its value. This exists for a field that came out of
+    /// blends, curves or erosion, where measuring is the only option left.
+    [[nodiscard]] Result<Value> AddGradient(Value input, SourceLocation location);
+
     /// Assembles 2 to 4 scalar values of the same domain into one `Rn -> Rm`.
     [[nodiscard]] Result<Value> AddCombine(const Value* components, u8_t count,
                                            SourceLocation location);
@@ -275,6 +329,15 @@ private:
     std::array<OutputRequest, kMaxOutputs> m_outputs{};
     usize_t                                m_outputCount = 0;
 };
+
+/// A graph is large, because the spec asks for fixed-capacity storage so that building one never
+/// allocates. The consequence is that it is a stack hazard: a few of them on one frame overflow the
+/// default 1 MiB stack, which is how two tests crashed in Debug the moment they grew a sixth graph.
+/// Keeping the number here means a future increase to `kMaxNodes` has to be a deliberate decision about
+/// the stack as well as about memory.
+static_assert(sizeof(Graph) <= 256 * 1024,
+              "Graph is too large to keep several on one stack frame; either shrink a Node or stop "
+              "putting more than one or two in a function");
 
 } // namespace engine::terrain
 

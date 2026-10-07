@@ -143,6 +143,11 @@ struct NodeWork {
                                                   node.location.line, "node {} has no op", index));
         }
         const OpInfo& info = OpInfoOf(node.kind);
+        if (node.nodeClass == NodeClass::Iterative && !IsValid(node.stateMapping)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InternalError, ErrorStage::Compile, node.location.file, node.location.line,
+                "{} is iterative but declares no state mapping", ToString(node.kind)));
+        }
         if (node.inputCount > info.maxInputs) {
             return std::unexpected(MakeScriptError(
                 ErrorCode::InvalidArgument, ErrorStage::Validation, node.location.file,
@@ -488,6 +493,13 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         dispatch.inputCount  = node.inputCount;
         dispatch.iterations  = node.iterations;
         dispatch.params      = node.params;
+        // The iteration words are filled here, not only in the evaluator's loop, because an iterative
+        // op asked for exactly one iteration takes the plain single-dispatch path and would otherwise
+        // see a count of zero. A kernel that behaves differently on its first and last iteration reads
+        // that as "neither", and hydraulic erosion then wrote its three-component state into a
+        // one-component output buffer.
+        dispatch.params[kIterationCountWord] = node.iterations;
+        dispatch.params[kIterationParamWord] = 0;
         dispatch.location    = node.location;
         dispatch.inputBuffers.fill(kInvalidBuffer);
         dispatch.outputBuffers.fill(kInvalidBuffer);
@@ -564,10 +576,12 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         // the next value, which is why an iterative node costs at most two extra buffers rather than
         // one per iteration.
         if (dispatch.iterations > 1) {
-            dispatch.stateHalo    = dispatch.halo + node.radius;
+            dispatch.stateHalo = dispatch.halo + node.radius;
+            dispatch.stateMapping = node.stateMapping;
             dispatch.scratchCount = dispatch.iterations == 2 ? 1 : 2;
             for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
-                dispatch.scratchBuffers[k] = planner.Acquire(node.channels[0], dispatch.stateHalo);
+                dispatch.scratchBuffers[k] =
+                    planner.Acquire(dispatch.stateMapping, dispatch.stateHalo);
             }
             for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
                 compiled.buffers[dispatch.scratchBuffers[k]].lastUse = static_cast<u32_t>(i);

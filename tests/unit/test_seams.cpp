@@ -178,6 +178,28 @@ void Compare(const char* label, const Field& a, const Field& b, u32_t components
     return graph.RequestOutput("height", *eroded, -1.0f, 1.0f);
 }
 
+/// Noise run through hydraulic erosion. Harder than the thermal case in one specific way: the state
+/// the iterations exchange is three components wide while the node produces one, so the first and last
+/// iterations read and write different shapes from the ones in between. A mistake in that indexing
+/// would most likely show up as a seam rather than as garbage.
+[[nodiscard]] Status BuildHydraulicGraph(Graph& graph, u32_t iterations) {
+    Graph::NoiseParams noise;
+    noise.frequency = 0.03f;
+    noise.octaves   = 3;
+    noise.amplitude = 1.0f;
+    Result<Value> value = graph.AddNoise(noise, At(10));
+    if (!value) {
+        return std::unexpected(value.error());
+    }
+    Graph::HydraulicParams hydraulic;
+    hydraulic.iterations = iterations;
+    Result<Value> eroded = graph.AddHydraulicErosion(*value, hydraulic, At(11));
+    if (!eroded) {
+        return std::unexpected(eroded.error());
+    }
+    return graph.RequestOutput("height", *eroded, -1.0f, 1.0f);
+}
+
 /// Runs `graph` whole and tiled over the same region and demands the same bytes.
 void CheckSeams(Context& context, KernelLibrary& kernels, const char* label, const Graph& graph,
                 SectionExtent whole, SectionExtent tiled) {
@@ -193,6 +215,112 @@ void CheckSeams(Context& context, KernelLibrary& kernels, const char* label, con
     const u8_t components =
         static_cast<u8_t>(single->samples.size() / (static_cast<u64_t>(width) * depth * height));
     Compare(label, *single, *split, components);
+}
+
+/// Each check builds its graph in its own frame.
+///
+/// Not a matter of taste: a `Graph` keeps fixed-capacity storage for 1024 nodes, so it is around 150 KiB,
+/// and nine of them in one function overflowed the default 1 MiB stack in Debug. One graph per frame,
+/// and a loop reuses its one slot.
+void CheckNoiseSeams(Context& context, KernelLibrary& kernels) {
+    Graph noise;
+    REQUIRE_OK_VOID(BuildNoiseGraph(noise, Domain::R2));
+    CheckSeams(context, kernels, "noise 128x128 against 4x4 of 32", noise,
+               SectionExtent{.x = 128, .y = 1, .z = 128}, SectionExtent{.x = 32, .y = 1, .z = 32});
+}
+
+/// A region that is not a whole number of sections, so every edge section has overhang that must be
+/// discarded rather than written.
+void CheckPartialSectionSeams(Context& context, KernelLibrary& kernels) {
+    Graph noise;
+    REQUIRE_OK_VOID(BuildNoiseGraph(noise, Domain::R2));
+    Result<Field> single = Evaluate(context, kernels, noise,
+                                   SectionExtent{.x = 128, .y = 1, .z = 128}, 100, 1, 70, 1.0f,
+                                   kOrigin, kSeed);
+    REQUIRE_OK_VOID(single);
+    Result<Field> split = Evaluate(context, kernels, noise, SectionExtent{.x = 32, .y = 1, .z = 32},
+                                   100, 1, 70, 1.0f, kOrigin, kSeed);
+    REQUIRE_OK_VOID(split);
+    Compare("noise 100x70 against 32-wide sections", *single, *split, 1);
+}
+
+void CheckBlurSeams(Context& context, KernelLibrary& kernels) {
+    for (const u32_t radius : {1u, 3u, 8u}) {
+        Graph blurred;
+        REQUIRE_OK_VOID(BuildBlurredGraph(blurred, Domain::R2, radius));
+        char label[96];
+        std::snprintf(label, sizeof(label), "blur radius %u, 128x128 against 4x4 of 32", radius);
+        CheckSeams(context, kernels, label, blurred, SectionExtent{.x = 128, .y = 1, .z = 128},
+                   SectionExtent{.x = 32, .y = 1, .z = 32});
+    }
+}
+
+void CheckBlendSeams(Context& context, KernelLibrary& kernels) {
+    Graph blended;
+    REQUIRE_OK_VOID(BuildBlendGraph(blended));
+    CheckSeams(context, kernels, "noise + slope mask + blend", blended,
+               SectionExtent{.x = 128, .y = 1, .z = 128}, SectionExtent{.x = 32, .y = 1, .z = 32});
+}
+
+void CheckVolumeSeams(Context& context, KernelLibrary& kernels) {
+    Graph volume;
+    REQUIRE_OK_VOID(BuildNoiseGraph(volume, Domain::R3));
+    CheckSeams(context, kernels, "R3 noise 32^3 against 4x4x4 of 8", volume,
+               SectionExtent{.x = 32, .y = 32, .z = 32}, SectionExtent{.x = 8, .y = 8, .z = 8});
+}
+
+void CheckVolumeBlurSeams(Context& context, KernelLibrary& kernels) {
+    Graph blurredVolume;
+    REQUIRE_OK_VOID(BuildBlurredGraph(blurredVolume, Domain::R3, 2));
+    CheckSeams(context, kernels, "R3 blur radius 2, 32^3 against 4x4x4 of 8", blurredVolume,
+               SectionExtent{.x = 32, .y = 32, .z = 32}, SectionExtent{.x = 8, .y = 8, .z = 8});
+}
+
+/// One, two and three iterations cover every shape the ping-pong takes: no scratch buffer, one, and the
+/// alternating pair. Larger counts then check that the state halo keeps up.
+void CheckThermalSeams(Context& context, KernelLibrary& kernels) {
+    for (const u32_t iterations : {1u, 2u, 3u, 8u, 24u}) {
+        Graph eroded;
+        REQUIRE_OK_VOID(BuildErodedGraph(eroded, Domain::R2, iterations));
+        char label[112];
+        std::snprintf(label, sizeof(label),
+                      "thermal erosion, %u iteration(s), 128x128 against 4x4 of 32", iterations);
+        CheckSeams(context, kernels, label, eroded, SectionExtent{.x = 128, .y = 1, .z = 128},
+                   SectionExtent{.x = 32, .y = 1, .z = 32});
+    }
+}
+
+void CheckThermalVolumeSeams(Context& context, KernelLibrary& kernels) {
+    Graph erodedVolume;
+    REQUIRE_OK_VOID(BuildErodedGraph(erodedVolume, Domain::R3, 4));
+    CheckSeams(context, kernels, "R3 thermal erosion, 4 iterations, 32^3 against 4x4x4 of 8",
+               erodedVolume, SectionExtent{.x = 32, .y = 32, .z = 32},
+               SectionExtent{.x = 8, .y = 8, .z = 8});
+}
+
+void CheckHydraulicSeams(Context& context, KernelLibrary& kernels) {
+    for (const u32_t iterations : {1u, 2u, 3u, 12u}) {
+        Graph eroded;
+        REQUIRE_OK_VOID(BuildHydraulicGraph(eroded, iterations));
+        char label[112];
+        std::snprintf(label, sizeof(label),
+                      "hydraulic erosion, %u iteration(s), 128x128 against 4x4 of 32", iterations);
+        CheckSeams(context, kernels, label, eroded, SectionExtent{.x = 128, .y = 1, .z = 128},
+                   SectionExtent{.x = 32, .y = 1, .z = 32});
+    }
+}
+
+void CheckDeterminism(Context& context, KernelLibrary& kernels) {
+    Graph blended;
+    REQUIRE_OK_VOID(BuildBlendGraph(blended));
+    const SectionExtent extent{.x = 64, .y = 1, .z = 64};
+    Result<Field>       first =
+        Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
+    REQUIRE_OK_VOID(first);
+    Result<Field> second =
+        Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
+    REQUIRE_OK_VOID(second);
+    Compare("two runs of the same graph", *first, *second, 1);
 }
 
 } // namespace
@@ -211,91 +339,26 @@ int main() {
 
     const int result = [&]() -> int {
         test::Section("R2 tiles agree with one section");
-        {
-            Graph noise;
-            REQUIRE_OK(BuildNoiseGraph(noise, Domain::R2));
-            CheckSeams(context, kernels, "noise 128x128 against 4x4 of 32", noise,
-                       SectionExtent{.x = 128, .y = 1, .z = 128},
-                       SectionExtent{.x = 32, .y = 1, .z = 32});
-
-            // A region that is not a whole number of sections, so every edge section has overhang
-            // that must be discarded rather than written.
-            Result<Field> single = Evaluate(context, kernels, noise,
-                                            SectionExtent{.x = 128, .y = 1, .z = 128}, 100, 1, 70, 1.0f, kOrigin, kSeed);
-            REQUIRE_OK(single);
-            Result<Field> split = Evaluate(context, kernels, noise,
-                                           SectionExtent{.x = 32, .y = 1, .z = 32}, 100, 1, 70, 1.0f, kOrigin, kSeed);
-            REQUIRE_OK(split);
-            Compare("noise 100x70 against 32-wide sections", *single, *split, 1);
-        }
+        CheckNoiseSeams(context, kernels);
+        CheckPartialSectionSeams(context, kernels);
 
         test::Section("a halo does not create a seam");
-        for (const u32_t radius : {1u, 3u, 8u}) {
-            Graph blurred;
-            REQUIRE_OK(BuildBlurredGraph(blurred, Domain::R2, radius));
-            char label[96];
-            std::snprintf(label, sizeof(label), "blur radius %u, 128x128 against 4x4 of 32", radius);
-            CheckSeams(context, kernels, label, blurred,
-                       SectionExtent{.x = 128, .y = 1, .z = 128},
-                       SectionExtent{.x = 32, .y = 1, .z = 32});
-        }
+        CheckBlurSeams(context, kernels);
 
         test::Section("a multi-dispatch graph does not create a seam");
-        {
-            Graph blended;
-            REQUIRE_OK(BuildBlendGraph(blended));
-            CheckSeams(context, kernels, "noise + slope mask + blend", blended,
-                       SectionExtent{.x = 128, .y = 1, .z = 128},
-                       SectionExtent{.x = 32, .y = 1, .z = 32});
-        }
+        CheckBlendSeams(context, kernels);
 
         test::Section("R3 bricks agree with one brick");
-        {
-            Graph volume;
-            REQUIRE_OK(BuildNoiseGraph(volume, Domain::R3));
-            CheckSeams(context, kernels, "R3 noise 32^3 against 4x4x4 of 8", volume,
-                       SectionExtent{.x = 32, .y = 32, .z = 32},
-                       SectionExtent{.x = 8, .y = 8, .z = 8});
-
-            Graph blurredVolume;
-            REQUIRE_OK(BuildBlurredGraph(blurredVolume, Domain::R3, 2));
-            CheckSeams(context, kernels, "R3 blur radius 2, 32^3 against 4x4x4 of 8",
-                       blurredVolume, SectionExtent{.x = 32, .y = 32, .z = 32},
-                       SectionExtent{.x = 8, .y = 8, .z = 8});
-        }
+        CheckVolumeSeams(context, kernels);
+        CheckVolumeBlurSeams(context, kernels);
 
         test::Section("an iterative op does not create a seam");
-        // One, two and three iterations cover every shape the ping-pong takes: no scratch buffer, one,
-        // and the alternating pair. Larger counts then check that the state halo keeps up.
-        for (const u32_t iterations : {1u, 2u, 3u, 8u, 24u}) {
-            Graph eroded;
-            REQUIRE_OK(BuildErodedGraph(eroded, Domain::R2, iterations));
-            char label[112];
-            std::snprintf(label, sizeof(label),
-                          "thermal erosion, %u iteration(s), 128x128 against 4x4 of 32", iterations);
-            CheckSeams(context, kernels, label, eroded,
-                       SectionExtent{.x = 128, .y = 1, .z = 128},
-                       SectionExtent{.x = 32, .y = 1, .z = 32});
-        }
-        {
-            Graph erodedVolume;
-            REQUIRE_OK(BuildErodedGraph(erodedVolume, Domain::R3, 4));
-            CheckSeams(context, kernels, "R3 thermal erosion, 4 iterations, 32^3 against 4x4x4 of 8",
-                       erodedVolume, SectionExtent{.x = 32, .y = 32, .z = 32},
-                       SectionExtent{.x = 8, .y = 8, .z = 8});
-        }
+        CheckThermalSeams(context, kernels);
+        CheckThermalVolumeSeams(context, kernels);
+        CheckHydraulicSeams(context, kernels);
 
         test::Section("the same evaluation twice gives the same bytes");
-        {
-            Graph blended;
-            REQUIRE_OK(BuildBlendGraph(blended));
-            const SectionExtent extent{.x = 64, .y = 1, .z = 64};
-            Result<Field> first = Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
-            REQUIRE_OK(first);
-            Result<Field> second = Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
-            REQUIRE_OK(second);
-            Compare("two runs of the same graph", *first, *second, 1);
-        }
+        CheckDeterminism(context, kernels);
 
         test::CheckNoValidationErrors();
         return 0;

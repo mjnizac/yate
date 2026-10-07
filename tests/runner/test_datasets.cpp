@@ -384,12 +384,23 @@ struct PassResult {
     return PassResult{.totalMs = summary->totalMs, .gpuMs = summary->gpuMs};
 }
 
-[[nodiscard]] f64_t Median(std::vector<f64_t> values) {
+/// Fastest of the passes, which is what a regression check actually wants to compare.
+///
+/// The median was here first and it is the wrong statistic for this job. Interference only ever makes a
+/// pass slower: another test finishing, the GPU still busy, the page cache cold. So the distribution has
+/// a hard floor and a long tail, and the floor is the one number that reflects the code rather than the
+/// machine's mood. With two or three passes a median does not reject a single slow one either: a 25 ms
+/// case read 31 ms in a full suite run and 24 ms on its own, which is a 37% "regression" caused by the
+/// test that ran before it.
+///
+/// The cost is that a change making the engine *occasionally* slow would not be caught. That is the
+/// right trade for a gate that has to be trusted: a flaky failure gets ignored, and then so do the real
+/// ones.
+[[nodiscard]] f64_t Fastest(const std::vector<f64_t>& values) {
     if (values.empty()) {
         return 0.0;
     }
-    std::sort(values.begin(), values.end());
-    return values[values.size() / 2];
+    return *std::min_element(values.begin(), values.end());
 }
 
 /// Compares one measured value against its baseline and reports according to the thresholds.
@@ -622,9 +633,9 @@ int main(int argc, char** argv) {
             totals.erase(totals.begin());
             gpus.erase(gpus.begin());
         }
-        const f64_t medianTotal = Median(totals);
-        const f64_t medianGpu   = Median(gpus);
-        std::printf("     median total %.2f ms, median GPU %.3f ms over %zu pass(es)\n",
+        const f64_t medianTotal = Fastest(totals);
+        const f64_t medianGpu   = Fastest(gpus);
+        std::printf("     fastest total %.2f ms, fastest GPU %.3f ms over %zu pass(es)\n",
                     medianTotal, medianGpu, totals.size());
 
         const std::string baselinePath =

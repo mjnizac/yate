@@ -61,11 +61,12 @@
       per section. The planner was already reusing those buffers for later values, so the peak is set by
       how many values are live at once, not by how many constants the graph mentions.
 
-- [ ] `Terrain.Normals` and `Masks.Slope` take a gradient, so a height that is not a noise channel
-      cannot be turned into normals. The spec's own example writes `Terrain.Normals{ input =
-      eroded.value }`, which needs a `Gradient` neighbourhood op over central differences. It is the
-      first op in the engine that would not be analytic, which is why it is a decision and not a
-      chore. **Being decided in milestone 8**, where erosion produces exactly such a field.
+- [x] **`Terrain.Gradient` exists, and it is explicit.** Erosion produces a height with no closed form
+      to differentiate, so the decision could not be deferred past milestone 8. It is a neighbourhood op
+      of radius 1 over central differences, and it is the only op in the engine that is not analytic.
+      What it is *not* is implicit: `Terrain.Normals` still takes a gradient and names `Terrain.Gradient`
+      in its error rather than inserting one behind the script's back, so a script that could have used
+      an exact derivative and did not is visible in the source.
 - [x] The interned chunk-name table is shared by every Lua state, which is the point of interning, and
       it is now the only piece of mutable state in `lua.cpp` that is not per-script, so it takes a
       mutex. Without it a reload on a worker thread could hand out a view of a half-copied entry. The
@@ -97,3 +98,19 @@
 - [x] `ENGINE_SIMPLEX2_SCALE` and its 3D counterpart are now measured across all six base-and-domain
       combinations by `test_noise`, which prints the band each one produces and fails on a gross
       break. Both constants were recalibrated from that measurement rather than guessed.
+
+## Milestone 8 — follow-ups
+
+- [ ] Hydraulic erosion drops its water and sediment on the last iteration, but both are genuinely
+      useful for texturing: a wetness mask and a sediment mask are what a renderer wants to put rock
+      against silt. The node could expose them as a second channel, which the channel mask would then
+      keep from being written when nothing asks. It needs a third name in the Lua handle, since `.value`
+      and `.gradient` are taken, and naming is the part worth thinking about rather than the plumbing.
+- [ ] Erosion is the first op where the GPU is a real cost: 28 ms of a 40 ms total on a 2048 export with
+      24 hydraulic iterations and 12 thermal. That makes overlapping sections on the GPU worth measuring
+      again, which it was not when the GPU accounted for half a percent of an export. Revisit the "one
+      section in flight" decision from milestone 7 with an erosion-heavy script.
+- [ ] An iterative op reads and writes the same buffers every iteration, so its bandwidth is
+      `iterations * 2 * section bytes`. A tiled or shared-memory kernel would cut that for the thermal
+      case, where the stencil is four taps. Measure before building: at 24 iterations over a 512 section
+      the working set is 1 MiB, which may already sit in L2.

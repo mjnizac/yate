@@ -343,6 +343,7 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
                 constants.halo       = isLast ? dispatch.halo : dispatch.stateHalo;
                 constants.outputs[0] = isLast ? output : scratch[writeAt];
                 constants.inputs[0]  = iteration == 0 ? source0 : scratch[readAt];
+                constants.params[kIterationCountWord] = dispatch.iterations;
                 constants.params[kIterationParamWord] = iteration;
 
                 if (iteration != 0) {

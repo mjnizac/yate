@@ -318,7 +318,9 @@ private:
             return *gradient;
         }
     }
-    Fail(location, "{} expects an R2->R2 gradient, got {}; a noise handle exposes one as .gradient",
+    Fail(location,
+         "{} expects an R2->R2 gradient, got {}; a noise handle exposes an exact one as .gradient, and "
+         "Terrain.Gradient measures one from any height field",
          op, ToString(value.mapping));
 }
 
@@ -496,6 +498,13 @@ void Bind(sol::state& state, Graph& graph) {
         const Value gradient = GradientOf(graph, input, "Terrain.Normals", location);
         return Handle{Unwrap(graph.AddNormals(gradient, vertical, location))};
     });
+    terrain.set_function("Gradient", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Terrain.Gradient", location);
+        const Value          input = args.Input("input");
+        args.Finish();
+        return Handle{Unwrap(graph.AddGradient(input, location))};
+    });
     terrain.set_function("Coords", [&graph](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Terrain.Coords", location);
@@ -636,6 +645,24 @@ void Bind(sol::state& state, Graph& graph) {
         args.Finish();
 
         return Handle{Unwrap(graph.AddThermalErosion(input, params, location))};
+    });
+
+    erosion.set_function("Hydraulic", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Erosion.Hydraulic", location);
+        const Value          input = args.Input("input");
+
+        Graph::HydraulicParams params;
+        params.iterations  = args.Count("iterations", 32, 1, terrain::kMaxHalo);
+        params.rain        = args.Float("rain", 0.02);
+        params.evaporation = args.Float("evaporation", 0.05);
+        params.capacity    = args.Float("capacity", 4.0);
+        params.erosionRate = args.Float("erosion_rate", 0.3);
+        params.deposition  = args.Float("deposition", 0.3);
+        params.flowRate    = args.Float("flow_rate", 0.15);
+        args.Finish();
+
+        return Handle{Unwrap(graph.AddHydraulicErosion(input, params, location))};
     });
 
     // --- Vec ------------------------------------------------------------------------------------

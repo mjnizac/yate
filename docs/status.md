@@ -9,7 +9,7 @@
 | 5 | Graph and compiler, without Lua | **done**, pending acceptance |
 | 6 | Lua bindings | **done**, accepted |
 | 7 | Sections and streaming | **done**, accepted |
-| 8 | Iterative kernels | not started |
+| 8 | Iterative kernels | **done**, accepted |
 | 9 | Viewer (Graphics mode) | not started |
 
 ## Verification
@@ -26,6 +26,7 @@ test_compute_roundtrip .. Passed
 test_noise .............. Passed
 test_kernels ............ Passed
 test_seams .............. Passed
+test_erosion ............ Passed
 test_datasets ........... Passed
 ```
 
@@ -328,3 +329,84 @@ against a 1.000 m sample
 That makes the limit visible where it matters and costs nothing. The periodic wrap that would push it
 further is still in `docs/todo.md`, now with a concrete reason to leave it there: a 16k map at 1 m
 resolution reaches 8192 m, where the jitter is 0.0016 m.
+
+## 8. Iterative kernels
+
+Thermal and hydraulic erosion, plus the machinery an iterative op needs and the one op in the engine
+that is not analytic.
+
+**One dispatch, many iterations.** A node declares an iteration count, and the evaluator runs its kernel
+that many times over a ping-ponged pair of buffers with a barrier between each pair. The pair is one or
+two buffers, never one per iteration: the last iteration always writes the node's own output, whichever
+way the parity falls, so the rest of the graph is planned around a single buffer.
+
+**The halo argument, which is the whole correctness story.** Material moves one cell per iteration, so
+the influence radius *is* the iteration count. That becomes the halo, and the intermediate state is
+computed over `halo + radius` rather than `halo`: a sample is wrong after one iteration if a neighbour it
+needed lay outside the computed region, and that wrongness walks one cell inward per iteration, so after
+`radius` iterations it has reached exactly the boundary of `halo` and no further. One less and the
+outermost ring of the output would be subtly wrong — which is to say, there would be a seam.
+
+`test_seams` holds that down for 1, 2, 3, 8 and 24 thermal iterations and 1, 2, 3 and 12 hydraulic ones,
+in `R2` and `R3`, all bit-identical between one section and 4x4. It earned its keep immediately: it found
+two real bugs in this milestone, one of which only showed in `R3`.
+
+**Order-independent by construction.** Both schemes compute every transfer from one pair of cells alone,
+so what one cell sends is exactly what the other receives and no sample depends on the order cells are
+visited. The usual outflow formulation normalises a cell's outflow by its own total, which means a cell
+can only know what it receives by recomputing a neighbour's total, which needs that neighbour's
+neighbours: a two-cell radius and twice the halo per iteration. Avoiding that normalisation is why
+hydraulic erosion costs one cell per iteration rather than two.
+
+**Hydraulic erosion carries more than it produces.** It takes a height, carries height, water and
+sediment through a three-component state the rest of the graph never sees, and hands back a height. The
+first and last iterations therefore read and write different shapes from the ones in between, which the
+kernel resolves from the iteration index and count the evaluator writes into reserved parameter words.
+
+**`Terrain.Gradient`.** Erosion produces a height with no closed form to differentiate, so normals from
+eroded terrain need a measured gradient. This is the only op in the engine that is not analytic, and it
+is deliberately explicit in a script rather than inserted behind one: everything that *has* an analytic
+derivative still carries one.
+
+**Verification.** `test_erosion` checks the properties a plausible bug breaks rather than a golden image,
+because an iterative op has no CPU reference worth maintaining:
+
+- It changes the field. A wrong ping-pong parity would hand back the input untouched.
+- It conserves material, in the only form a window of a larger computation can show. Material genuinely
+  crosses the window border, so the total is not expected to hold; what must hold is that the drift is a
+  *border* effect, which means it shrinks like 1/L as the window grows. Measured 0.0026 at 64 and 0.0011
+  at 128, a ratio of 0.42 against the 0.5 the law predicts. A per-sample leak from a sign error or a
+  double-counted gift would not shrink at all.
+- It reduces slope, monotonically with iterations: 0.361 bare, 0.291 at 2, 0.184 at 16, 0.119 at 48. The
+  same arithmetic with the give and receive terms swapped would sharpen the terrain and still pass the
+  conservation check.
+- A talus above every slope present changes nothing, bit for bit, which is what says the threshold is a
+  threshold and not a scale factor.
+- The builders refuse what is unstable or unrepresentable, and the compiler refuses a chain whose halo
+  would not fit.
+
+### What this milestone found
+
+- **A registry indexed by ordinal, checked only for length.** `kOps` is indexed by the `OpKind` value and
+  the only assertion was on its size, so inserting an op in the wrong place silently handed every later
+  op a different kernel. It turned thermal erosion into a no-op, because it ran the hydraulic shader with
+  thermal parameters and every rate landed on zero. There is now a `constexpr` check that each entry sits
+  at its own ordinal.
+- **`Mapping{}` is a valid mapping.** The compiler asked `IsValid(node.stateMapping)` to mean "did the op
+  set one", and a default-constructed `Mapping` is a perfectly valid `R2 -> R1`, so an `R3` node was given
+  `R2` state buffers. The sentinel is gone: every iterative builder states its state shape, and the
+  compiler rejects one that does not. The seam test caught this in `R3` only.
+- **One iteration is a special case.** An iterative op asked for exactly one iteration takes the plain
+  single-dispatch path, where the evaluator's loop never runs and never wrote the iteration words.
+  Hydraulic erosion read that as "neither first nor last" and wrote its three-component state into a
+  one-component buffer. The words are filled by the compiler now, so the single-iteration path is correct
+  by construction.
+- **A graph is a stack hazard.** Fixed-capacity storage for 1024 nodes makes a `Graph` around 150 KiB,
+  and the seam test crossed the 1 MiB stack the moment it grew its ninth one. Both erosion tests now
+  build one graph per function, and `graph.hpp` asserts the size so a future increase to `kMaxNodes`
+  has to be a decision about the stack as well as about memory. It only showed in Debug, where nothing
+  is elided.
+- **The regression gate used the median of two passes.** Interference only ever makes a pass slower, so
+  the distribution has a hard floor and a long tail; a 25 ms case read 31 ms inside a full suite run and
+  24 ms on its own, a 37% "regression" caused by the test before it. The baseline comparison now uses the
+  fastest pass, which is the only number that reflects the code rather than the machine.
