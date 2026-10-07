@@ -82,7 +82,9 @@ private:
 
 namespace engine::vulkan {
 class Context;
-}
+class Swapchain;
+class Window;
+} // namespace engine::vulkan
 
 namespace engine {
 
@@ -97,6 +99,13 @@ struct ApplicationState {
 
     RunMode          mode;
     vulkan::Context* vulkan = nullptr;
+    /// Main window and its swapchain, created by `engine::init` in Graphics mode and null in Headless.
+    ///
+    /// Owned by the engine rather than by the layer that uses them, because the window's surface has to
+    /// exist before the device is chosen and the swapchain has to outlive any layer that is torn down and
+    /// pushed again. The first `WindowLayer` adopts them.
+    vulkan::Window*    window    = nullptr;
+    vulkan::Swapchain* swapchain = nullptr;
     /// Pipeline map, which must outlive any single job: a pipeline is created on first use and kept
     /// for the life of the device (spec section 9, stage 5).
     terrain::KernelLibrary kernels;

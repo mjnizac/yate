@@ -47,6 +47,31 @@ struct Buffer {
     [[nodiscard]] b8_t IsValid() const noexcept { return handle != VK_NULL_HANDLE; }
 };
 
+/// An image with its VMA allocation and its default view.
+///
+/// The view comes with the image because every image the engine creates is used through exactly one
+/// view: a depth buffer, or a render target. Anything that needs a second view of the same image can
+/// make one itself, but nothing does yet, and bundling them means one object to move and one to destroy.
+struct Image {
+    VkImage       handle     = VK_NULL_HANDLE;
+    VkImageView   view       = VK_NULL_HANDLE;
+    VmaAllocation allocation = nullptr;
+    VkFormat      format     = VK_FORMAT_UNDEFINED;
+    VkExtent2D    extent{};
+    VramCategory  category = VramCategory::Viewer;
+
+    [[nodiscard]] b8_t IsValid() const noexcept { return handle != VK_NULL_HANDLE; }
+};
+
+struct ImageDesc {
+    u32_t              width  = 0;
+    u32_t              height = 0;
+    VkFormat           format = VK_FORMAT_UNDEFINED;
+    VkImageUsageFlags  usage  = 0;
+    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    VramCategory       category = VramCategory::Viewer;
+};
+
 struct BufferDesc {
     VkDeviceSize       size     = 0;
     VkBufferUsageFlags usage    = 0;
@@ -83,6 +108,10 @@ public:
 
     [[nodiscard]] Result<Buffer> CreateBuffer(const BufferDesc& desc);
     void                         DestroyBuffer(Buffer& buffer) noexcept;
+
+    [[nodiscard]] Result<Image> CreateImage(const ImageDesc& desc);
+    void                        DestroyImage(Image& image) noexcept;
+
 
     /// Flushes a host-visible range before the GPU reads it. No-op on coherent memory.
     [[nodiscard]] Status FlushBuffer(const Buffer& buffer, VkDeviceSize offset, VkDeviceSize size);

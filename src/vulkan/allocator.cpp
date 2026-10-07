@@ -244,6 +244,88 @@ void Allocator::DestroyBuffer(Buffer& buffer) noexcept {
     buffer = Buffer{};
 }
 
+Result<Image> Allocator::CreateImage(const ImageDesc& desc) {
+    if (desc.width == 0 || desc.height == 0) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Vulkan, "image is {}x{}", desc.width,
+                    desc.height);
+    }
+
+    const VkImageCreateInfo info{.sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                                 .pNext                 = nullptr,
+                                 .flags                 = 0,
+                                 .imageType             = VK_IMAGE_TYPE_2D,
+                                 .format                = desc.format,
+                                 .extent                = {desc.width, desc.height, 1},
+                                 .mipLevels             = 1,
+                                 .arrayLayers           = 1,
+                                 .samples               = VK_SAMPLE_COUNT_1_BIT,
+                                 .tiling                = VK_IMAGE_TILING_OPTIMAL,
+                                 .usage                 = desc.usage,
+                                 .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
+                                 .queueFamilyIndexCount = 0,
+                                 .pQueueFamilyIndices   = nullptr,
+                                 .initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED};
+
+    // Device-local and never mapped. A depth buffer or a render target has no host access at all, and
+    // asking for `LAZILY_ALLOCATED` would only pay off on a tiled GPU the engine does not target.
+    const VmaAllocationCreateInfo allocationInfo{
+        .flags          = 0,
+        .usage          = VMA_MEMORY_USAGE_AUTO,
+        .requiredFlags  = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        .preferredFlags = 0,
+        .memoryTypeBits = 0,
+        .pool           = nullptr,
+        .pUserData      = nullptr,
+        .priority       = 1.0f};
+
+    Image image;
+    image.format   = desc.format;
+    image.extent   = {desc.width, desc.height};
+    image.category = desc.category;
+    VK_TRY(vmaCreateImage(m_allocator, &info, &allocationInfo, &image.handle, &image.allocation,
+                          nullptr));
+
+    const VkImageViewCreateInfo viewInfo{
+        .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext            = nullptr,
+        .flags            = 0,
+        .image            = image.handle,
+        .viewType         = VK_IMAGE_VIEW_TYPE_2D,
+        .format           = desc.format,
+        .components       = {},
+        .subresourceRange = {.aspectMask     = desc.aspect,
+                             .baseMipLevel   = 0,
+                             .levelCount     = 1,
+                             .baseArrayLayer = 0,
+                             .layerCount     = 1}};
+    if (const VkResult result = vkCreateImageView(m_device, &viewInfo, nullptr, &image.view);
+        result != VK_SUCCESS) {
+        vmaDestroyImage(m_allocator, image.handle, image.allocation);
+        return std::unexpected(MakeVulkanError(result, "vkCreateImageView"));
+    }
+
+    VmaAllocationInfo allocated{};
+    vmaGetAllocationInfo(m_allocator, image.allocation, &allocated);
+    ReportSubAllocation(desc.category, image.allocation, allocated.size);
+    return image;
+}
+
+void Allocator::DestroyImage(Image& image) noexcept {
+    if (image.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, image.view, nullptr);
+        image.view = VK_NULL_HANDLE;
+    }
+    if (image.handle != VK_NULL_HANDLE) {
+        VmaAllocationInfo allocated{};
+        vmaGetAllocationInfo(m_allocator, image.allocation, &allocated);
+        ReleaseSubAllocation(image.category, image.allocation, allocated.size);
+        vmaDestroyImage(m_allocator, image.handle, image.allocation);
+        image.handle     = VK_NULL_HANDLE;
+        image.allocation = nullptr;
+    }
+}
+
+
 void Allocator::TrackPeak(usize_t index) noexcept {
     if (m_categoryBytes[index] > m_categoryPeak[index]) {
         m_categoryPeak[index] = m_categoryBytes[index];

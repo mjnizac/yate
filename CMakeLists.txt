@@ -62,6 +62,7 @@ add_custom_target(engine_shaders ALL DEPENDS ${ENGINE_SHADER_OUTPUTS})
 
 add_library(engine_objects OBJECT
     src/application.cpp
+    src/window_layer.cpp
     src/lua.cpp
     src/engine.cpp
     src/log.cpp
@@ -80,6 +81,9 @@ add_library(engine_objects OBJECT
     src/vulkan/allocator.cpp
     src/vulkan/buffer_pool.cpp
     src/vulkan/context.cpp
+    src/vulkan/render_pass.cpp
+    src/vulkan/swapchain.cpp
+    src/vulkan/window.cpp
     src/vulkan/device.cpp
     src/vulkan/pipeline.cpp
 )
@@ -145,6 +149,15 @@ add_executable(terrain_export
 )
 target_link_libraries(terrain_export PRIVATE engine)
 engine_set_warnings(terrain_export)
+
+# terrain_viewer runs in Graphics mode and needs a display. It still builds on a machine without one.
+add_executable(terrain_viewer
+    src/viewer_main.cpp
+    src/memory/new_delete.cpp   # Each module routes its own operator new (spec section 7.2).
+)
+target_link_libraries(terrain_viewer PRIVATE engine)
+engine_set_warnings(terrain_viewer)
+add_dependencies(terrain_viewer engine_shaders)
 
 # --- Tests ------------------------------------------------------------------------------------
 

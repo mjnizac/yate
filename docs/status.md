@@ -10,7 +10,7 @@
 | 6 | Lua bindings | **done**, accepted |
 | 7 | Sections and streaming | **done**, accepted |
 | 8 | Iterative kernels | **done**, accepted |
-| 9 | Viewer (Graphics mode) | not started |
+| 9 | Viewer (Graphics mode) | in progress: window, swapchain and frame loop done |
 
 ## Verification
 
@@ -27,6 +27,7 @@ test_noise .............. Passed
 test_kernels ............ Passed
 test_seams .............. Passed
 test_erosion ............ Passed
+test_viewer ............. Passed
 test_datasets ........... Passed
 ```
 
@@ -47,8 +48,7 @@ Build system with an `OBJECT` library linked as a DLL or a static library, gener
 macro family, asynchronous spdlog logging mirrored into Tracy, bit-flag exit codes, the platform
 module, and `Application` with its layer stack.
 
-`terrain_viewer` does not exist yet: Graphics mode is rejected by `engine::init` with an error that
-points here, because the window system arrives in milestone 9.
+`terrain_viewer` exists as of milestone 9 and opens a window, but it does not draw terrain yet.
 
 ## 2. Memory system
 
@@ -410,3 +410,54 @@ because an iterative op has no CPU reference worth maintaining:
   the distribution has a hard floor and a long tail; a 25 ms case read 31 ms inside a full suite run and
   24 ms on its own, a 37% "regression" caused by the test before it. The baseline comparison now uses the
   fastest pass, which is the only number that reflects the code rather than the machine.
+
+## 9. Viewer (in progress)
+
+Window, surface, swapchain, render pass and the frame loop. `terrain_viewer` opens a window and presents;
+it does not draw terrain yet. What is left is the renderer, the camera and input, hot reload, the
+parameter UI, and culling with distance-based resolution.
+
+**The ordering problem at startup, and what it cost.** A `VkSurfaceKHR` needs an instance. Choosing a
+physical device needs a surface, because presentation support is part of what makes a device acceptable
+in Graphics mode. So the caller cannot have a surface before calling `Context::Create`, and the context
+cannot pick a device before the caller has one. `ContextCreateInfo` therefore takes an optional
+`createSurface` callback: the context builds its instance, asks for the surface, and only then looks at
+devices. A plain function pointer rather than a `std::function`, because the context is constructed
+before the allocators a capturing callable would want.
+
+**GLFW is asked, not told.** The instance extensions for presentation come from
+`glfwGetRequiredInstanceExtensions` rather than from a `#if defined(_WIN32)` block, which both removes a
+platform conditional from `vulkan/context.cpp` and means the right answer on a platform nobody tested.
+
+**One depth buffer, two frames, N images.** The render pass has two external subpass dependencies, not
+one: colour waits on the presentation engine for the image just acquired, and depth waits on the previous
+frame's fragment tests, because there is a single depth buffer shared by every frame in flight. Without
+the second one, frame N's depth clear races frame N-1's depth tests.
+
+**The bug the test found.** `renderFinished` started out as one semaphore per frame slot, alongside
+`imageAvailable` and the fence. That is wrong, and only validation says so: the semaphore is signalled by
+the submit and waited on by the *present*, so it stays in use until the presentation engine is done with
+the image, which the frame fence knows nothing about — the fence reports that the submit finished. With
+three swapchain images and two frame slots, a slot comes round again while the present that used its
+semaphore is still pending:
+
+```
+vkQueueSubmit(): pSignalSemaphores[0] is being signaled by VkQueue, but it may still be in use by
+VkSwapchainKHR
+```
+
+It is now one semaphore per swapchain image. An image can only be reused after being acquired again, and
+acquiring it means its previous present completed. The Release build never showed this, because
+validation is a Debug-only layer here; it is exactly the class of error that ships silently and then
+corrupts a frame on someone else's driver.
+
+**Testable without a human.** `--frames N` presents that many frames and exits, and `test_viewer` uses it:
+it checks that the surface exists, that the swapchain is at least double buffered with a valid render
+pass, that frames are acquired and presented, that three forced resizes rebuild everything, that the loop
+still runs afterwards, and that the debug messenger reported nothing. On a machine with no display it
+returns 77 and ctest reports it as skipped rather than failed.
+
+### Still a human's job
+
+Nothing above says the picture is right, because nothing is drawn yet. Once the renderer lands, whether
+the terrain *looks* correct stays outside what these tests can judge.

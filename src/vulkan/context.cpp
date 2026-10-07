@@ -1,5 +1,7 @@
 #include <engine/vulkan/context.hpp>
 
+#include <engine/vulkan/window.hpp>
+
 #include <engine/assert.hpp>
 #include <engine/log.hpp>
 
@@ -257,9 +259,11 @@ Context& Context::operator=(Context&& other) noexcept {
 }
 
 Result<Context> Context::Create(const ContextCreateInfo& info) {
-    if (info.mode == RunMode::Graphics && info.surface == VK_NULL_HANDLE) {
+    if (info.mode == RunMode::Graphics && info.surface == VK_NULL_HANDLE
+        && info.createSurface == nullptr) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Vulkan,
-                    "Graphics mode needs the main surface before the device is selected");
+                    "Graphics mode needs the main surface, or a way to create it, before the device "
+                    "is selected");
     }
     if (info.mode == RunMode::Headless && info.surface != VK_NULL_HANDLE) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Vulkan,
@@ -276,8 +280,20 @@ Result<Context> Context::Create(const ContextCreateInfo& info) {
         return std::unexpected(status.error());
     }
 
+    // The surface, if the caller could not make one earlier. It belongs to the caller, not to the
+    // context: the context neither stores nor destroys it, it only needs it to judge devices.
+    VkSurfaceKHR surface = info.surface;
+    if (surface == VK_NULL_HANDLE && info.createSurface != nullptr) {
+        Result<VkSurfaceKHR> created = info.createSurface(context.m_instance,
+                                                          info.createSurfaceUser);
+        if (!created) {
+            return std::unexpected(created.error());
+        }
+        surface = *created;
+    }
+
     Result<PhysicalDeviceInfo> selected =
-        SelectPhysicalDevice(context.m_instance, info.mode, info.surface, info.forcedDeviceUuid);
+        SelectPhysicalDevice(context.m_instance, info.mode, surface, info.forcedDeviceUuid);
     if (!selected) {
         return std::unexpected(selected.error());
     }
@@ -358,15 +374,17 @@ Status Context::CreateInstance(const ContextCreateInfo& info) {
         layers.Add("VK_LAYER_KHRONOS_validation", false);
         extensions.Add(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, false);
     }
-    // Surface extensions are requested only in Graphics mode (spec section 5).
+    // Surface extensions are requested only in Graphics mode (spec section 5), and GLFW is asked which
+    // ones rather than told: it knows what the platform it was built for needs, and asking keeps the
+    // only platform #ifdef out of here. The names it returns are owned by GLFW and outlive this call.
     if (info.mode == RunMode::Graphics) {
-        extensions.Add(VK_KHR_SURFACE_EXTENSION_NAME, true);
-#if defined(_WIN32)
-        extensions.Add("VK_KHR_win32_surface", true);
-#else
-        extensions.Add("VK_KHR_xlib_surface", false);
-        extensions.Add("VK_KHR_wayland_surface", false);
-#endif
+        Result<std::pair<const char**, u32_t>> required = Window::RequiredInstanceExtensions();
+        if (!required) {
+            return std::unexpected(required.error());
+        }
+        for (u32_t i = 0; i < required->second; ++i) {
+            extensions.Add(required->first[i], true);
+        }
     }
 
     u32_t layerCount = 0;

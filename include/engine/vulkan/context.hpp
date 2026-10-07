@@ -31,7 +31,20 @@ struct ContextCreateInfo {
     std::string_view forcedDeviceUuid;
     /// Main window surface. Required in Graphics mode so presentation support can be verified
     /// before the device is chosen; must be `VK_NULL_HANDLE` in Headless mode.
+    ///
+    /// Either given directly, or produced by `createSurface` once the instance exists. The second form
+    /// resolves a genuine ordering problem: a surface needs an instance, and the device choice needs a
+    /// surface, so the caller cannot have made one before calling this. Passing a callback lets the
+    /// context create its instance, ask for the surface, and only then look at devices.
     VkSurfaceKHR surface = VK_NULL_HANDLE;
+
+    /// Creates the main surface from the instance the context just made. Null in Headless mode, and
+    /// ignored when `surface` is already set.
+    ///
+    /// A plain function pointer and a user pointer rather than a `std::function`: the context is
+    /// constructed before the allocators that a capturing callable would want, and this is called once.
+    Result<VkSurfaceKHR> (*createSurface)(VkInstance instance, void* user) = nullptr;
+    void* createSurfaceUser                                              = nullptr;
 
     /// Growth step of the section buffer pool.
     VkDeviceSize sectionBlockBytes = 256ull * 1024 * 1024;

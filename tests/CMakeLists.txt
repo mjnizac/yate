@@ -32,6 +32,12 @@ engine_add_unit_test(test_noise)
 engine_add_unit_test(test_kernels)
 engine_add_unit_test(test_seams)
 engine_add_unit_test(test_erosion)
+
+# Needs a display as well as a device. It reports 77 when there is no window system, so a headless
+# machine shows it as skipped rather than failed.
+engine_add_unit_test(test_viewer)
+add_dependencies(test_viewer engine_shaders)
+set_tests_properties(test_viewer PROPERTIES SKIP_RETURN_CODE 77)
 add_dependencies(test_compute_roundtrip engine_shaders)
 add_dependencies(test_noise engine_shaders)
 add_dependencies(test_kernels engine_shaders)

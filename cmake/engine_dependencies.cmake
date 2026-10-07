@@ -134,6 +134,22 @@ FetchContent_Declare(sol2
 )
 FetchContent_MakeAvailable(sol2)
 
+# --- GLFW ---------------------------------------------------------------------------------------
+# Viewer only, and never initialized in Headless mode. Built without its examples, tests or docs; the
+# Vulkan loader comes from the SDK, so GLFW does not need to find one itself.
+
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+set(GLFW_VULKAN_STATIC OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG        3.4
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(glfw)
+
 # --- Vulkan SDK ---------------------------------------------------------------------------------
 # Looked up last so a missing SDK is the only thing a fresh configure can fail on, after the
 # fetched dependencies are already in place.
@@ -145,7 +161,7 @@ find_package(Vulkan 1.4 REQUIRED COMPONENTS glslc)
 # VMA's single-header implementation does not compile clean under /W4, and it is not ours to fix.
 # Marking the fetched include directories as SYSTEM keeps third-party warnings out of our build log
 # without lowering the warning level on engine code.
-foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static sol2)
+foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static sol2 glfw)
     if(TARGET ${dependency})
         get_target_property(_dirs ${dependency} INTERFACE_INCLUDE_DIRECTORIES)
         if(_dirs)
@@ -170,6 +186,7 @@ target_link_libraries(engine_third_party INTERFACE
     Tracy::TracyClient
     lua_static
     sol2::sol2
+    glfw
 )
 target_compile_definitions(engine_third_party INTERFACE
     $<$<BOOL:${ENGINE_TRACY_CALLSTACKS}>:ENGINE_TRACY_CALLSTACKS>
