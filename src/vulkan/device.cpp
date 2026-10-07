@@ -448,6 +448,16 @@ Status Queue::WaitTimeline(u64_t value, u64_t timeoutNanoseconds) {
     return {};
 }
 
+void Queue::CollectGpuZones(VkCommandBuffer commands) {
+#ifdef TRACY_ENABLE
+    if (m_tracyContext != nullptr) {
+        TracyVkCollect(m_tracyContext, commands);
+    }
+#else
+    (void)commands;
+#endif
+}
+
 void Queue::CollectGpuZones() {
 #ifdef TRACY_ENABLE
     if (m_tracyContext == nullptr) {

@@ -330,13 +330,17 @@ Status Context::CreateMemory(const ContextCreateInfo& info) {
     return {};
 }
 
+void Context::UpdatePlots() {
+    (void)m_memory.UpdateBudgets();
+    m_sections.UpdatePlots();
+}
+
 void Context::EndTick() {
     m_compute.CollectGpuZones();
     if (m_graphics.IsValid()) {
         m_graphics.CollectGpuZones();
     }
-    (void)m_memory.UpdateBudgets();
-    m_sections.UpdatePlots();
+    UpdatePlots();
 }
 
 Status Context::CreateInstance(const ContextCreateInfo& info) {

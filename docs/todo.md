@@ -10,12 +10,12 @@
       large power of two before converting to float, which makes the noise periodic at a scale far
       beyond any map while keeping the float coordinates small. Decide before milestone 7, which is
       where large worlds arrive.
-- [ ] **Collecting GPU timestamps costs more than the GPU work.** The blur trace shows
-      `tracy::VkCtx::Collect` taking 1.54 ms over 17 calls, 22% of all the time inside
-      `RecordSection`, because each section submits its own one-shot command buffer just to read the
-      query pool back. The dispatches it measures take 4 to 12 microseconds. Collect once per job, or
-      every N sections, instead of once per section. Profiling-only overhead, so it does not affect a
-      `TRACY_ENABLE=OFF` build.
+- [ ] **Collecting GPU timestamps still costs more than the GPU work.** The extra submission is gone:
+      `Queue::CollectGpuZones` now records into the section's own command buffer and `RecordSection`
+      went from 6.92 ms to 3.22 ms over 16 sections. What remains is Tracy's own readback inside
+      `TracyVkCollect`, 107 microseconds of CPU per section against dispatches of 2 to 11
+      microseconds. Collecting every N sections would amortise it; measure whether the query pool
+      tolerates the backlog first. Profiling-only overhead either way.
 - [ ] Total export time is about 18% above the pre-milestone-5 baseline and the cause is not
       identified. Pipeline creation was one part and is fixed; the rest is unexplained. PNG encoding
       dominates the wall time, so measure before optimising.

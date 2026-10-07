@@ -591,7 +591,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                     context.Readback().ReleaseOldest();
                 }
 
-                context.EndTick();
+                context.UpdatePlots();
             }
 
             // The bands are complete across the full width: stream their rows out and reuse them.

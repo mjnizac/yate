@@ -103,6 +103,14 @@ public:
     /// Collects the GPU zones recorded since the previous call. No-op without Tracy.
     void CollectGpuZones();
 
+    /// Records the GPU zone collection into a command buffer the caller is already going to submit.
+    ///
+    /// Preferred over the self-submitting overload wherever there is a command buffer at hand: the
+    /// collection is a query-pool reset and a result copy, which cost the GPU nothing measurable, but
+    /// giving each one its own one-shot submission made collection the most expensive thing in a
+    /// section.
+    void CollectGpuZones(VkCommandBuffer commands);
+
 #    ifdef TRACY_ENABLE
     [[nodiscard]] TracyVkCtx TracyContext() const noexcept { return m_tracyContext; }
 #    endif

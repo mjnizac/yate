@@ -87,7 +87,12 @@ public:
     /// Blocks until every queue is idle. Called before tearing resources down.
     [[nodiscard]] Status WaitIdle();
 
-    /// Once per frame or tick: budgets, memory plots and Tracy GPU zone collection.
+    /// Refreshes the memory budgets and the Tracy memory plots. Cheap enough to call per section.
+    void UpdatePlots();
+
+    /// Once per frame or tick: `UpdatePlots` plus a flush of any GPU zones that no command buffer
+    /// picked up. Callers that record `Queue::CollectGpuZones` into their own command buffers only
+    /// need this at the end of the job, to flush the last batch.
     void EndTick();
 
 private:

@@ -234,6 +234,9 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
 #ifdef TRACY_ENABLE
     ZoneScopedN("terrain::RecordSection");
 #endif
+    // Reads back the previous section's GPU timestamps, riding along in this section's submission
+    // rather than paying for one of its own.
+    queue.CollectGpuZones(commands);
     timers.Reset(commands);
 
     std::pmr::vector<BufferState> state(compiled.buffers.size(), &memory::General().Resource());
