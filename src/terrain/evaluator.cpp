@@ -265,6 +265,9 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
             constants.inputHalos |= static_cast<u32_t>(dispatch.inputHalos[input]) << (input * 8);
         }
         for (u8_t input = 0; input < dispatch.inputCount; ++input) {
+            if ((dispatch.immediateInputs & (1u << input)) != 0) {
+                continue; // Folded into the kernel; the specialization says it reads no buffer.
+            }
             const u32_t buffer = dispatch.inputBuffers[input];
             if (buffer == kInvalidBuffer) {
                 return std::unexpected(MakeScriptError(

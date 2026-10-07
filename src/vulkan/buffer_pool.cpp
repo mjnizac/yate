@@ -61,6 +61,9 @@ SectionPool& SectionPool::operator=(SectionPool&& other) noexcept {
     m_blocks          = std::move(other.m_blocks);
     m_reserved        = other.m_reserved;
     m_used            = other.m_used;
+    // Carried over, not reset: a slot handed out before the move still names its block by id, and
+    // restarting the counter would let a new block take that id.
+    m_nextBlockId     = other.m_nextBlockId;
     other.m_allocator = nullptr;
     other.m_reserved  = 0;
     other.m_used      = 0;
@@ -90,10 +93,12 @@ Result<u32_t> SectionPool::AddBlock(terrain::Domain domain, VkDeviceSize minimum
     }
 
     m_reserved += size;
+    block.id = m_nextBlockId++;
+    const u32_t id = block.id;
     m_blocks.push_back(std::move(block));
     LOG_DEBUG("section pool added an {} block of {} MiB (now {} block(s))",
               domain == terrain::Domain::R2 ? "R2" : "R3", size / (1024 * 1024), m_blocks.size());
-    return static_cast<u32_t>(m_blocks.size() - 1);
+    return id;
 }
 
 void SectionPool::DestroyBlock(Block& block) noexcept {
@@ -139,7 +144,7 @@ Result<SectionSlot> SectionPool::Acquire(terrain::SizeClass sizeClass, VkDeviceS
                                .offset     = offset,
                                .size       = sizeClass.slotSize,
                                .allocation = allocation,
-                               .blockIndex = static_cast<u32_t>(i)};
+                               .blockId    = block.id};
         }
         if (attempt == 0) {
             Result<u32_t> added = AddBlock(sizeClass.domain, sizeClass.slotSize);
@@ -157,9 +162,10 @@ void SectionPool::Release(SectionSlot& slot) noexcept {
     if (!slot.IsValid()) {
         return;
     }
-    ENGINE_ASSERT_RETURN(, slot.blockIndex < m_blocks.size(), "section slot has block index {}",
-                         slot.blockIndex);
-    Block& block = m_blocks[slot.blockIndex];
+    Block* owner = FindBlock(slot.blockId);
+    ENGINE_ASSERT_RETURN(, owner != nullptr, "section slot names block {}, which the pool does not have",
+                         slot.blockId);
+    Block& block = *owner;
     m_allocator->ReleaseSubAllocation(CategoryOf(block.domain), slot.allocation, slot.size);
     vmaVirtualFree(block.virtualBlock, slot.allocation);
     block.used -= slot.size;
@@ -168,7 +174,20 @@ void SectionPool::Release(SectionSlot& slot) noexcept {
     slot = SectionSlot{};
 }
 
+SectionPool::Block* SectionPool::FindBlock(u32_t id) noexcept {
+    for (Block& block : m_blocks) {
+        if (block.id == id) {
+            return &block;
+        }
+    }
+    return nullptr;
+}
+
 void SectionPool::Trim() noexcept {
+    // Compacts freely: a live slot names its block by id, so moving the surviving blocks down does not
+    // invalidate it. Before that, a slot held an index and a trim could only be safe when nothing was
+    // live at all, which is why the evaluator could not release one graph's buffers and keep another
+    // graph's across a trim.
     usize_t kept = 0;
     for (usize_t i = 0; i < m_blocks.size(); ++i) {
         if (m_blocks[i].slotCount == 0) {
@@ -180,10 +199,6 @@ void SectionPool::Trim() noexcept {
         }
         ++kept;
     }
-    // Slot block indices are only valid between an Acquire and its Release, and Trim only runs
-    // when no slot is live in the blocks it removes, so surviving indices must not shift.
-    ENGINE_ASSERT(kept == m_blocks.size() || m_used == 0,
-                  "section pool trimmed while slots were live");
     m_blocks.resize(kept);
 }
 

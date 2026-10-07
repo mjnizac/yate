@@ -32,6 +32,9 @@ struct Dispatch {
     u8_t inputCount  = 0;
 
     std::array<u32_t, kMaxNodeInputs>   inputBuffers{};
+    /// Bit per input the compiler folded into the kernel as an immediate. Those slots are
+    /// deliberately left unbound, and the evaluator must not treat that as a planning failure.
+    u8_t immediateInputs = 0;
     /// Halo each input buffer was allocated with, which is this node's halo plus its own radius.
     std::array<u8_t, kMaxNodeInputs> inputHalos{};
     std::array<u32_t, kMaxNodeChannels> outputBuffers{};
@@ -63,6 +66,8 @@ struct CompiledOutput {
 /// What the compiler measured, logged and plotted after every compile (spec section 9).
 struct CompileStats {
     u32_t nodesIn        = 0;
+    /// Scalar operands folded into a kernel as an immediate, each one saving a dispatch and a buffer.
+    u32_t operandsFolded = 0;
     u32_t nodesFolded    = 0;
     u32_t nodesEliminated = 0;
     u32_t nodesDead      = 0;

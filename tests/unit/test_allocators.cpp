@@ -208,6 +208,55 @@ void TestUntrackedNew() {
 
 } // namespace
 
+/// Every allocator the engine exposes by name, checked as a set rather than one at a time.
+///
+/// This is what stands in for reading the Tracy memory view: the graphs there are drawn from exactly
+/// these numbers, so asserting the invariants in process says more than looking at a picture, and it
+/// keeps saying it on every run. What a human still has to do once is confirm the pools *appear* in the
+/// profiler under the names below; what they no longer have to do is eyeball the values.
+void TestEveryPoolReports() {
+    test::Section("every named CPU pool reports consistent values");
+
+    // The other tests construct allocators directly; these three are the process-wide ones the Tracy
+    // view groups by, so they need the memory system up.
+    REQUIRE_OK_VOID(memory::Init());
+
+    struct Named {
+        const char*          expected;
+        memory::Allocator*   allocator;
+    };
+    const Named pools[] = {
+        {"CPU/General", &memory::General()},
+        {"CPU/Lua", &memory::Lua()},
+        {"CPU/Frame arena", &memory::FrameArena()},
+    };
+
+    u64_t peakSum = 0;
+    for (const Named& pool : pools) {
+        // The name is the Tracy pool name, and Tracy requires the same pointer every time, so it must
+        // be a literal and it must be the one the view is grouped by.
+        CHECK(std::string_view{pool.allocator->Name()} == pool.expected);
+
+        const memory::AllocatorStats stats = pool.allocator->Stats();
+        // Reserved >= used is the invariant the `unused` plot is drawn from: a negative difference would
+        // render as a gap in the graph rather than as an error.
+        CHECK(stats.reserved >= stats.used);
+        CHECK(stats.peak >= stats.used);
+        if (stats.used == 0) {
+            CHECK_EQ(stats.allocationCount, usize_t{0});
+        } else {
+            CHECK(stats.allocationCount != 0);
+        }
+        peakSum += stats.peak;
+    }
+
+    // `PeakCpuBytes` is what the metadata sidecar reports, and it is the sum of the named pools plus
+    // the untracked `operator new` pool, so it can never be below the named pools alone.
+    CHECK(memory::PeakCpuBytes() >= peakSum);
+
+    memory::Shutdown();
+}
+
 int main() {
     REQUIRE_OK(log::Init(log::Config{}));
 
@@ -217,6 +266,7 @@ int main() {
     TestPmrAdapter();
     TestLuaAlloc();
     TestUntrackedNew();
+    TestEveryPoolReports();
 
     log::Shutdown();
     return test::Summary("test_allocators");

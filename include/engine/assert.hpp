@@ -36,7 +36,17 @@
             }                                                                                       \
         } while (false)
 #else
-#    define ENGINE_ASSERT(cond, ...) ((void)0)
+// Release keeps the condition and the message in an unevaluated operand instead of dropping the text
+// on the floor. `sizeof` never evaluates what it measures, so this costs nothing at run time, yet both
+// still have to compile: a condition that names a member that was renamed, or a message whose format
+// string stops matching its arguments, fails the Release build instead of rotting until someone builds
+// Debug.
+//
+// It does not make a side effect inside a condition safe. C++ cannot decide whether an expression has
+// one, so the rule stays a rule; what this does is guarantee the Release behaviour is "never
+// evaluated" rather than "never compiled", which is the half of the problem a macro can own.
+#    define ENGINE_ASSERT(cond, ...)                                                                \
+        ((void)sizeof(static_cast<bool>(cond)), (void)sizeof(::std::format(__VA_ARGS__)))
 #endif
 
 /// Recoverable invariant. Logs and returns `ret` in every build configuration.

@@ -15,6 +15,7 @@
 #include <engine/vulkan/pipeline.hpp>
 
 #include <cstring>
+#include <string_view>
 
 using namespace engine;
 using namespace engine::vulkan;
@@ -163,11 +164,61 @@ int main() {
         CHECK_EQ(context.Readback().ChunkCount(), usize_t{0});
         CHECK_EQ(context.Readback().LiveBytes(), VkDeviceSize{0});
 
+        // Every VRAM category, checked as a set. Same reasoning as the CPU sweep in test_allocators:
+        // the Tracy memory view is drawn from these numbers, so the invariants belong in a test rather
+        // than in a human's judgement of a graph.
+        test::Section("every VRAM category reports consistent values");
+        u64_t categorySum = 0;
+        for (u32_t i = 0; i < static_cast<u32_t>(VramCategory::Count); ++i) {
+            const VramCategory category = static_cast<VramCategory>(i);
+            const u64_t        used     = context.Memory().CategoryBytes(category);
+            const u64_t        reserved = context.Memory().CategoryReserved(category);
+            const u64_t        peak     = context.Memory().CategoryPeak(category);
+
+            // The name is the Tracy pool name and must be a stable literal, grouped under VRAM/.
+            const std::string_view name{ToString(category)};
+            CHECK(name.starts_with("VRAM/"));
+            CHECK(reserved >= used);
+            CHECK(peak >= used);
+            categorySum += used;
+        }
+        // Categories account for memory VMA handed out, which can never exceed what the driver handed
+        // VMA. A category counted twice, or counted against the wrong pool, shows up here.
+        CHECK(categorySum <= Allocator::ReservedDeviceMemory());
+        // Three categories are in use by this point and the rest are untouched, which is what says the
+        // sweep above is looking at live data and not at an empty table.
+        CHECK(context.Memory().CategoryBytes(VramCategory::Staging) != 0);
+        CHECK(context.Memory().CategoryBytes(VramCategory::Readback) != 0);
+        CHECK(context.Memory().CategoryBytes(VramCategory::SectionBuffersR2) != 0);
+        CHECK_EQ(context.Memory().CategoryBytes(VramCategory::Viewer), u64_t{0});
+
         test::Section("teardown accounting");
         context.Sections().Release(*slot);
         CHECK(!slot->IsValid());
         CHECK_EQ(context.Sections().UsedBytes(), VkDeviceSize{0});
         CHECK_EQ(context.Memory().CategoryBytes(VramCategory::SectionBuffersR2), u64_t{0});
+
+        // A trim with a live slot in another block must keep that slot usable. Slots name their block
+        // by id rather than by position, so compacting the vector cannot invalidate one; before that,
+        // a trim was only safe when the pool was completely empty.
+        Result<SectionSlot> survivor =
+            context.Sections().Acquire(ClassOf(coordsMapping, extent, kHalo), coordsBytes);
+        REQUIRE_OK(survivor);
+        Result<SectionSlot> doomed = context.Sections().Acquire(
+            ClassOf(Mapping{Domain::R3, 1}, SectionExtent{.x = 8, .y = 8, .z = 8}, 0),
+            8 * 8 * 8 * 4);
+        REQUIRE_OK(doomed);
+        CHECK_EQ(context.Sections().BlockCount(), usize_t{2});
+        const u32_t survivorBlock = survivor->blockId;
+        context.Sections().Release(*doomed);
+        context.Sections().Trim();
+        // The R3 block is gone, the R2 block moved down, and the surviving slot still names the same
+        // block it was handed.
+        CHECK_EQ(context.Sections().BlockCount(), usize_t{1});
+        CHECK_EQ(survivor->blockId, survivorBlock);
+        context.Sections().Release(*survivor);
+        CHECK(!survivor->IsValid());
+        CHECK_EQ(context.Sections().UsedBytes(), VkDeviceSize{0});
 
         // An empty block is only released on an explicit trim.
         CHECK_EQ(context.Sections().BlockCount(), usize_t{1});

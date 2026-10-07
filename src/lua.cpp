@@ -28,6 +28,7 @@
 #include <array>
 #include <cstdlib>
 #include <exception>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -93,13 +94,21 @@ Value Unwrap(Result<Value> result) {
 /// Lua owns its `short_src` buffer and recycles it, and a node outlives the call that created it, so
 /// the name has to be copied somewhere stable. There are only ever a handful of distinct chunk names
 /// in one run, and these are never freed, exactly like the interned Tracy pool names.
+///
+/// The table is shared by every state, because the point of interning is that two graphs built from the
+/// same file share one copy of its name. That makes it the one piece of mutable state here that is not
+/// per-script, so it takes a lock: the viewer reloads on a worker thread while a previous graph may
+/// still be alive, and an entry half-copied under a racing reader would hand out a dangling view. The
+/// lock is taken a handful of times per script and never on a hot path.
 [[nodiscard]] std::string_view InternChunkName(const char* name) {
     static constexpr usize_t kMaxNames  = 16;
     static constexpr usize_t kMaxLength = 128;
     static std::array<std::array<char, kMaxLength>, kMaxNames> names{};
     static usize_t                                            count = 0;
+    static std::mutex                                         mutex;
 
-    const std::string_view incoming = name != nullptr ? std::string_view{name} : "?";
+    const std::string_view      incoming = name != nullptr ? std::string_view{name} : "?";
+    std::lock_guard<std::mutex> lock(mutex);
     for (usize_t i = 0; i < count; ++i) {
         if (std::string_view{names[i].data()} == incoming) {
             return std::string_view{names[i].data()};

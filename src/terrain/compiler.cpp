@@ -42,7 +42,16 @@ struct NodeWork {
     std::array<u32_t, kMaxNodeChannels> lastReader{kInvalidBuffer, kInvalidBuffer};
     /// Bit per channel a requested output reads, so that channel's buffer survives the section.
     u8_t outputChannels = 0;
+    /// Operand this node folded into its kernel as an immediate, or `kMaxNodeInputs` for none. That
+    /// operand reads no buffer, so every pass that walks inputs has to skip it.
+    u8_t  immediateInput = static_cast<u8_t>(kMaxNodeInputs);
+    f32_t immediateValue = 0.0f;
 };
+
+/// True when this input was folded into the kernel and needs neither a buffer nor a producer.
+[[nodiscard]] b8_t IsImmediate(const std::pmr::vector<NodeWork>& work, u32_t node, u8_t input) {
+    return work[node].immediateInput == input;
+}
 
 /// Follows the replacement chain to the node that survived canonicalization.
 [[nodiscard]] u32_t Resolve(const std::pmr::vector<NodeWork>& work, u32_t node) {
@@ -238,6 +247,44 @@ void Canonicalize(const Graph& graph, std::pmr::vector<NodeWork>& work, CompileS
     }
 }
 
+/// Folds a scalar constant operand of an `Arith` node into the kernel as an immediate.
+///
+/// Without this, `height * 650.0 + 200.0` costs two `Const` dispatches that each fill a whole section
+/// buffer with one repeated number. On the `blended_r2` case that was 0.16 ms of 1.6 ms of GPU time for
+/// two floats, and the graph drops from 10 dispatches to 8.
+///
+/// It does not reduce peak VRAM, which was the guess before measuring: the planner was already reusing
+/// those buffers for later values, so the peak is set by how many values are live at once and not by
+/// how many constants the graph mentions.
+///
+/// Only a one-component constant qualifies, because the immediate is a single float and the kernel
+/// broadcasts it the way it broadcasts a one-component operand. A node whose operands are *both*
+/// constant never reaches here: folding already turned it into a constant itself.
+void FoldScalarOperands(const Graph& graph, std::pmr::vector<NodeWork>& work, CompileStats& stats) {
+#ifdef TRACY_ENABLE
+    ZoneScopedN("compiler: operand folding");
+#endif
+    for (u32_t index = 0; index < graph.NodeCount(); ++index) {
+        const Graph::Node& node = graph.NodeAt(index);
+        if (node.kind != OpKind::Arith || work[index].isConstant
+            || work[index].canonical != index) {
+            continue;
+        }
+        for (u8_t input = 0; input < node.inputCount; ++input) {
+            std::array<f32_t, kMaxComponents> value{};
+            u8_t                              components = 0;
+            if (!ConstantOf(graph, work, node.inputs[input], value, components)
+                || components != 1) {
+                continue;
+            }
+            work[index].immediateInput = input;
+            work[index].immediateValue = value[0];
+            ++stats.operandsFolded;
+            break;
+        }
+    }
+}
+
 /// Marks what the outputs reach, and which channels of it they need.
 void MarkReachable(const Graph& graph, std::pmr::vector<NodeWork>& work) {
 #ifdef TRACY_ENABLE
@@ -259,6 +306,9 @@ void MarkReachable(const Graph& graph, std::pmr::vector<NodeWork>& work) {
         }
         const Graph::Node& node = graph.NodeAt(index);
         for (u8_t i = 0; i < node.inputCount; ++i) {
+            if (IsImmediate(work, index, i)) {
+                continue; // Folded into the kernel, so its producer is not reached through here.
+            }
             const u32_t producer = Resolve(work, node.inputs[i].node);
             work[producer].reachable = true;
             work[producer].channelMask =
@@ -281,6 +331,9 @@ void PropagateHalo(const Graph& graph, std::pmr::vector<NodeWork>& work, Compile
         const Graph::Node& node     = graph.NodeAt(index);
         const u32_t        required = work[index].halo + node.radius;
         for (u8_t i = 0; i < node.inputCount; ++i) {
+            if (IsImmediate(work, index, i)) {
+                continue;
+            }
             const u32_t producer = Resolve(work, node.inputs[i].node);
             if (work[producer].halo < required) {
                 work[producer].halo = required;
@@ -377,6 +430,7 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         }
     }
 
+    FoldScalarOperands(graph, work, compiled.stats);
     MarkReachable(graph, work);
     for (u32_t index = 0; index < graph.NodeCount(); ++index) {
         if (!work[index].reachable) {
@@ -415,6 +469,19 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
             dispatch.channels[channel] = node.channels[channel];
         }
 
+        // A folded operand becomes a specialization value and a parameter word, which is the whole
+        // cost of the optimisation on this side.
+        if (work[index].immediateInput != static_cast<u8_t>(kMaxNodeInputs)) {
+            const ArithImmediate which = work[index].immediateInput == 0 ? ArithImmediate::Left
+                                                                        : ArithImmediate::Right;
+            dispatch.variant = PackVariant(node.variant & kVariantFieldMask,
+                                           static_cast<u32_t>(which));
+            dispatch.immediateInputs =
+                static_cast<u8_t>(1u << work[index].immediateInput);
+            std::memcpy(&dispatch.params[kArithImmediateWord], &work[index].immediateValue,
+                        sizeof(f32_t));
+        }
+
         // Ops that need world positions take the sample spacing as a parameter, baked here so the
         // evaluator does not have to know which ops care.
         if (const usize_t word = ResolutionParamWord(node.kind); word < kMaxNodeParams) {
@@ -428,6 +495,9 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
     for (const Dispatch& dispatch : compiled.dispatches) {
         const Graph::Node& node = graph.NodeAt(dispatch.node);
         for (u8_t i = 0; i < node.inputCount; ++i) {
+            if (IsImmediate(work, dispatch.node, i)) {
+                continue;
+            }
             const u32_t producer = Resolve(work, node.inputs[i].node);
             work[producer].lastReader[node.inputs[i].channel] = work[dispatch.node].dispatch;
         }
@@ -443,6 +513,11 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         // halo each was allocated with. The kernel needs that halo because a wider border means a
         // different row stride, which only a neighbourhood op ever sees.
         for (u8_t input = 0; input < node.inputCount; ++input) {
+            if (IsImmediate(work, dispatch.node, input)) {
+                // Left unbound on purpose: the specialization says this slot is an immediate, and the
+                // kernel never dereferences it.
+                continue;
+            }
             const u32_t producer = Resolve(work, node.inputs[input].node);
             dispatch.inputBuffers[input] = work[producer].buffers[node.inputs[input].channel];
             dispatch.inputHalos[input]   = static_cast<u8_t>(work[producer].halo);
@@ -461,6 +536,9 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         // its buffer. A channel a requested output reads is never released: it has to survive the
         // whole section.
         for (u8_t input = 0; input < node.inputCount; ++input) {
+            if (IsImmediate(work, dispatch.node, input)) {
+                continue;
+            }
             const u32_t producer = Resolve(work, node.inputs[input].node);
             const u8_t  channel  = node.inputs[input].channel;
             if ((work[producer].outputChannels & (1u << channel)) != 0) {
@@ -499,10 +577,12 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
     compiled.stats.peakSectionBytes = planner.PeakBytes();
     compiled.stats.milliseconds     = Milliseconds(Clock::now() - start).count();
 
-    LOG_INFO("graph compiled in {:.2f} ms: {} node(s) -> {} dispatch(es) ({} folded, {} eliminated, "
+    LOG_INFO("graph compiled in {:.2f} ms: {} node(s) -> {} dispatch(es) ({} folded, {} operand(s) "
+             "inlined, {} eliminated, "
              "{} dead), {} buffer(s), max halo {}, peak {} KiB per section",
              compiled.stats.milliseconds, compiled.stats.nodesIn, compiled.stats.dispatchCount,
-             compiled.stats.nodesFolded, compiled.stats.nodesEliminated, compiled.stats.nodesDead,
+             compiled.stats.nodesFolded, compiled.stats.operandsFolded,
+             compiled.stats.nodesEliminated, compiled.stats.nodesDead,
              compiled.stats.bufferCount, compiled.stats.maxHalo,
              compiled.stats.peakSectionBytes / 1024);
     return compiled;

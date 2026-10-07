@@ -28,7 +28,9 @@ struct SectionSlot {
     /// Slot size, which is the size class and is >= the requested value size.
     VkDeviceSize         size       = 0;
     VmaVirtualAllocation allocation = nullptr;
-    u32_t                blockIndex = kInvalidBlock;
+    /// Identity of the owning block, not its position. A `Trim` compacts the block vector, so an index
+    /// would dangle; an id survives it, which is what lets a slot outlive a trim of other blocks.
+    u32_t blockId = kInvalidBlock;
 
     [[nodiscard]] b8_t IsValid() const noexcept { return buffer != VK_NULL_HANDLE; }
 };
@@ -82,16 +84,22 @@ private:
         terrain::Domain domain       = terrain::Domain::R2;
         VkDeviceSize    used         = 0;
         usize_t         slotCount    = 0;
+        /// Never reused, so a stale slot cannot resolve to a different block.
+        u32_t id = kInvalidBlock;
     };
 
     [[nodiscard]] Result<u32_t> AddBlock(terrain::Domain domain, VkDeviceSize minimumSize);
     void                        DestroyBlock(Block& block) noexcept;
+
+    /// Linear, because a pool holds single digits of 256 MiB blocks.
+    [[nodiscard]] Block* FindBlock(u32_t id) noexcept;
 
     Allocator*                  m_allocator = nullptr;
     SectionPoolConfig           m_config;
     std::pmr::vector<Block>     m_blocks;
     VkDeviceSize                m_reserved = 0;
     VkDeviceSize                m_used     = 0;
+    u32_t                       m_nextBlockId = 0;
 };
 
 /// Persistently mapped ring buffer for staging uploads or readback.

@@ -6,6 +6,8 @@
 
 #include "test_support.hpp"
 
+#include <cstring>
+
 #include <engine/log.hpp>
 #include <engine/memory/general.hpp>
 #include <engine/terrain/compiler.hpp>
@@ -178,6 +180,76 @@ void TestConstantFolding() {
     // Folding does not remove the dispatches in this version; it marks what *could* be removed.
     // What must hold is that the graph still produces the requested output.
     CHECK_EQ(compiled->outputs.size(), usize_t{1});
+}
+
+/// A scalar constant operand becomes an immediate in the kernel rather than a dispatch of its own.
+void TestScalarOperandFolding() {
+    test::Section("scalar operand folding");
+
+    // `height * 4` and `6 - height`: one constant on each side, so both the left and the right
+    // immediate variants are covered.
+    Graph         graph;
+    Result<Value> height = AddHeight(graph, 1);
+    REQUIRE_OK_VOID(height);
+    Result<Value> four = graph.AddConst(Mapping{Domain::R2, 1}, {4.0f, 0, 0, 0}, At(2));
+    REQUIRE_OK_VOID(four);
+    Result<Value> six = graph.AddConst(Mapping{Domain::R2, 1}, {6.0f, 0, 0, 0}, At(3));
+    REQUIRE_OK_VOID(six);
+    Result<Value> scaled = graph.AddArith(ArithOp::Multiply, *height, *four, At(4));
+    REQUIRE_OK_VOID(scaled);
+    Result<Value> flipped = graph.AddArith(ArithOp::Subtract, *six, *scaled, At(5));
+    REQUIRE_OK_VOID(flipped);
+    REQUIRE_OK_VOID(graph.RequestOutput("height", *flipped, -10.0f, 10.0f));
+
+    Result<CompiledGraph> compiled = Compile(graph, Options());
+    REQUIRE_OK_VOID(compiled);
+
+    CHECK_EQ(compiled->stats.operandsFolded, u32_t{2});
+    // Noise, Multiply, Subtract. Both Const nodes became dead once their only consumer stopped
+    // reading them, which is the saving: two fewer dispatches and two fewer buffers to fill.
+    CHECK_EQ(compiled->stats.dispatchCount, u32_t{3});
+    CHECK_EQ(compiled->stats.nodesDead, u32_t{2});
+
+    for (const Dispatch& dispatch : compiled->dispatches) {
+        CHECK(dispatch.kind != OpKind::Const);
+        if (dispatch.kind != OpKind::Arith) {
+            continue;
+        }
+        // Exactly one operand folded, and the folded slot is deliberately unbound.
+        const u8_t folded = dispatch.immediateInputs;
+        CHECK(folded == 0x1 || folded == 0x2);
+        const u8_t slot = folded == 0x1 ? 0 : 1;
+        CHECK_EQ(dispatch.inputBuffers[slot], kInvalidBuffer);
+        CHECK(dispatch.inputBuffers[1 - slot] != kInvalidBuffer);
+        // The variant carries the operation in field 0 and the immediate side in field 1, and the
+        // value itself travels as float bits in the parameter word the kernel reads.
+        const u32_t side = (dispatch.variant >> kVariantFieldBits) & kVariantFieldMask;
+        CHECK_EQ(side, static_cast<u32_t>(slot == 0 ? ArithImmediate::Left : ArithImmediate::Right));
+        f32_t immediate = 0.0f;
+        std::memcpy(&immediate, &dispatch.params[kArithImmediateWord], sizeof(f32_t));
+        CHECK(immediate == 4.0f || immediate == 6.0f);
+    }
+
+    // A vector constant is not foldable: the immediate is one float, and the kernel broadcasts it the
+    // way it broadcasts a one-component operand, so a two-component operand must keep its buffer.
+    Graph         vectorGraph;
+    Result<Value> noise = AddHeight(vectorGraph, 6);
+    REQUIRE_OK_VOID(noise);
+    Result<Value> gradient = vectorGraph.Channel(*noise, 1);
+    REQUIRE_OK_VOID(gradient);
+    Result<Value> pair =
+        vectorGraph.AddConst(Mapping{Domain::R2, 2}, {1.0f, 2.0f, 0, 0}, At(7));
+    REQUIRE_OK_VOID(pair);
+    Result<Value> combined = vectorGraph.AddArith(ArithOp::Add, *gradient, *pair, At(8));
+    REQUIRE_OK_VOID(combined);
+    REQUIRE_OK_VOID(vectorGraph.RequestOutput("gradient", *combined, -1.0f, 1.0f));
+
+    Result<CompiledGraph> vectorCompiled = Compile(vectorGraph, Options());
+    REQUIRE_OK_VOID(vectorCompiled);
+    CHECK_EQ(vectorCompiled->stats.operandsFolded, u32_t{0});
+    for (const Dispatch& dispatch : vectorCompiled->dispatches) {
+        CHECK_EQ(dispatch.immediateInputs, u8_t{0});
+    }
 }
 
 void TestCommonSubexpressionElimination() {
@@ -477,6 +549,7 @@ int main() {
     TestMappingErrors();
     TestBroadcast();
     TestConstantFolding();
+    TestScalarOperandFolding();
     TestCommonSubexpressionElimination();
     TestDeadNodeRemoval();
     TestChannelMask();

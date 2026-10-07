@@ -65,6 +65,15 @@ enum class NodeClass : u8_t {
 /// Operation an `Arith` node performs. The value is the kernel's specialization constant.
 enum class ArithOp : u32_t { Add = 0, Subtract, Multiply, Divide, Minimum, Maximum };
 
+/// Which operand of an `Arith` node the compiler folded into the kernel as an immediate.
+///
+/// Set by the compiler, never by a script: a constant operand arrives as its own node, and folding it
+/// in is what removes that node's dispatch and its section buffer.
+enum class ArithImmediate : u32_t { None = 0, Left, Right };
+
+/// Word of `Node::params` the folded immediate is stored in, as float bits.
+inline constexpr usize_t kArithImmediateWord = 3;
+
 /// Curve a `Curve` node applies.
 enum class CurveOp : u32_t { Clamp = 0, Remap, Power, Smoothstep };
 

@@ -67,7 +67,8 @@ constexpr OpInfo kOps[] = {
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
-     .specFieldCount = 1},
+     // Field 0 is the operation, field 1 says which operand the compiler folded into an immediate.
+     .specFieldCount = 2},
     {.kind           = OpKind::Curve,
      .name           = "Curve",
      .shader         = "ops/curve.comp.spv",
