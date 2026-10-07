@@ -116,6 +116,17 @@ constexpr OpInfo kOps[] = {
      // it against a CPU box blur of its own.
      .hasReference   = false,
      .specFieldCount = 0},
+    {.kind           = OpKind::ThermalErosion,
+     .name           = "ThermalErosion",
+     .shader         = "ops/thermal_erosion.comp.spv",
+     .nodeClass      = NodeClass::Iterative,
+     .maxInputs      = 1,
+     .maxChannels    = 1,
+     .resolutionWord = kMaxNodeParams,
+     // No CPU reference: it is iterative, so folding it would mean running the whole scheme on the
+     // host, and it can never have constant inputs in practice anyway.
+     .hasReference   = false,
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 

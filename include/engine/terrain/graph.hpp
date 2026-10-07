@@ -17,9 +17,25 @@ inline constexpr usize_t kMaxNodeChannels = 2;
 /// Words of op parameters, matching `vulkan::KernelPushConstants::params`.
 inline constexpr usize_t kMaxNodeParams = 10;
 
+/// Parameter word the evaluator overwrites with the current iteration index of an iterative op.
+///
+/// Reserved rather than allocated per op: the evaluator writes it without knowing which op it is
+/// running, so no op may use it for anything else. The last word, to stay out of the way of the
+/// parameters a builder packs from the front.
+inline constexpr usize_t kIterationParamWord = kMaxNodeParams - 1;
+
 /// Largest blur radius a node may ask for. Capped because a halo is carried in one byte of the
 /// kernel interface, and because the padded section grows as `(s + 2h)^n`.
 inline constexpr u32_t kMaxBlurRadius = 32;
+
+/// Largest halo any value may carry, set by the kernel interface: one byte per input slot.
+///
+/// An iterative op moves material one cell per iteration, so its influence radius *is* its iteration
+/// count, and that radius is its halo. There is no way around it that keeps section borders
+/// bit-identical: a section must compute every sample that can still affect its interior after the
+/// last iteration. The cost is visible rather than hidden, and a job that asks for more than this is
+/// refused with the arithmetic rather than quietly producing seams.
+inline constexpr u32_t kMaxHalo = 255;
 
 /// Every operation the graph can hold. Each one maps to one precompiled compute kernel, with
 /// variants selected by specialization constants (spec section 9, stage 5).
@@ -44,6 +60,9 @@ enum class OpKind : u16_t {
     Vector,
     /// Box blur over a declared radius. The only neighbourhood op so far.
     Blur,
+    /// Thermal erosion: material slides downhill wherever the slope passes the talus angle.
+    /// Iterative, one cell of influence per iteration.
+    ThermalErosion,
     Count,
 };
 
@@ -137,7 +156,10 @@ public:
         /// Specialization value selecting the kernel variant, for example the arithmetic op.
         u32_t variant = 0;
         /// Radius this node reads around a sample. Zero for pointwise ops.
-        u32_t radius       = 0;
+        u32_t radius = 0;
+        /// Times the kernel runs over a ping-ponged pair of buffers. One for everything that is not
+        /// iterative.
+        u32_t iterations = 1;
         u8_t  inputCount   = 0;
         u8_t  channelCount = 1;
 
@@ -214,6 +236,21 @@ public:
     /// Box blur of `radius` taps on each side. Neighbourhood: this is what gives the producing node
     /// a halo, and the compiler propagates it backwards from here.
     [[nodiscard]] Result<Value> AddBlur(Value input, u32_t radius, SourceLocation location);
+
+    struct ThermalParams {
+        /// Iterations to run. Also the influence radius, and therefore the halo.
+        u32_t iterations = 16;
+        /// Slope, as a height difference per cell, below which nothing moves. The talus angle.
+        f32_t talus = 0.02f;
+        /// Fraction of the excess height moved per iteration, in (0, 0.5]. Above 0.5 the scheme
+        /// oscillates instead of settling, because a cell can overshoot its neighbour.
+        f32_t strength = 0.25f;
+    };
+
+    /// Thermal erosion of an `Rn -> R1` height field. Iterative: `iterations` dispatches over a
+    /// ping-ponged pair of buffers, with a halo equal to the iteration count.
+    [[nodiscard]] Result<Value> AddThermalErosion(Value input, const ThermalParams& params,
+                                                 SourceLocation location);
 
     /// Assembles 2 to 4 scalar values of the same domain into one `Rn -> Rm`.
     [[nodiscard]] Result<Value> AddCombine(const Value* components, u8_t count,

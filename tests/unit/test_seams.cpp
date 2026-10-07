@@ -19,7 +19,6 @@
 #include <engine/engine.hpp>
 #include <engine/memory/general.hpp>
 #include <engine/terrain/compiler.hpp>
-#include <engine/terrain/evaluator.hpp>
 #include <engine/terrain/graph.hpp>
 
 #include <cstring>
@@ -39,130 +38,13 @@ constexpr i32_t kOriginY = -517;
 constexpr i32_t kOriginZ = -2049;
 constexpr u32_t kSeed    = 0x5EA11234u;
 
+/// Passed to every evaluation, so both layouts see the same world.
+constexpr std::array<i32_t, 3> kOrigin{kOriginX, kOriginY, kOriginZ};
+
 [[nodiscard]] SourceLocation At(u32_t line) { return SourceLocation{"test_seams", line}; }
 
-/// A rectangular f32 field, indexed the way a section buffer is: x fastest, then z, then y.
-struct Field {
-    u32_t                   width  = 0;
-    u32_t                   height = 0;
-    u32_t                   depth  = 1;
-    std::pmr::vector<f32_t> samples{&memory::General().Resource()};
-
-    void Resize(u32_t w, u32_t d, u32_t h, u32_t components) {
-        width  = w;
-        depth  = d;
-        height = h;
-        samples.assign(static_cast<usize_t>(w) * d * h * components, 0.0f);
-    }
-};
-
-/// Evaluates `graph` over `extent`-sized sections covering a `width x depth x height` region, and
-/// stitches the interiors into one field.
-///
-/// Mirrors the exporter's loop: one submission per section, every section dispatched over its full
-/// extent with only the useful interior kept, so an edge section computes exactly what an interior one
-/// does.
-[[nodiscard]] Result<Field> Evaluate(Context& context, KernelLibrary& kernels, const Graph& graph,
-                                     SectionExtent extent, u32_t width, u32_t depth, u32_t height,
-                                     f32_t resolution) {
-    Result<CompiledGraph> compiled =
-        Compile(graph, CompileOptions{.extent = extent, .resolution = resolution});
-    if (!compiled) {
-        return std::unexpected(compiled.error());
-    }
-    Result<SectionResources> resources = SectionResources::Create(context, *compiled);
-    if (!resources) {
-        return std::unexpected(resources.error());
-    }
-    Result<DispatchTimers> timers = DispatchTimers::Create(context, compiled->stats.dispatchCount);
-    if (!timers) {
-        return std::unexpected(timers.error());
-    }
-
-    const CompiledOutput& output     = compiled->outputs[0];
-    const u8_t            components = output.mapping.components;
-    // Output buffers always have halo zero, because nothing reads them with a radius, so a section's
-    // rows are exactly `extent` wide.
-    const u64_t sectionBytes =
-        ValueSize(output.mapping, extent, compiled->buffers[output.buffer].halo);
-
-    Field field;
-    field.Resize(width, depth, height, components);
-
-    Queue& queue = context.ComputeQueue();
-    for (u32_t originY = 0; originY < depth; originY += extent.y) {
-        for (u32_t originZ = 0; originZ < height; originZ += extent.z) {
-            for (u32_t originX = 0; originX < width; originX += extent.x) {
-                Result<VkCommandBuffer> commands = queue.BeginOneShot();
-                if (!commands) {
-                    return std::unexpected(commands.error());
-                }
-
-                const SectionJob job{
-                    .origin = {kOriginX + static_cast<i32_t>(originX),
-                               kOriginY + static_cast<i32_t>(originY),
-                               kOriginZ + static_cast<i32_t>(originZ)},
-                    .extent = extent,
-                    .seed   = kSeed};
-                if (Status recorded = RecordSection(queue, kernels, *compiled, *resources, *timers,
-                                                    *commands, job);
-                    !recorded) {
-                    return std::unexpected(recorded.error());
-                }
-
-                const SectionSlot& slot = resources->Slot(output.buffer);
-                ComputeToTransferBarrier(*commands, slot.buffer, slot.offset, slot.size);
-                Result<VkDeviceSize> readback = context.Readback().Reserve(sectionBytes, 16);
-                if (!readback) {
-                    return std::unexpected(readback.error());
-                }
-                const VkBufferCopy copy{
-                    .srcOffset = slot.offset, .dstOffset = *readback, .size = sectionBytes};
-                vkCmdCopyBuffer(*commands, slot.buffer, context.Readback().GetBuffer().handle, 1,
-                                &copy);
-
-                Result<u64_t> submitted = queue.EndAndSubmit(*commands);
-                if (!submitted) {
-                    return std::unexpected(submitted.error());
-                }
-                if (Status waited =
-                        queue.WaitTimeline(*submitted, test::kGpuTimeoutNanoseconds);
-                    !waited) {
-                    return std::unexpected(waited.error());
-                }
-                if (Status invalidated = context.Memory().InvalidateBuffer(
-                        context.Readback().GetBuffer(), *readback, sectionBytes);
-                    !invalidated) {
-                    return std::unexpected(invalidated.error());
-                }
-                const auto* samples =
-                    static_cast<const f32_t*>(context.Readback().MappedAt(*readback));
-
-                // Copy only the part of the section that lies inside the region. An edge section
-                // computes a full extent and the overhang is discarded, which is the behaviour the
-                // seam test has to see through.
-                const u32_t columns = std::min(extent.x, width - originX);
-                const u32_t rows    = std::min(extent.z, height - originZ);
-                const u32_t layers  = std::min(extent.y, depth - originY);
-                for (u32_t layer = 0; layer < layers; ++layer) {
-                    for (u32_t row = 0; row < rows; ++row) {
-                        const u64_t source =
-                            ((static_cast<u64_t>(layer) * extent.z + row) * extent.x) * components;
-                        const u64_t target =
-                            (((static_cast<u64_t>(originY) + layer) * height + originZ + row)
-                                 * width
-                             + originX)
-                            * components;
-                        std::memcpy(field.samples.data() + target, samples + source,
-                                    static_cast<usize_t>(columns) * components * sizeof(f32_t));
-                    }
-                }
-                context.Readback().ReleaseOldest();
-            }
-        }
-    }
-    return field;
-}
+using test::Evaluate;
+using test::Field;
 
 /// Reports the first differing sample and how many differ, because "they differ" is not actionable
 /// and the position says immediately whether the break is on a section border.
@@ -271,6 +153,31 @@ void Compare(const char* label, const Field& a, const Field& b, u32_t components
     return graph.RequestOutput("height", *blended, -1.0f, 1.0f);
 }
 
+/// Noise run through thermal erosion. The case that matters most: an iterative op accumulates one
+/// cell of influence per iteration, so its halo is its iteration count and every one of those extra
+/// samples has to agree with what the neighbouring section computes in its own interior. An
+/// off-by-one in the state halo shows up here and nowhere else.
+[[nodiscard]] Status BuildErodedGraph(Graph& graph, Domain domain, u32_t iterations) {
+    Graph::NoiseParams noise;
+    noise.domain    = domain;
+    noise.frequency = 0.03f;
+    noise.octaves   = 3;
+    noise.amplitude = 1.0f;
+    Result<Value> value = graph.AddNoise(noise, At(8));
+    if (!value) {
+        return std::unexpected(value.error());
+    }
+    Graph::ThermalParams thermal;
+    thermal.iterations = iterations;
+    thermal.talus      = 0.01f;
+    thermal.strength   = 0.4f;
+    Result<Value> eroded = graph.AddThermalErosion(*value, thermal, At(9));
+    if (!eroded) {
+        return std::unexpected(eroded.error());
+    }
+    return graph.RequestOutput("height", *eroded, -1.0f, 1.0f);
+}
+
 /// Runs `graph` whole and tiled over the same region and demands the same bytes.
 void CheckSeams(Context& context, KernelLibrary& kernels, const char* label, const Graph& graph,
                 SectionExtent whole, SectionExtent tiled) {
@@ -278,9 +185,9 @@ void CheckSeams(Context& context, KernelLibrary& kernels, const char* label, con
     const u32_t depth  = whole.y;
     const u32_t height = whole.z;
 
-    Result<Field> single = Evaluate(context, kernels, graph, whole, width, depth, height, 1.0f);
+    Result<Field> single = Evaluate(context, kernels, graph, whole, width, depth, height, 1.0f, kOrigin, kSeed);
     REQUIRE_OK_VOID(single);
-    Result<Field> split = Evaluate(context, kernels, graph, tiled, width, depth, height, 1.0f);
+    Result<Field> split = Evaluate(context, kernels, graph, tiled, width, depth, height, 1.0f, kOrigin, kSeed);
     REQUIRE_OK_VOID(split);
 
     const u8_t components =
@@ -314,12 +221,10 @@ int main() {
             // A region that is not a whole number of sections, so every edge section has overhang
             // that must be discarded rather than written.
             Result<Field> single = Evaluate(context, kernels, noise,
-                                            SectionExtent{.x = 128, .y = 1, .z = 128}, 100, 1, 70,
-                                            1.0f);
+                                            SectionExtent{.x = 128, .y = 1, .z = 128}, 100, 1, 70, 1.0f, kOrigin, kSeed);
             REQUIRE_OK(single);
             Result<Field> split = Evaluate(context, kernels, noise,
-                                           SectionExtent{.x = 32, .y = 1, .z = 32}, 100, 1, 70,
-                                           1.0f);
+                                           SectionExtent{.x = 32, .y = 1, .z = 32}, 100, 1, 70, 1.0f, kOrigin, kSeed);
             REQUIRE_OK(split);
             Compare("noise 100x70 against 32-wide sections", *single, *split, 1);
         }
@@ -359,14 +264,35 @@ int main() {
                        SectionExtent{.x = 8, .y = 8, .z = 8});
         }
 
+        test::Section("an iterative op does not create a seam");
+        // One, two and three iterations cover every shape the ping-pong takes: no scratch buffer, one,
+        // and the alternating pair. Larger counts then check that the state halo keeps up.
+        for (const u32_t iterations : {1u, 2u, 3u, 8u, 24u}) {
+            Graph eroded;
+            REQUIRE_OK(BuildErodedGraph(eroded, Domain::R2, iterations));
+            char label[112];
+            std::snprintf(label, sizeof(label),
+                          "thermal erosion, %u iteration(s), 128x128 against 4x4 of 32", iterations);
+            CheckSeams(context, kernels, label, eroded,
+                       SectionExtent{.x = 128, .y = 1, .z = 128},
+                       SectionExtent{.x = 32, .y = 1, .z = 32});
+        }
+        {
+            Graph erodedVolume;
+            REQUIRE_OK(BuildErodedGraph(erodedVolume, Domain::R3, 4));
+            CheckSeams(context, kernels, "R3 thermal erosion, 4 iterations, 32^3 against 4x4x4 of 8",
+                       erodedVolume, SectionExtent{.x = 32, .y = 32, .z = 32},
+                       SectionExtent{.x = 8, .y = 8, .z = 8});
+        }
+
         test::Section("the same evaluation twice gives the same bytes");
         {
             Graph blended;
             REQUIRE_OK(BuildBlendGraph(blended));
             const SectionExtent extent{.x = 64, .y = 1, .z = 64};
-            Result<Field> first = Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f);
+            Result<Field> first = Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
             REQUIRE_OK(first);
-            Result<Field> second = Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f);
+            Result<Field> second = Evaluate(context, kernels, blended, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
             REQUIRE_OK(second);
             Compare("two runs of the same graph", *first, *second, 1);
         }

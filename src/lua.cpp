@@ -617,6 +617,27 @@ void Bind(sol::state& state, Graph& graph) {
         return Handle{Unwrap(graph.AddBlur(input, radius, location))};
     });
 
+    // --- Erosion --------------------------------------------------------------------------------
+    //
+    // The first iterative op. `iterations` is not just a quality knob: it is the influence radius, so
+    // it is also the halo every section has to compute beyond its own interior, and the binding says so
+    // when a script asks for more than the interface can carry.
+
+    sol::table erosion = state.create_named_table("Erosion");
+    erosion.set_function("Thermal", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Erosion.Thermal", location);
+        const Value          input = args.Input("input");
+
+        Graph::ThermalParams params;
+        params.iterations = args.Count("iterations", 16, 1, terrain::kMaxHalo);
+        params.talus      = args.Float("talus", 0.02);
+        params.strength   = args.Float("strength", 0.25);
+        args.Finish();
+
+        return Handle{Unwrap(graph.AddThermalErosion(input, params, location))};
+    });
+
     // --- Vec ------------------------------------------------------------------------------------
 
     sol::table vec = state.create_named_table("Vec");

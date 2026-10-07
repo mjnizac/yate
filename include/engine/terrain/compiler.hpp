@@ -38,6 +38,25 @@ struct Dispatch {
     /// Halo each input buffer was allocated with, which is this node's halo plus its own radius.
     std::array<u8_t, kMaxNodeInputs> inputHalos{};
     std::array<u32_t, kMaxNodeChannels> outputBuffers{};
+    /// Times to run this kernel, each run reading what the previous one wrote. One for everything that
+    /// is not iterative.
+    u32_t iterations = 1;
+    /// Buffers the iterations ping-pong between, before the last one writes `outputBuffers[0]`.
+    ///
+    /// Two for three or more iterations, one for exactly two, none otherwise: the last iteration always
+    /// writes the node's own output, so the pair only has to hold what is still in flight.
+    std::array<u32_t, 2> scratchBuffers{kInvalidBuffer, kInvalidBuffer};
+    u8_t                 scratchCount = 0;
+    /// Halo the intermediate state carries, which is this dispatch's halo plus its influence radius.
+    ///
+    /// Not the same as `halo`, and the difference is the whole correctness argument for an iterative
+    /// op. A sample is wrong after one iteration if a neighbour it needed lay outside the computed
+    /// region, and that error walks one cell inward per iteration. Computing the state over a halo of
+    /// `halo + radius` means that after `radius` iterations the wrongness has reached exactly the
+    /// boundary of `halo` and no further, so what the next dispatch reads is exact. One less and the
+    /// outermost ring of the output would be subtly wrong, which is precisely the kind of error that
+    /// only shows up as a seam between sections.
+    u32_t stateHalo = 0;
     std::array<Mapping, kMaxNodeChannels> channels{};
     std::array<u32_t, kMaxNodeParams>   params{};
 

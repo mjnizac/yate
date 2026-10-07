@@ -5,11 +5,18 @@
 
 #include "test_support.hpp"
 
+#include <engine/memory/general.hpp>
+#include <engine/terrain/compiler.hpp>
+#include <engine/terrain/evaluator.hpp>
+#include <engine/terrain/graph.hpp>
 #include <engine/vulkan/buffer_pool.hpp>
 #include <engine/vulkan/context.hpp>
 #include <engine/vulkan/pipeline.hpp>
 
+#include <algorithm>
 #include <cstring>
+#include <memory_resource>
+#include <vector>
 
 namespace test {
 
@@ -28,6 +35,134 @@ inline void CheckNoValidationErrors() {
         std::printf("FAIL the Vulkan debug messenger reported %llu error(s); see the log above\n",
                     static_cast<unsigned long long>(errors));
     }
+}
+
+/// A rectangular f32 field, indexed the way a section buffer is: x fastest, then z, then y.
+struct Field {
+    engine::u32_t                          width  = 0;
+    engine::u32_t                          height = 0;
+    engine::u32_t                          depth  = 1;
+    std::pmr::vector<engine::f32_t>        samples{&engine::memory::General().Resource()};
+
+    void Resize(engine::u32_t w, engine::u32_t d, engine::u32_t h, engine::u32_t components) {
+        width  = w;
+        depth  = d;
+        height = h;
+        samples.assign(static_cast<engine::usize_t>(w) * d * h * components, 0.0f);
+    }
+};
+
+/// Evaluates `graph` over `extent`-sized sections covering a `width x depth x height` region, and
+/// stitches the interiors into one field.
+///
+/// Mirrors the exporter's loop: one submission per section, every section dispatched over its full
+/// extent with only the useful interior kept, so an edge section computes exactly what an interior one
+/// does.
+[[nodiscard]] inline engine::Result<Field> Evaluate(
+    engine::vulkan::Context& context, engine::terrain::KernelLibrary& kernels,
+    const engine::terrain::Graph& graph, engine::terrain::SectionExtent extent, engine::u32_t width,
+    engine::u32_t depth, engine::u32_t height, engine::f32_t resolution,
+    std::array<engine::i32_t, 3> origin, engine::u32_t seed) {
+    using namespace engine;
+    using namespace engine::vulkan;
+    using namespace engine::terrain;
+
+    Result<CompiledGraph> compiled =
+        Compile(graph, CompileOptions{.extent = extent, .resolution = resolution});
+    if (!compiled) {
+        return std::unexpected(compiled.error());
+    }
+    Result<SectionResources> resources = SectionResources::Create(context, *compiled);
+    if (!resources) {
+        return std::unexpected(resources.error());
+    }
+    Result<DispatchTimers> timers = DispatchTimers::Create(context, compiled->stats.dispatchCount);
+    if (!timers) {
+        return std::unexpected(timers.error());
+    }
+
+    const CompiledOutput& output     = compiled->outputs[0];
+    const u8_t            components = output.mapping.components;
+    // Output buffers always have halo zero, because nothing reads them with a radius, so a section's
+    // rows are exactly `extent` wide.
+    const u64_t sectionBytes =
+        ValueSize(output.mapping, extent, compiled->buffers[output.buffer].halo);
+
+    Field field;
+    field.Resize(width, depth, height, components);
+
+    Queue& queue = context.ComputeQueue();
+    for (u32_t originY = 0; originY < depth; originY += extent.y) {
+        for (u32_t originZ = 0; originZ < height; originZ += extent.z) {
+            for (u32_t originX = 0; originX < width; originX += extent.x) {
+                Result<VkCommandBuffer> commands = queue.BeginOneShot();
+                if (!commands) {
+                    return std::unexpected(commands.error());
+                }
+
+                const SectionJob job{
+                    .origin = {origin[0] + static_cast<i32_t>(originX),
+                               origin[1] + static_cast<i32_t>(originY),
+                               origin[2] + static_cast<i32_t>(originZ)},
+                    .extent = extent,
+                    .seed   = seed};
+                if (Status recorded = RecordSection(queue, kernels, *compiled, *resources, *timers,
+                                                    *commands, job);
+                    !recorded) {
+                    return std::unexpected(recorded.error());
+                }
+
+                const SectionSlot& slot = resources->Slot(output.buffer);
+                ComputeToTransferBarrier(*commands, slot.buffer, slot.offset, slot.size);
+                Result<VkDeviceSize> readback = context.Readback().Reserve(sectionBytes, 16);
+                if (!readback) {
+                    return std::unexpected(readback.error());
+                }
+                const VkBufferCopy copy{
+                    .srcOffset = slot.offset, .dstOffset = *readback, .size = sectionBytes};
+                vkCmdCopyBuffer(*commands, slot.buffer, context.Readback().GetBuffer().handle, 1,
+                                &copy);
+
+                Result<u64_t> submitted = queue.EndAndSubmit(*commands);
+                if (!submitted) {
+                    return std::unexpected(submitted.error());
+                }
+                if (Status waited = queue.WaitTimeline(*submitted, kGpuTimeoutNanoseconds);
+                    !waited) {
+                    return std::unexpected(waited.error());
+                }
+                if (Status invalidated = context.Memory().InvalidateBuffer(
+                        context.Readback().GetBuffer(), *readback, sectionBytes);
+                    !invalidated) {
+                    return std::unexpected(invalidated.error());
+                }
+                const auto* samples =
+                    static_cast<const f32_t*>(context.Readback().MappedAt(*readback));
+
+                // Copy only the part of the section that lies inside the region. An edge section
+                // computes a full extent and the overhang is discarded, which is the behaviour the
+                // seam test has to see through.
+                const u32_t columns = std::min(extent.x, width - originX);
+                const u32_t rows    = std::min(extent.z, height - originZ);
+                const u32_t layers  = std::min(extent.y, depth - originY);
+                for (u32_t layer = 0; layer < layers; ++layer) {
+                    for (u32_t row = 0; row < rows; ++row) {
+                        const u64_t source =
+                            ((static_cast<u64_t>(layer) * extent.z + row) * extent.x) * components;
+                        const u64_t target =
+                            (((static_cast<u64_t>(originY) + layer) * height + originZ + row)
+                                 * width
+                             + originX)
+                            * components;
+                        std::memcpy(field.samples.data() + target, samples + source,
+                                    static_cast<usize_t>(columns) * components * sizeof(f32_t));
+                    }
+                }
+                context.Readback().ReleaseOldest();
+            }
+        }
+    }
+    return field;
 }
 
 /// A readback window: the mapped samples plus the ring offset the caller must release.

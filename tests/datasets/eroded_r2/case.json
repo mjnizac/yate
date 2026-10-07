@@ -1,0 +1,22 @@
+{
+  "description": "Thermal erosion over 24 iterations: the first iterative op, and the only case where a halo comes from an iteration count rather than from a filter radius.",
+  "seed": 8008,
+  "resolution": 1.0,
+  "section": 128,
+  "bounds": {
+    "min_x": 2048.0,
+    "min_z": -1024.0,
+    "max_x": 2304.0,
+    "max_z": -768.0
+  },
+  "outputs": [
+    "height.png",
+    "slope.png"
+  ],
+  "tolerance": 0,
+  "performance": {
+    "passes": 3,
+    "warn_slower": 0.1,
+    "fail_slower": 0.25
+  }
+}

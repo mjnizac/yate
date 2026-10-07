@@ -298,10 +298,71 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
 #endif
 
         timers.Begin(commands, static_cast<u32_t>(i));
-        (*pipeline)->Bind(commands, constants);
         const std::array<u32_t, 3> groups =
             vulkan::DispatchSize(constants.Domain(), constants.extent, constants.halo);
-        vkCmdDispatch(commands, groups[0], groups[1], groups[2]);
+
+        if (dispatch.iterations <= 1) {
+            (*pipeline)->Bind(commands, constants);
+            vkCmdDispatch(commands, groups[0], groups[1], groups[2]);
+        } else {
+            // An iterative op runs the same kernel once per iteration over a ping-ponged pair, with a
+            // barrier between every pair: iteration k reads what k-1 wrote, which is a
+            // read-after-write on the same queue and needs an explicit dependency.
+            //
+            // Every iteration but the last computes over `stateHalo`, which is wider than the output
+            // needs, because a sample whose neighbour fell outside the computed region is wrong and that
+            // wrongness walks one cell inward per iteration. The last iteration computes over the
+            // dispatch halo and writes the node's own output buffer, whatever the parity of the count,
+            // so the rest of the graph is planned around one buffer and sees one result.
+            //
+            // The input buffer carries `stateHalo` too, because halo propagation gave the producer this
+            // node's halo plus its radius. That is why the same `inputHalos` works for every iteration:
+            // the state and the input have the same shape, and only the output narrows at the end.
+            const VkDeviceAddress      output  = constants.outputs[0];
+            const vulkan::SectionSlot& outputSlot = resources.Slot(dispatch.outputBuffers[0]);
+            const VkDeviceAddress      source0 = constants.inputs[0];
+
+            std::array<VkDeviceAddress, 2>             scratch{};
+            std::array<const vulkan::SectionSlot*, 2>  scratchSlots{};
+            for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
+                scratchSlots[k] = &resources.Slot(dispatch.scratchBuffers[k]);
+                scratch[k]      = scratchSlots[k]->address;
+            }
+
+            constants.inputHalos =
+                (constants.inputHalos & ~0xFFu) | (dispatch.stateHalo & 0xFFu);
+
+            const u32_t last = dispatch.iterations - 1;
+            for (u32_t iteration = 0; iteration <= last; ++iteration) {
+                const b8_t  isLast  = iteration == last;
+                const u8_t  writeAt = static_cast<u8_t>(iteration % dispatch.scratchCount);
+                const u8_t  readAt =
+                    static_cast<u8_t>((iteration + dispatch.scratchCount - 1)
+                                      % dispatch.scratchCount);
+
+                constants.halo       = isLast ? dispatch.halo : dispatch.stateHalo;
+                constants.outputs[0] = isLast ? output : scratch[writeAt];
+                constants.inputs[0]  = iteration == 0 ? source0 : scratch[readAt];
+                constants.params[kIterationParamWord] = iteration;
+
+                if (iteration != 0) {
+                    const vulkan::SectionSlot& read = *scratchSlots[readAt];
+                    vulkan::ComputeToComputeBarrier(commands, read.buffer, read.offset, read.size);
+                }
+                (*pipeline)->Bind(commands, constants);
+                const std::array<u32_t, 3> iterationGroups =
+                    vulkan::DispatchSize(constants.Domain(), constants.extent, constants.halo);
+                vkCmdDispatch(commands, iterationGroups[0], iterationGroups[1], iterationGroups[2]);
+            }
+
+            // Both the output and every scratch half were written, so a later dispatch reading any of
+            // them needs a barrier.
+            state[dispatch.outputBuffers[0]].writtenSinceBarrier = true;
+            for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
+                state[dispatch.scratchBuffers[k]].writtenSinceBarrier = true;
+            }
+            (void)outputSlot;
+        }
         timers.End(commands, static_cast<u32_t>(i));
 
         for (u8_t input = 0; input < dispatch.inputCount; ++input) {

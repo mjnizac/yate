@@ -345,6 +345,28 @@ void PropagateHalo(const Graph& graph, std::pmr::vector<NodeWork>& work, Compile
     }
 }
 
+/// Refuses a graph whose propagated halo cannot be represented or paid for.
+///
+/// The kernel interface carries a halo in one byte per slot, and a section with halo `h` computes
+/// `(s + 2h)^n` samples, so a halo is a real cost and not a detail. Chaining iterative ops is what
+/// reaches the limit: two 200-iteration erosions in series need 400 samples of padding on every side.
+/// Saying so with the arithmetic beats either truncating the halo, which puts seams back, or failing
+/// somewhere in the evaluator.
+[[nodiscard]] Status CheckHalos(const Graph& graph, const std::pmr::vector<NodeWork>& work) {
+    for (u32_t index = 0; index < graph.NodeCount(); ++index) {
+        if (!work[index].reachable || work[index].halo <= kMaxHalo) {
+            continue;
+        }
+        const Graph::Node& node = graph.NodeAt(index);
+        return std::unexpected(MakeScriptError(
+            ErrorCode::Unsupported, ErrorStage::Compile, node.location.file, node.location.line,
+            "{} would need a halo of {}, over the limit of {}; every op between here and an output "
+            "adds its radius, and an iterative op contributes one per iteration",
+            ToString(node.kind), work[index].halo, kMaxHalo));
+    }
+    return {};
+}
+
 /// Buffer planning: assigns physical buffers, reusing one as soon as its last consumer has run.
 /// A buffer is only reused for a value whose computed size fits in it and whose domain matches, so
 /// `R2` and `R3` values never share a slot (spec sections 7.3 and 9).
@@ -439,6 +461,9 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
     }
 
     PropagateHalo(graph, work, compiled.stats);
+    if (Status halos = CheckHalos(graph, work); !halos) {
+        return std::unexpected(halos.error());
+    }
 
 #ifdef TRACY_ENABLE
     ZoneNamedN(scheduleZone, "compiler: scheduling and buffer planning", true);
@@ -461,6 +486,7 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         dispatch.halo        = work[index].halo;
         dispatch.channelMask = work[index].channelMask;
         dispatch.inputCount  = node.inputCount;
+        dispatch.iterations  = node.iterations;
         dispatch.params      = node.params;
         dispatch.location    = node.location;
         dispatch.inputBuffers.fill(kInvalidBuffer);
@@ -530,6 +556,23 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
             const u32_t buffer = planner.Acquire(node.channels[channel], dispatch.halo);
             dispatch.outputBuffers[channel] = buffer;
             work[dispatch.node].buffers[channel] = buffer;
+        }
+
+        // An iterative dispatch exchanges buffers between iterations, so it needs one or two of its
+        // own. They are acquired after the output and released before the next dispatch is planned,
+        // because nothing outside this dispatch ever reads them: the planner can hand the same slots to
+        // the next value, which is why an iterative node costs at most two extra buffers rather than
+        // one per iteration.
+        if (dispatch.iterations > 1) {
+            dispatch.stateHalo    = dispatch.halo + node.radius;
+            dispatch.scratchCount = dispatch.iterations == 2 ? 1 : 2;
+            for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
+                dispatch.scratchBuffers[k] = planner.Acquire(node.channels[0], dispatch.stateHalo);
+            }
+            for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
+                compiled.buffers[dispatch.scratchBuffers[k]].lastUse = static_cast<u32_t>(i);
+                planner.Release(dispatch.scratchBuffers[k]);
+            }
         }
 
         // Release every channel whose last reader was this dispatch, so the next value can reuse

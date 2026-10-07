@@ -20,6 +20,7 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::SlopeMask: return "SlopeMask";
         case OpKind::Vector: return "Vector";
         case OpKind::Blur: return "Blur";
+        case OpKind::ThermalErosion: return "ThermalErosion";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -384,6 +385,54 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location)
     node.channels[0]  = input.mapping;
     node.params[0]    = radius;
     node.params[1]    = input.mapping.components;
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddThermalErosion(Value input, const ThermalParams& params,
+                                       SourceLocation location) {
+    if (Status checked = CheckValue(input, "ThermalErosion input", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (input.mapping.components != 1) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "{} expects an Rn->R1 height field, got {}", ToString(OpKind::ThermalErosion),
+            ToString(input.mapping)));
+    }
+    if (params.iterations == 0 || params.iterations > kMaxHalo) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "{} expects iterations in [1, {}], got {}; the iteration count is the influence radius "
+            "and therefore the halo, so a section would have to compute {} extra samples on each side",
+            ToString(OpKind::ThermalErosion), kMaxHalo, params.iterations, params.iterations));
+    }
+    if (!(params.talus >= 0.0f)) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
+                                              location.file, location.line,
+                                              "{} expects a talus of at least 0, got {}",
+                                              ToString(OpKind::ThermalErosion), params.talus));
+    }
+    // Above one half a cell can give away more than the difference to its neighbour, which makes the
+    // scheme oscillate instead of settle. That is a mistake worth naming, not a style of erosion.
+    if (!(params.strength > 0.0f) || params.strength > 0.5f) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "{} expects a strength in (0, 0.5], got {}; above one half the scheme oscillates instead "
+            "of settling",
+            ToString(OpKind::ThermalErosion), params.strength));
+    }
+
+    Node node;
+    node.kind         = OpKind::ThermalErosion;
+    node.nodeClass    = NodeClass::Iterative;
+    node.iterations   = params.iterations;
+    node.radius       = params.iterations;
+    node.inputCount   = 1;
+    node.inputs[0]    = input;
+    node.channelCount = 1;
+    node.channels[0]  = input.mapping;
+    std::memcpy(&node.params[0], &params.talus, sizeof(f32_t));
+    std::memcpy(&node.params[1], &params.strength, sizeof(f32_t));
     return Append(node, location);
 }
 
