@@ -261,6 +261,12 @@ one. Each case pins the stage, the line and the words the message has to contain
 check: all five dataset cases reproduce **bit-exactly** through the Lua runtime, which is what says the
 bindings build the same graph the parameter path did, node for node.
 
+**What a trace looks like now.** The script's own line numbers reach the GPU timeline, because the
+source location a binding captured travels on the node, into the dispatch, into the Tracy zone name.
+A 10-node script from `blended_r2` reads as `Noise:11`, `Noise:19`, `SlopeMask:28`, `Blend:30`,
+`Curve:32`, `Const:37`, `Arith:37`, `Normals:40` on the GPU track, so a slow op points at the line
+that asked for it. Running the script itself costs 1.14 ms.
+
 ### Not in this milestone
 
 - `Erosion.Hydraulic` is milestone 8.

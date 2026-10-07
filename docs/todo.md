@@ -35,6 +35,14 @@
 
 ## Milestone 6 — follow-ups
 
+- [ ] **A scalar operand should be an immediate, not a buffer.** The `blended_r2` trace shows it:
+      `blended * amplitude + 200.0` compiles to two `Const` dispatches that each fill a whole section
+      buffer with one repeated number, plus two `Arith` dispatches that read them. That is 0.16 ms of
+      the case's 1.6 ms of GPU time and two section buffers, for two floats. `Arith` already has spare
+      push-constant words and a variant byte, so a "second operand is an immediate" variant is cheap;
+      the compiler would fold a `Const` producer into its consumer during canonicalization. Measure
+      afterwards: the dispatches are tiny, and the win may be mostly VRAM rather than time.
+
 - [ ] `Terrain.Normals` and `Masks.Slope` take a gradient, so a height that is not a noise channel
       cannot be turned into normals. The spec's own example writes `Terrain.Normals{ input =
       eroded.value }`, which needs a `Gradient` neighbourhood op over central differences. It is the
