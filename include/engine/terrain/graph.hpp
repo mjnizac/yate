@@ -17,6 +17,10 @@ inline constexpr usize_t kMaxNodeChannels = 2;
 /// Words of op parameters, matching `vulkan::KernelPushConstants::params`.
 inline constexpr usize_t kMaxNodeParams = 10;
 
+/// Largest blur radius a node may ask for. Capped because a halo is carried in one byte of the
+/// kernel interface, and because the padded section grows as `(s + 2h)^n`.
+inline constexpr u32_t kMaxBlurRadius = 32;
+
 /// Every operation the graph can hold. Each one maps to one precompiled compute kernel, with
 /// variants selected by specialization constants (spec section 9, stage 5).
 enum class OpKind : u16_t {
@@ -38,6 +42,8 @@ enum class OpKind : u16_t {
     SlopeMask,
     /// Component extraction and assembly.
     Vector,
+    /// Box blur over a declared radius. The only neighbourhood op so far.
+    Blur,
     Count,
 };
 
@@ -195,6 +201,10 @@ public:
 
     /// Extracts one component of `input`, producing `Rn -> R1`.
     [[nodiscard]] Result<Value> AddExtract(Value input, u8_t component, SourceLocation location);
+
+    /// Box blur of `radius` taps on each side. Neighbourhood: this is what gives the producing node
+    /// a halo, and the compiler propagates it backwards from here.
+    [[nodiscard]] Result<Value> AddBlur(Value input, u32_t radius, SourceLocation location);
 
     /// Assembles 2 to 4 scalar values of the same domain into one `Rn -> Rm`.
     [[nodiscard]] Result<Value> AddCombine(const Value* components, u8_t count,

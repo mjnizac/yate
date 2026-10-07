@@ -99,8 +99,8 @@ void PackFloat(KernelPushConstants& constants, usize_t word, f32_t value) {
     constants.origin      = {origin[0], params.domain == Domain::R3 ? origin[1] : 0, origin[2]};
     constants.extent      = {extent.x, extent.y, extent.z};
     constants.halo        = kHalo;
-    constants.domain      = static_cast<u32_t>(params.domain);
-    constants.channelMask = channelMask;
+    constants.SetDomain(static_cast<u32_t>(params.domain));
+    constants.SetChannelMask(channelMask);
     constants.seed        = kSeed;
     PackFloat(constants, 0, params.frequency);
     constants.params[1] = params.octaves;

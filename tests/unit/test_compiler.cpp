@@ -285,33 +285,123 @@ void TestChannelMask() {
 
 void TestHaloPropagation() {
     test::Section("halo propagation");
-    // Every op in this version is pointwise, so a correct implementation must produce zero halo
-    // everywhere. That is the property to pin down now: a neighbourhood op added later should make
-    // this test fail loudly rather than quietly change behaviour.
-    Graph graph;
+    // Every pointwise op has radius zero, so a graph of only those must come out with no halo at all.
+    {
+        Graph graph;
 
-    Result<Value> height = AddHeight(graph, 1);
-    REQUIRE_OK_VOID(height);
-    Result<Value> gradient = graph.Channel(*height, 1);
-    REQUIRE_OK_VOID(gradient);
-    Result<Value> mask = graph.AddSlopeMask(*gradient, 0.1f, 0.5f, At(2));
-    REQUIRE_OK_VOID(mask);
-    Result<Value> blended = graph.AddBlend(*height, *height, *mask, At(3));
-    REQUIRE_OK_VOID(blended);
-    REQUIRE_OK_VOID(graph.RequestOutput("height", *blended, -1.0f, 1.0f));
+        Result<Value> height = AddHeight(graph, 1);
+        REQUIRE_OK_VOID(height);
+        Result<Value> gradient = graph.Channel(*height, 1);
+        REQUIRE_OK_VOID(gradient);
+        Result<Value> mask = graph.AddSlopeMask(*gradient, 0.1f, 0.5f, At(2));
+        REQUIRE_OK_VOID(mask);
+        Result<Value> blended = graph.AddBlend(*height, *height, *mask, At(3));
+        REQUIRE_OK_VOID(blended);
+        REQUIRE_OK_VOID(graph.RequestOutput("height", *blended, -1.0f, 1.0f));
 
-    Result<CompiledGraph> compiled = Compile(graph, Options());
-    REQUIRE_OK_VOID(compiled);
-    CHECK_EQ(compiled->stats.maxHalo, u32_t{0});
-    for (const Dispatch& dispatch : compiled->dispatches) {
-        CHECK_EQ(dispatch.halo, u32_t{0});
-        CHECK(dispatch.nodeClass == NodeClass::Pointwise);
-        CHECK(OpInfoOf(dispatch.kind).nodeClass == NodeClass::Pointwise);
+        Result<CompiledGraph> compiled = Compile(graph, Options());
+        REQUIRE_OK_VOID(compiled);
+        CHECK_EQ(compiled->stats.maxHalo, u32_t{0});
+        for (const Dispatch& dispatch : compiled->dispatches) {
+            CHECK_EQ(dispatch.halo, u32_t{0});
+            CHECK(dispatch.nodeClass == NodeClass::Pointwise);
+            CHECK(OpInfoOf(dispatch.kind).nodeClass == NodeClass::Pointwise);
+        }
+        for (const PlannedBuffer& buffer : compiled->buffers) {
+            CHECK_EQ(buffer.halo, u32_t{0});
+            CHECK(buffer.bytes == ValueSize(buffer.mapping, kTile, 0));
+            CHECK(buffer.sizeClass.slotSize >= buffer.bytes);
+        }
     }
-    for (const PlannedBuffer& buffer : compiled->buffers) {
-        CHECK_EQ(buffer.halo, u32_t{0});
-        CHECK(buffer.bytes == ValueSize(buffer.mapping, kTile, 0));
-        CHECK(buffer.sizeClass.slotSize >= buffer.bytes);
+
+    // One neighbourhood op: its own output needs no padding, but its producer must compute the
+    // radius it reads.
+    {
+        Graph         graph;
+        Result<Value> height = AddHeight(graph, 1);
+        REQUIRE_OK_VOID(height);
+        Result<Value> blurred = graph.AddBlur(*height, 2, At(2));
+        REQUIRE_OK_VOID(blurred);
+        REQUIRE_OK_VOID(graph.RequestOutput("height", *blurred, -1.0f, 1.0f));
+
+        Result<CompiledGraph> compiled = Compile(graph, Options());
+        REQUIRE_OK_VOID(compiled);
+        CHECK_EQ(compiled->stats.dispatchCount, u32_t{2});
+        CHECK_EQ(compiled->stats.maxHalo, u32_t{2});
+        // Dispatch 0 is the noise, dispatch 1 the blur.
+        CHECK_EQ(compiled->dispatches[0].halo, u32_t{2});
+        CHECK_EQ(compiled->dispatches[1].halo, u32_t{0});
+        CHECK(compiled->dispatches[1].nodeClass == NodeClass::Neighborhood);
+        // The kernel is told the halo of its input, which is not its own.
+        CHECK_EQ(compiled->dispatches[1].inputHalos[0], u8_t{2});
+
+        // Two buffers of the same mapping and different sizes, which is the whole reason the pool
+        // keys its size classes on the computed value size rather than on the mapping.
+        CHECK_EQ(compiled->buffers.size(), usize_t{2});
+        const u32_t produced = compiled->dispatches[0].outputBuffers[0];
+        const u32_t consumed = compiled->dispatches[1].outputBuffers[0];
+        CHECK(compiled->buffers[produced].mapping == compiled->buffers[consumed].mapping);
+        CHECK_EQ(compiled->buffers[produced].halo, u32_t{2});
+        CHECK_EQ(compiled->buffers[consumed].halo, u32_t{0});
+        CHECK(compiled->buffers[produced].bytes > compiled->buffers[consumed].bytes);
+        CHECK(compiled->buffers[produced].bytes == ValueSize(Mapping{Domain::R2, 1}, kTile, 2));
+    }
+
+    // Chained neighbourhood ops accumulate: the radii add up along the path to the output.
+    {
+        Graph         graph;
+        Result<Value> height = AddHeight(graph, 1);
+        REQUIRE_OK_VOID(height);
+        Result<Value> first = graph.AddBlur(*height, 2, At(2));
+        REQUIRE_OK_VOID(first);
+        Result<Value> second = graph.AddBlur(*first, 3, At(3));
+        REQUIRE_OK_VOID(second);
+        REQUIRE_OK_VOID(graph.RequestOutput("height", *second, -1.0f, 1.0f));
+
+        Result<CompiledGraph> compiled = Compile(graph, Options());
+        REQUIRE_OK_VOID(compiled);
+        CHECK_EQ(compiled->stats.dispatchCount, u32_t{3});
+        // The outer blur needs 3 of its input, which in turn needs 2 of the noise: 3 then 3 + 2.
+        CHECK_EQ(compiled->dispatches[0].halo, u32_t{5});
+        CHECK_EQ(compiled->dispatches[1].halo, u32_t{3});
+        CHECK_EQ(compiled->dispatches[2].halo, u32_t{0});
+        CHECK_EQ(compiled->stats.maxHalo, u32_t{5});
+        CHECK_EQ(compiled->dispatches[1].inputHalos[0], u8_t{5});
+        CHECK_EQ(compiled->dispatches[2].inputHalos[0], u8_t{3});
+    }
+
+    // A node read by two paths takes the larger demand, not the last one seen.
+    {
+        Graph         graph;
+        Result<Value> height = AddHeight(graph, 1);
+        REQUIRE_OK_VOID(height);
+        Result<Value> wide = graph.AddBlur(*height, 4, At(2));
+        REQUIRE_OK_VOID(wide);
+        Result<Value> narrow = graph.AddBlur(*height, 1, At(3));
+        REQUIRE_OK_VOID(narrow);
+        Result<Value> sum = graph.AddArith(ArithOp::Add, *wide, *narrow, At(4));
+        REQUIRE_OK_VOID(sum);
+        REQUIRE_OK_VOID(graph.RequestOutput("height", *sum, -2.0f, 2.0f));
+
+        Result<CompiledGraph> compiled = Compile(graph, Options());
+        REQUIRE_OK_VOID(compiled);
+        CHECK_EQ(compiled->stats.dispatchCount, u32_t{4});
+        CHECK_EQ(compiled->dispatches[0].halo, u32_t{4});
+        CHECK_EQ(compiled->stats.maxHalo, u32_t{4});
+    }
+
+    // A radius outside the supported range is rejected where it was written.
+    {
+        Graph         graph;
+        Result<Value> height = AddHeight(graph, 1);
+        REQUIRE_OK_VOID(height);
+        CHECK(!graph.AddBlur(*height, 0, At(9)).has_value());
+        const Result<Value> tooWide = graph.AddBlur(*height, kMaxBlurRadius + 1, At(10));
+        CHECK(!tooWide.has_value());
+        if (!tooWide) {
+            CHECK_EQ(tooWide.error().line, u32_t{10});
+            CHECK(tooWide.error().stage == ErrorStage::Validation);
+        }
     }
 }
 

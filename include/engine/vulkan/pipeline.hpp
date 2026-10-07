@@ -35,11 +35,28 @@ struct KernelPushConstants {
     std::array<u32_t, 3> extent{};
     /// Padding computed by halo propagation, applied on every axis of the domain.
     u32_t halo = 0;
-    /// 2 for `R2`, 3 for `R3`.
-    u32_t domain = 2;
-    /// Bit per output channel. A channel no consumer requested is not written.
-    u32_t channelMask = 1;
-    u32_t seed        = 0;
+    /// Domain in bits 0-7 (2 for `R2`, 3 for `R3`) and the channel mask in bits 8-15.
+    ///
+    /// Packed together because the struct must stay inside the guaranteed 128-byte push-constant
+    /// range and `inputs` needs 8-byte alignment: two separate words would cost four bytes of
+    /// padding and a parameter word with it. Both sides already go through accessors, here and in
+    /// lib/kernel.lib.glsl, so nothing reads the raw field.
+    u32_t flags = 2 | (1 << 8);
+    u32_t seed  = 0;
+    /// Halo of each bound input, one byte per slot, least significant first.
+    ///
+    /// An input is not guaranteed to have the same halo as the output: halo propagation gives a
+    /// producer `output halo + the consumer's radius`, so a neighbourhood op reads a buffer with a
+    /// wider border and therefore a different row stride. Pointwise ops have radius zero and can
+    /// keep using `halo` for both sides.
+    u32_t inputHalos = 0;
+
+    void SetDomain(u32_t domain) noexcept { flags = (flags & ~0xFFu) | (domain & 0xFFu); }
+    void SetChannelMask(u32_t mask) noexcept {
+        flags = (flags & ~0xFF00u) | ((mask & 0xFFu) << 8);
+    }
+    [[nodiscard]] u32_t Domain() const noexcept { return flags & 0xFFu; }
+    [[nodiscard]] u32_t ChannelMask() const noexcept { return (flags >> 8) & 0xFFu; }
 
     std::array<VkDeviceAddress, kMaxKernelInputs>  inputs{};
     std::array<VkDeviceAddress, kMaxKernelOutputs> outputs{};

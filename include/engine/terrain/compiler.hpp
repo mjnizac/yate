@@ -32,6 +32,8 @@ struct Dispatch {
     u8_t inputCount  = 0;
 
     std::array<u32_t, kMaxNodeInputs>   inputBuffers{};
+    /// Halo each input buffer was allocated with, which is this node's halo plus its own radius.
+    std::array<u8_t, kMaxNodeInputs> inputHalos{};
     std::array<u32_t, kMaxNodeChannels> outputBuffers{};
     std::array<Mapping, kMaxNodeChannels> channels{};
     std::array<u32_t, kMaxNodeParams>   params{};

@@ -25,9 +25,11 @@ layout(push_constant, scalar) uniform KernelConstants {
     ivec3    origin;
     uvec3    extent;
     uint     halo;
-    uint     domain;
-    uint     channelMask;
+    // Domain in bits 0-7, channel mask in bits 8-15. Packed to keep the block inside the guaranteed
+    // 128-byte range; read through IsR3() and WantsChannel() below, never directly.
+    uint     flags;
     uint     seed;
+    uint     inputHalos;
     uint64_t inputs[4];
     uint64_t outputs[2];
     uint     params[10];
@@ -36,7 +38,10 @@ layout(push_constant, scalar) uniform KernelConstants {
 #define ENGINE_DOMAIN_R2 2u
 #define ENGINE_DOMAIN_R3 3u
 
-bool IsR3() { return pc.domain == ENGINE_DOMAIN_R3; }
+uint Domain() { return pc.flags & 0xFFu; }
+uint ChannelMask() { return (pc.flags >> 8u) & 0xFFu; }
+
+bool IsR3() { return Domain() == ENGINE_DOMAIN_R3; }
 
 // Section size including the halo on every axis of the domain. `y` is 1 for R2.
 uvec3 PaddedExtent() {
@@ -76,7 +81,58 @@ ivec3 WorldSample(uvec3 local) {
     return pc.origin - ivec3(int(pc.halo)) + ivec3(local);
 }
 
-bool WantsChannel(uint channel) { return (pc.channelMask & (1u << channel)) != 0u; }
+bool WantsChannel(uint channel) { return (ChannelMask() & (1u << channel)) != 0u; }
+
+// --- Reading an input whose halo differs from the output's ----------------------------------------
+//
+// Halo propagation gives a producer `consumer halo + consumer radius`, so a neighbourhood op reads
+// buffers with a wider border than it writes. A wider border means a different row stride and a
+// different origin, so the output's sample index cannot be reused for the input. Pointwise ops have
+// radius zero, their input halo equals `pc.halo`, and they can keep using the plain helpers above.
+
+uint InputHalo(uint slot) { return (pc.inputHalos >> (slot * 8u)) & 0xFFu; }
+
+uvec3 PaddedExtentWithHalo(uint halo) {
+    uint pad = 2u * halo;
+    if (IsR3()) {
+        return pc.extent + uvec3(pad);
+    }
+    return uvec3(pc.extent.x + pad, 1u, pc.extent.z + pad);
+}
+
+// Local coordinate of the same world sample inside an input: shifted by how much wider that input's
+// border is.
+uvec3 InputLocal(uint slot, uvec3 local) {
+    uint delta = InputHalo(slot) - pc.halo;
+    return local + uvec3(delta, IsR3() ? delta : 0u, delta);
+}
+
+uint InputIndex(uint slot, uvec3 local) {
+    uvec3 n = PaddedExtentWithHalo(InputHalo(slot));
+    uvec3 at = InputLocal(slot, local);
+    if (IsR3()) {
+        return (at.y * n.z + at.z) * n.x + at.x;
+    }
+    return at.z * n.x + at.x;
+}
+
+// True when `local` plus `offset` is still inside the input's padded extent. A neighbourhood op must
+// check this at the border of its own output: halo propagation guarantees the taps it needs exist,
+// but a clamped or wrapped read would silently change the result at the edges.
+bool InputContains(uint slot, uvec3 local, ivec3 offset) {
+    uvec3 n  = PaddedExtentWithHalo(InputHalo(slot));
+    ivec3 at = ivec3(InputLocal(slot, local)) + offset;
+    return all(greaterThanEqual(at, ivec3(0))) && all(lessThan(at, ivec3(n)));
+}
+
+uint InputIndexOffset(uint slot, uvec3 local, ivec3 offset) {
+    uvec3 n  = PaddedExtentWithHalo(InputHalo(slot));
+    ivec3 at = ivec3(InputLocal(slot, local)) + offset;
+    if (IsR3()) {
+        return uint((at.y * int(n.z) + at.z) * int(n.x) + at.x);
+    }
+    return uint(at.z * int(n.x) + at.x);
+}
 
 // --- Typed access to the bound values ---------------------------------------------------------
 

@@ -254,10 +254,13 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
         constants.origin      = job.origin;
         constants.extent      = {job.extent.x, job.extent.y, job.extent.z};
         constants.halo        = dispatch.halo;
-        constants.domain      = static_cast<u32_t>(domain);
-        constants.channelMask = dispatch.channelMask;
+        constants.SetDomain(static_cast<u32_t>(domain));
+        constants.SetChannelMask(dispatch.channelMask);
         constants.seed        = job.seed;
         constants.params      = dispatch.params;
+        for (u8_t input = 0; input < dispatch.inputCount; ++input) {
+            constants.inputHalos |= static_cast<u32_t>(dispatch.inputHalos[input]) << (input * 8);
+        }
         for (u8_t input = 0; input < dispatch.inputCount; ++input) {
             const u32_t buffer = dispatch.inputBuffers[input];
             if (buffer == kInvalidBuffer) {
@@ -291,7 +294,7 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
         timers.Begin(commands, static_cast<u32_t>(i));
         (*pipeline)->Bind(commands, constants);
         const std::array<u32_t, 3> groups =
-            vulkan::DispatchSize(constants.domain, constants.extent, constants.halo);
+            vulkan::DispatchSize(constants.Domain(), constants.extent, constants.halo);
         vkCmdDispatch(commands, groups[0], groups[1], groups[2]);
         timers.End(commands, static_cast<u32_t>(i));
 

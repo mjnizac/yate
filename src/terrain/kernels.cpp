@@ -104,6 +104,17 @@ constexpr OpInfo kOps[] = {
      .resolutionWord = kMaxNodeParams,
      .hasReference   = true,
      .specFieldCount = 1},
+    {.kind           = OpKind::Blur,
+     .name           = "Blur",
+     .shader         = "ops/blur.comp.spv",
+     .nodeClass      = NodeClass::Neighborhood,
+     .maxInputs      = 1,
+     .maxChannels    = 1,
+     .resolutionWord = kMaxNodeParams,
+     // Reads a neighbourhood, so the pointwise reference cannot evaluate it; test_kernels compares
+     // it against a CPU box blur of its own.
+     .hasReference   = false,
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -491,6 +502,7 @@ b8_t EvalPointwise(const Graph::Node& node,
 
         case OpKind::Coords:
         case OpKind::Noise:
+        case OpKind::Blur:
         case OpKind::Count:
             // Both depend on world position, which a pointwise reference does not receive.
             return false;

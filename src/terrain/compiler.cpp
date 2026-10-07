@@ -439,10 +439,13 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         Dispatch&          dispatch = compiled.dispatches[i];
         const Graph::Node& node     = graph.NodeAt(dispatch.node);
 
-        // Inputs are already produced; bind the buffers their producers were given.
+        // Inputs are already produced; bind the buffers their producers were given, along with the
+        // halo each was allocated with. The kernel needs that halo because a wider border means a
+        // different row stride, which only a neighbourhood op ever sees.
         for (u8_t input = 0; input < node.inputCount; ++input) {
             const u32_t producer = Resolve(work, node.inputs[input].node);
             dispatch.inputBuffers[input] = work[producer].buffers[node.inputs[input].channel];
+            dispatch.inputHalos[input]   = static_cast<u8_t>(work[producer].halo);
         }
 
         for (u8_t channel = 0; channel < node.channelCount; ++channel) {

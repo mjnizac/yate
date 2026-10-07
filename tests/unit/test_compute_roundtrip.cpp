@@ -55,7 +55,7 @@ constexpr u64_t kTimeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
 
     pipeline.Bind(*commands, constants);
     const std::array<u32_t, 3> groups =
-        DispatchSize(constants.domain, constants.extent, constants.halo);
+        DispatchSize(constants.Domain(), constants.extent, constants.halo);
     vkCmdDispatch(*commands, groups[0], groups[1], groups[2]);
 
     ComputeToTransferBarrier(*commands, slot.buffer, slot.offset, slot.size);
@@ -140,8 +140,8 @@ int main() {
         constants.origin      = {kOriginX, 0, kOriginZ};
         constants.extent      = {kExtent, 1, kExtent};
         constants.halo        = kHalo;
-        constants.domain      = 2;
-        constants.channelMask = 1;
+        constants.SetDomain(2);
+        constants.SetChannelMask(1);
         constants.outputs[0]  = slot->address;
 
         Result<VkDeviceSize> offset = RunKernel(context, *coords, *slot, constants, coordsBytes);
@@ -184,8 +184,8 @@ int main() {
         fill.origin      = {kOriginX, 0, kOriginZ};
         fill.extent      = {kExtent, 1, kExtent};
         fill.halo        = kHalo;
-        fill.domain      = 2;
-        fill.channelMask = 1;
+        fill.SetDomain(2);
+        fill.SetChannelMask(1);
         fill.outputs[0]  = slot->address;
         const f32_t wanted = -1234.5f;
         std::memcpy(&fill.params[0], &wanted, sizeof(f32_t));

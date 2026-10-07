@@ -19,6 +19,7 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::Blend: return "Blend";
         case OpKind::SlopeMask: return "SlopeMask";
         case OpKind::Vector: return "Vector";
+        case OpKind::Blur: return "Blur";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -358,6 +359,30 @@ Result<Value> Graph::AddExtract(Value input, u8_t component, SourceLocation loca
     node.channelCount = 1;
     node.channels[0]  = Mapping{input.mapping.domain, 1};
     node.params[0]    = component;
+    node.params[1]    = input.mapping.components;
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location) {
+    if (Status checked = CheckValue(input, "Blur input", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (radius == 0 || radius > kMaxBlurRadius) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Blur radius must be between 1 and {}, got {}", kMaxBlurRadius, radius));
+    }
+
+    Node node;
+    node.kind      = OpKind::Blur;
+    node.nodeClass = NodeClass::Neighborhood;
+    // The radius is what halo propagation adds to every producer upstream of this node.
+    node.radius       = radius;
+    node.inputCount   = 1;
+    node.inputs[0]    = input;
+    node.channelCount = 1;
+    node.channels[0]  = input.mapping;
+    node.params[0]    = radius;
     node.params[1]    = input.mapping.components;
     return Append(node, location);
 }
