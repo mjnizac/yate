@@ -173,7 +173,13 @@ one octave stays inside its declared band.
 - **The pipeline map was being rebuilt per job.** It now lives with the device, as the spec intends.
 - **Reordering a float multiply changed the output by one 16-bit unit.** The dataset golden caught it,
   which is exactly what it is for.
-- **f32 coordinates lose precision far from the origin.** Quantified in `docs/todo.md`.
+- **f32 coordinates lose precision far from the origin, and the first two fixes were worse.** The
+  derivative sweep now runs at about 5e5 metres as well as near the origin, which is what turned a
+  suspicion into a number: 4.9% worst error for `R2` and 19.8% for `R3`, against 0.03% near the
+  origin. Routing the cell offset through the fractional part of the skewed coordinate is
+  algebraically identical and removes the rounding that causes it, and it measured five times worse;
+  `docs/todo.md` records both attempts with their numbers and why the remaining option is deferred to
+  milestone 7.
 - **One halo per dispatch was not enough.** Halo propagation gives a producer a wider halo than its
   own consumer needs, so a kernel's inputs and outputs can have different row strides. The push
   constant now carries one halo byte per input slot. Keeping the block at its asserted 128 bytes meant

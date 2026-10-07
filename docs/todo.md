@@ -2,20 +2,29 @@
 
 ## Findings to act on
 
-- [ ] **f32 coordinate precision far from the origin.** `test_noise` measures it: about 5e5 metres
-      out, `d0 = p - cellOrigin` is a difference of two numbers around 5e3 in noise space where the
-      f32 step is 5e-4, so the cell offset keeps roughly three good digits and the noise value is
-      accurate to about 1e-2 relative. Near the origin the same comparison agrees to 1e-6. Every op
-      downstream of noise inherits that budget. The usual fix is to wrap the lattice coordinate by a
-      large power of two before converting to float, which makes the noise periodic at a scale far
-      beyond any map while keeping the float coordinates small. Decide before milestone 7, which is
-      where large worlds arrive.
-- [ ] **Collecting GPU timestamps still costs more than the GPU work.** The extra submission is gone:
-      `Queue::CollectGpuZones` now records into the section's own command buffer and `RecordSection`
-      went from 6.92 ms to 3.22 ms over 16 sections. What remains is Tracy's own readback inside
-      `TracyVkCollect`, 107 microseconds of CPU per section against dispatches of 2 to 11
-      microseconds. Collecting every N sections would amortise it; measure whether the query pool
-      tolerates the backlog first. Profiling-only overhead either way.
+- [ ] **f32 coordinate precision far from the origin: measured, mitigation deferred.** A derivative
+      sweep about 5e5 metres out is now part of `test_noise`, and it is the check that actually
+      answers the question: the worst best-case error is 4.9% for `R2` and 19.8% for `R3`, against
+      0.03% and 0.03% near the origin. The cause is the rounding of the unskewing term, which
+      displaces the cell origin by around 1e-4 noise units; the displacement is not smooth between
+      neighbouring samples, so the field carries argument jitter of about 0.05 m at a frequency of
+      2e-3. Output at 1 m resolution never sees it. What a sub-metre derivative reports there does
+      not mean anything.
+
+      Two mitigations were tried and measured:
+
+      - Reconstructing the cell offset from the fractional part of the skewed coordinate,
+        `d0 = unskew(skewed - floor(skewed))`, which is algebraically identical and removes the
+        unskewing rounding entirely. **Rejected: measurably worse.** The far sweep went from 4.9% to
+        28% for `R2` and 19.8% to 109% for `R3`, and even the near-origin sweep went from 0.033% to
+        0.094%, because `frac` is quantized at `ulp(skewed)` where the old difference is quantized at
+        the finer `ulp(p)`.
+      - Wrapping the noise-space coordinate by a power of two, which is the only option that shrinks
+        every magnitude involved. It costs periodicity per octave: with a wrap of K noise units, the
+        finest octave of a 6-octave fBm at frequency 2e-3 and lacunarity 2 repeats every K/0.064
+        metres, so K = 256 repeats every 4 km. **Deferred to milestone 7**, where the actual world
+        size is known and the trade can be made against it rather than guessed.
+
 ## Next
 
 - [ ] Confirm the Tracy memory view shows every CPU and VRAM pool with correct reserved and used

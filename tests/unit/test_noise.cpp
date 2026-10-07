@@ -76,6 +76,17 @@ constexpr f64_t kFarReferenceTolerance = 0.02;
 /// by f32 cancellation, and the best achievable sits between the two.
 constexpr f64_t kDerivativeTolerance = 0.01;
 
+/// Ceilings for the same sweep about 5e5 metres from the origin, one per domain.
+///
+/// These are not an acceptable derivative; they are the measured cost of an f32 world coordinate at
+/// that distance, recorded so it cannot get worse unnoticed. The rounding of the unskewing term
+/// displaces the cell origin by around 1e-4 noise units, and that displacement is not smooth from
+/// one sample to the next, so the field carries argument jitter of about 0.05 m at a frequency of
+/// 2e-3. Output at 1 m resolution never sees it; a central difference below a metre is meaningless
+/// there. docs/todo.md records the options and what each one measured.
+constexpr f64_t kFarDerivativeToleranceR2 = 0.08;
+constexpr f64_t kFarDerivativeToleranceR3 = 0.25;
+
 [[nodiscard]] Graph::NoiseParams MakeNoiseParams(NoiseKind kind, Domain domain) {
     Graph::NoiseParams params;
     params.kind        = kind;
@@ -135,15 +146,20 @@ void PackFloat(KernelPushConstants& constants, usize_t word, f32_t value) {
 
 // --- Check 1: is the analytic derivative the derivative? -----------------------------------------
 
-/// Positions used for the derivative sweep. Near the origin on purpose: at the far-from-origin
-/// coordinates the other checks use, an f32 position of about 5e5 metres has a representable
-/// spacing of 0.0625 m, so every step below that silently rounds to nothing and a central difference
-/// measures noise rather than a slope. The far coordinates are exercised by check 2, which does not
-/// differentiate anything.
-[[nodiscard]] std::array<f32_t, 3> SweepPosition(Domain domain, u32_t index) {
-    const f32_t x = static_cast<f32_t>(13 * index + 1) * kResolution;
-    const f32_t y = domain == Domain::R3 ? static_cast<f32_t>(7 * index + 3) * kResolution : 0.0f;
-    const f32_t z = static_cast<f32_t>(29 * index + 5) * kResolution;
+/// Positions used for the derivative sweep, offset by `base` metres along every axis.
+///
+/// The sweep runs at two offsets. Near the origin it says whether the formula is the derivative. Far
+/// out it says whether the lattice is still continuous and in the right place, which is a different
+/// question and the one that matters for a large world: a rounding error in the unskewing term would
+/// displace the cell origin, and a displaced lattice shows up as a gradient the value no longer
+/// agrees with. The sweep starts at a 4 m step and halves, and `BestDerivativeError` discards any
+/// step that rounds away, so the far sweep uses the six steps that an f32 position of about 5e5
+/// metres can still represent.
+[[nodiscard]] std::array<f32_t, 3> SweepPosition(Domain domain, u32_t index, f32_t base) {
+    const f32_t x = base + static_cast<f32_t>(13 * index + 1) * kResolution;
+    const f32_t y =
+        domain == Domain::R3 ? base + static_cast<f32_t>(7 * index + 3) * kResolution : 0.0f;
+    const f32_t z = base + static_cast<f32_t>(29 * index + 5) * kResolution;
     return {x, y, z};
 }
 
@@ -197,7 +213,8 @@ void PackFloat(KernelPushConstants& constants, usize_t word, f32_t value) {
     return best;
 }
 
-void CheckDerivative(NoiseKind kind, Domain domain, u32_t octaves, const char* label) {
+void CheckDerivative(NoiseKind kind, Domain domain, u32_t octaves, const char* label,
+                     f32_t base = 0.0f, f64_t tolerance = kDerivativeTolerance) {
     Graph::NoiseParams params = MakeNoiseParams(kind, domain);
     params.octaves            = octaves;
     const usize_t components  = domain == Domain::R3 ? 3 : 2;
@@ -208,7 +225,7 @@ void CheckDerivative(NoiseKind kind, Domain domain, u32_t octaves, const char* l
     f64_t worst   = 0.0;
 
     for (u32_t i = 0; i < 64; ++i) {
-        const std::array<f32_t, 3> position = SweepPosition(domain, i);
+        const std::array<f32_t, 3> position = SweepPosition(domain, i, base);
         if (octaves == 1 && OnKink(kind, terrain::EvalNoise(params, kSeed, position).value)) {
             ++skipped;
             continue;
@@ -216,7 +233,7 @@ void CheckDerivative(NoiseKind kind, Domain domain, u32_t octaves, const char* l
         for (usize_t component = 0; component < components; ++component) {
             const f64_t error = BestDerivativeError(params, position, component);
             ++checked;
-            if (error > kDerivativeTolerance) {
+            if (error > tolerance) {
                 if (bad == 0) {
                     std::printf("     %s component %zu: best relative error %g at sample %u\n",
                                 label, component, error, i);
@@ -241,10 +258,10 @@ void CheckNormalization(NoiseKind kind, Domain domain, const char* label) {
     Graph::NoiseParams params = MakeNoiseParams(kind, domain);
     params.octaves            = 1;
 
-    f32_t minimum = terrain::EvalNoise(params, kSeed, SweepPosition(domain, 0)).value;
+    f32_t minimum = terrain::EvalNoise(params, kSeed, SweepPosition(domain, 0, 0.0f)).value;
     f32_t maximum = minimum;
     for (u32_t i = 1; i < 4096; ++i) {
-        const std::array<f32_t, 3> position = SweepPosition(domain, i);
+        const std::array<f32_t, 3> position = SweepPosition(domain, i, 0.0f);
         const f32_t                value = terrain::EvalNoise(params, kSeed, position).value;
         minimum                          = std::min(minimum, value);
         maximum                          = std::max(maximum, value);
@@ -304,6 +321,16 @@ int main() {
         test::Section("four octaves: the fractal chain rule");
         CheckDerivative(NoiseKind::Simplex, Domain::R2, kOctaves, "simplex R2");
         CheckDerivative(NoiseKind::Simplex, Domain::R3, kOctaves, "simplex R3");
+
+        // The same sweep about 5e5 metres out. This is the check that pins down what f32 coordinates
+        // cost at that distance: if the answer stayed in the same order of magnitude as near the
+        // origin, the lattice is where it should be and only the sampling got coarser.
+        test::Section("the analytic derivative far from the origin");
+        const f32_t far = static_cast<f32_t>(kOriginX) * kResolution;
+        CheckDerivative(NoiseKind::Simplex, Domain::R2, kOctaves, "simplex R2 far", far,
+                        kFarDerivativeToleranceR2);
+        CheckDerivative(NoiseKind::Simplex, Domain::R3, kOctaves, "simplex R3 far", far,
+                        kFarDerivativeToleranceR3);
 
         // Two origins. Near zero, f32 coordinates have ample precision and the kernel must match
         // the reference to a few epsilons. Far out, `d0 = p - cellOrigin` is a difference of two
