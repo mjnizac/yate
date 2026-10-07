@@ -30,8 +30,11 @@
 - [ ] Confirm the Tracy memory view shows every CPU and VRAM pool with correct reserved and used
       values. The GPU zones now reach the profiler and the CPU zones were already there; the memory
       graphs are the part nobody has read.
-- [ ] Route what is still landing in `CPU/Untracked new` at shutdown (about 1.4 MB in 8k allocations,
-      mostly spdlog and VMA internals) through named allocators.
+- [x] **`CPU/Untracked new` is third-party static state, not a leak.** Measured rather than assumed:
+      a 4-section export and a 256-section one both end with exactly 1321536 bytes in 92 allocations,
+      so it does not scale with work. It is spdlog's async queue, VMA's internals and Sol2's type
+      registry, none of which take an allocator. Routing them would mean forking a dependency for
+      1.3 MB of process-lifetime memory, so this stays reported as its own pool and is not pursued.
 
 ## Milestone 6 — follow-ups
 
@@ -60,5 +63,6 @@
       callbacks, or switch to a private `mi_heap_t` per allocator with explicit locking.
 - [ ] `ENGINE_ASSERT` compiles away in Release, so a condition with side effects would be dropped.
       Consider a compile-time check that forbids that.
-- [ ] `ENGINE_SIMPLEX2_SCALE` was chosen to put a unit-amplitude fBm inside roughly [-1, 1] and is
-      checked loosely by `test_noise`. Measure the true bound once there are more noise kinds.
+- [x] `ENGINE_SIMPLEX2_SCALE` and its 3D counterpart are now measured across all six base-and-domain
+      combinations by `test_noise`, which prints the band each one produces and fails on a gross
+      break. Both constants were recalibrated from that measurement rather than guessed.
