@@ -62,6 +62,7 @@ add_custom_target(engine_shaders ALL DEPENDS ${ENGINE_SHADER_OUTPUTS})
 
 add_library(engine_objects OBJECT
     src/application.cpp
+    src/lua.cpp
     src/engine.cpp
     src/log.cpp
     src/memory/arena.cpp

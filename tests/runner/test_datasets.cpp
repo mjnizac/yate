@@ -329,20 +329,22 @@ struct Case {
     testCase.warnSlower      = json->Number("performance.warn_slower", kWarnSlowerFraction);
     testCase.failSlower      = json->Number("performance.fail_slower", kFailSlowerFraction);
 
-    // Parameters are a flat object, copied through verbatim.
-    static constexpr const char* kParamKeys[] = {
-        "frequency", "octaves",  "lacunarity", "persistence", "amplitude", "offset",
-        "range",     "normals",  "normalize",  "kind",        "blur",      "domain",
-        "gradient",  "vertical_scale"};
-    for (const char* key : kParamKeys) {
-        const std::string path  = std::string{"params."} + key;
-        const std::string_view value = json->Text(path);
-        if (!value.empty()) {
-            (void)testCase.job.params.Set(key, value);
+    // User parameters, as a list of `key=value` strings. A list rather than an object because a
+    // script now declares whatever parameters it wants, so there is no fixed set of keys to look for,
+    // and `Params::Assign` already parses this form for `--param`.
+    const usize_t paramCount = json->ArraySize("params");
+    for (usize_t i = 0; i < paramCount; ++i) {
+        std::array<char, 32> key{};
+        std::snprintf(key.data(), key.size(), "params.%zu", i);
+        const std::string_view assignment = json->Text(key.data());
+        if (!assignment.empty() && !testCase.job.params.Assign(assignment)) {
+            Warn("%s: could not read the parameter '%s'", name.c_str(),
+                 std::string(assignment).c_str());
         }
     }
 
-    // The script is not executed yet (milestone 6); it is still hashed into the metadata.
+    // The script is what builds the graph, and it is hashed into the metadata sidecar, so a change to
+    // it shows up in the golden data.
     static std::array<char, 512> scriptPath{};
     const std::string            script = testCase.directory + "script.lua";
     detail::CopyBounded(scriptPath, script);

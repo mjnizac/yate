@@ -92,6 +92,48 @@ set(CMAKE_SKIP_INSTALL_RULES ON)
 FetchContent_MakeAvailable(spng)
 set(CMAKE_SKIP_INSTALL_RULES OFF)
 
+# --- Lua 5.4 ------------------------------------------------------------------------------------
+# The upstream repository ships no CMake, so the library target is declared here from its own source
+# list. `lua.c` and `luac.c` are the standalone interpreter and compiler and are deliberately left
+# out. Compiled as C: error handling then uses longjmp, which is what Sol2's protected calls expect,
+# and the engine never lets a longjmp cross a frame holding a C++ destructor (spec section 3).
+
+FetchContent_Declare(lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG        v5.4.7
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(lua)
+
+set(ENGINE_LUA_SOURCES
+    lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldblib.c ldebug.c ldo.c ldump.c
+    lfunc.c lgc.c linit.c liolib.c llex.c lmathlib.c lmem.c loadlib.c lobject.c lopcodes.c
+    loslib.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c ltm.c lundump.c lutf8lib.c
+    lvm.c lzio.c
+)
+list(TRANSFORM ENGINE_LUA_SOURCES PREPEND "${lua_SOURCE_DIR}/")
+
+add_library(lua_static STATIC ${ENGINE_LUA_SOURCES})
+target_include_directories(lua_static SYSTEM PUBLIC "${lua_SOURCE_DIR}")
+set_target_properties(lua_static PROPERTIES C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    # Not ours to fix, and Lua is warning-clean only under its own flags.
+    target_compile_options(lua_static PRIVATE /W0)
+endif()
+
+# --- Sol2 ---------------------------------------------------------------------------------------
+# Header-only. Every Sol2 include is confined to src/lua.cpp, so the compile cost is paid once and
+# no Sol2 type reaches a header (spec section 8).
+
+set(SOL2_BUILD_LUA OFF CACHE BOOL "" FORCE)
+set(SOL2_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(sol2
+    GIT_REPOSITORY https://github.com/ThePhD/sol2.git
+    GIT_TAG        v3.3.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(sol2)
+
 # --- Vulkan SDK ---------------------------------------------------------------------------------
 # Looked up last so a missing SDK is the only thing a fresh configure can fail on, after the
 # fetched dependencies are already in place.
@@ -103,7 +145,7 @@ find_package(Vulkan 1.4 REQUIRED COMPONENTS glslc)
 # VMA's single-header implementation does not compile clean under /W4, and it is not ours to fix.
 # Marking the fetched include directories as SYSTEM keeps third-party warnings out of our build log
 # without lowering the warning level on engine code.
-foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static)
+foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static sol2)
     if(TARGET ${dependency})
         get_target_property(_dirs ${dependency} INTERFACE_INCLUDE_DIRECTORIES)
         if(_dirs)
@@ -126,6 +168,8 @@ target_link_libraries(engine_third_party INTERFACE
     spdlog::spdlog
     mimalloc-static
     Tracy::TracyClient
+    lua_static
+    sol2::sol2
 )
 target_compile_definitions(engine_third_party INTERFACE
     $<$<BOOL:${ENGINE_TRACY_CALLSTACKS}>:ENGINE_TRACY_CALLSTACKS>

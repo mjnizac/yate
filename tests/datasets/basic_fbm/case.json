@@ -3,18 +3,20 @@
   "seed": 1234,
   "resolution": 1.0,
   "section": 256,
-  "bounds": { "min_x": 0.0, "min_z": 0.0, "max_x": 512.0, "max_z": 512.0 },
-  "params": {
-    "frequency": "0.004",
-    "octaves": "4",
-    "lacunarity": "2.0",
-    "persistence": "0.5",
-    "amplitude": "900",
-    "offset": "700",
-    "range": "-200,1800",
-    "normals": "1"
+  "bounds": {
+    "min_x": 0.0,
+    "min_z": 0.0,
+    "max_x": 512.0,
+    "max_z": 512.0
   },
-  "outputs": ["height.png", "normals.png"],
+  "outputs": [
+    "height.png",
+    "normals.png"
+  ],
   "tolerance": 0,
-  "performance": { "passes": 5, "warn_slower": 0.10, "fail_slower": 0.25 }
+  "performance": {
+    "passes": 5,
+    "warn_slower": 0.1,
+    "fail_slower": 0.25
+  }
 }

@@ -32,11 +32,10 @@ void PrintUsage() {
         "  --log-format <text|json>  log encoding (default text)\n"
         "  --help                 print this message\n"
         "\n"
-        "Until the Lua runtime lands (milestone 6) the graph is a single fBm node driven by\n"
-        "--param: frequency, octaves, lacunarity, persistence, amplitude, offset,\n"
-        "range=<min>,<max>, normalize=0, normals=1, gradient=1, blur=<radius>,\n"
-        "kind=<simplex|ridged|billow>, and domain=3 for a volume, which also needs a y\n"
-        "component on --min and --max.\n",
+        "The script defines main(params) and returns a table of outputs. params carries seed,\n"
+        "bounds, resolution and every --param, with a value that reads as a number pushed as\n"
+        "one. The domain comes from what the script builds, so an R3 graph also needs a y\n"
+        "component on --min and --max. See docs/lua_api.md.\n",
         stderr);
 }
 

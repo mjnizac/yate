@@ -1,10 +1,20 @@
 -- Case: ridged_r2
 --
--- The parameters in case.json drive the graph directly until the Lua runtime lands (milestone 6).
--- This file is hashed into the metadata sidecar, so a change to it is visible in the golden data.
+-- Ridged noise with normalization off, so both the base-function variant and the unnormalized
+-- accumulation path are covered.
 
-local function main(params)
-    return {}
+local function main()
+    local noise = Noises.Ridged{
+        frequency   = 0.008,
+        octaves     = 4,
+        persistence = 0.6,
+        amplitude   = 300.0,
+        normalize   = false,
+    }
+
+    return {
+        height = { value = noise.value, range = { 0, 900 } },
+    }
 end
 
 return main

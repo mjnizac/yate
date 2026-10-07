@@ -4,16 +4,20 @@
   "resolution": 2.0,
   "section": 16,
   "bounds": {
-    "min_x": 0.0, "min_y": 0.0, "min_z": 0.0,
-    "max_x": 64.0, "max_y": 64.0, "max_z": 64.0
+    "min_x": 0.0,
+    "min_y": 0.0,
+    "min_z": 0.0,
+    "max_x": 64.0,
+    "max_y": 64.0,
+    "max_z": 64.0
   },
-  "params": {
-    "domain": "3",
-    "frequency": "0.01",
-    "octaves": "3",
-    "amplitude": "1"
-  },
-  "outputs": ["height.raw"],
+  "outputs": [
+    "height.raw"
+  ],
   "tolerance": 0,
-  "performance": { "passes": 3, "warn_slower": 0.10, "fail_slower": 0.25 }
+  "performance": {
+    "passes": 3,
+    "warn_slower": 0.1,
+    "fail_slower": 0.25
+  }
 }

@@ -1,5 +1,7 @@
 #include <engine/terrain/export.hpp>
 
+#include <engine/lua.hpp>
+
 #include <engine/assert.hpp>
 #include <engine/engine.hpp>
 #include <engine/log.hpp>
@@ -184,90 +186,24 @@ struct Grid {
 ///
 /// This is the graph-built-from-C++ of milestone 5. The Lua runtime replaces this one function in
 /// milestone 6, and nothing downstream of it changes when it does.
-[[nodiscard]] Status BuildJobGraph(Graph& graph, const Params& params, Domain domain) {
-    Graph::NoiseParams noise;
-    noise.domain      = domain;
-    noise.frequency   = static_cast<f32_t>(params.Number("frequency", noise.frequency));
-    noise.octaves     = static_cast<u32_t>(params.Number("octaves", noise.octaves));
-    noise.lacunarity  = static_cast<f32_t>(params.Number("lacunarity", noise.lacunarity));
-    noise.persistence = static_cast<f32_t>(params.Number("persistence", noise.persistence));
-    noise.amplitude   = static_cast<f32_t>(params.Number("amplitude", noise.amplitude));
-    noise.offset      = static_cast<f32_t>(params.Number("offset", noise.offset));
-    noise.normalize   = params.Number("normalize", 1.0) != 0.0;
-
-    const std::string_view kind = params.Text("kind");
-    if (kind == "ridged") {
-        noise.kind = NoiseKind::Ridged;
-    } else if (kind == "billow") {
-        noise.kind = NoiseKind::Billow;
-    } else if (!kind.empty() && kind != "simplex") {
-        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
-                    "unknown noise kind {}; expected simplex, ridged or billow", kind);
-    }
-
-    // No script yet, so the location names the parameter block that drove the node.
-    const SourceLocation location{.file = "<params>", .line = 0};
-
-    Result<Value> value = graph.AddNoise(noise, location);
-    if (!value) {
-        return std::unexpected(value.error());
-    }
-
-    // An optional blur, which is what puts a halo on the graph and makes the padded sections real.
-    const u32_t blurRadius = static_cast<u32_t>(params.Number("blur", 0.0));
-    if (blurRadius != 0) {
-        Result<Value> blurred = graph.AddBlur(*value, blurRadius, location);
-        if (!blurred) {
-            return std::unexpected(blurred.error());
-        }
-        value = blurred;
-    }
-
-    // The range defaults to the band the kernel actually produces, so a forgotten range parameter
-    // does not silently clamp the whole map.
-    f64_t rangeMin = noise.offset - noise.amplitude;
-    f64_t rangeMax = noise.offset + noise.amplitude;
-    (void)params.Pair("range", rangeMin, rangeMax);
-    if (Status requested = graph.RequestOutput("height", *value, static_cast<f32_t>(rangeMin),
-                                               static_cast<f32_t>(rangeMax));
-        !requested) {
-        return requested;
-    }
-
-    // The gradient channel, exported directly rather than turned into normals. This is the only way
-    // to get an Rn -> Rn output out of the pipeline, which is a mapping the writer handles
-    // differently from both a heightmap and a normal map.
-    if (params.Number("gradient", 0.0) != 0.0) {
-        Result<Value> gradient = graph.Channel(Value{.node = 0, .channel = 0, .mapping = {}}, 1);
-        if (!gradient) {
-            return std::unexpected(gradient.error());
-        }
-        if (Status requested = graph.RequestOutput("gradient", *gradient, -1.0f, 1.0f);
-            !requested) {
-            return requested;
+/// The domain every output of a compiled script shares.
+///
+/// The script decides the domain by what it builds, so the grid cannot be laid out until the script
+/// has run. Mixing domains in one job would mean two different grids and two different section
+/// shapes, which is a job split rather than a graph.
+[[nodiscard]] Result<Domain> DomainOf(const Graph& graph, std::string_view script) {
+    const Domain domain = graph.Output(0).value.mapping.domain;
+    for (usize_t i = 1; i < graph.OutputCount(); ++i) {
+        const OutputRequest& output = graph.Output(i);
+        if (output.value.mapping.domain != domain) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::ScriptError, ErrorStage::Script, script, 0,
+                "output '{}' is {} but '{}' is {}; one job evaluates one domain", output.name.data(),
+                ToString(output.value.mapping), graph.Output(0).name.data(),
+                ToString(graph.Output(0).value.mapping)));
         }
     }
-
-    if (params.Number("normals", 0.0) == 0.0) {
-        return {};
-    }
-    if (domain != Domain::R2) {
-        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
-                    "normals are a surface property and need an R2 graph");
-    }
-
-    // Channel 1 of the noise node is the analytic gradient that same dispatch already produced. A
-    // blur would have consumed only the value, so the gradient is taken from the noise directly.
-    Result<Value> noiseValue = graph.Channel(Value{.node = 0, .channel = 0, .mapping = {}}, 1);
-    if (!noiseValue) {
-        return std::unexpected(noiseValue.error());
-    }
-    Result<Value> normals = graph.AddNormals(
-        *noiseValue, static_cast<f32_t>(params.Number("vertical_scale", 1.0)), location);
-    if (!normals) {
-        return std::unexpected(normals.error());
-    }
-    return graph.RequestOutput("normals", *normals, -1.0f, 1.0f);
+    return domain;
 }
 
 /// A band of full-width rows held in CPU RAM while its sections are evaluated, then streamed into
@@ -382,12 +318,29 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                     "--tiles is not implemented yet; see docs/status.md (milestone 7)");
     }
 
-    const f64_t  requestedDomain = job.params.Number("domain", 2.0);
-    const Domain domain = requestedDomain == 3.0 ? Domain::R3 : Domain::R2;
-    if (requestedDomain != 2.0 && requestedDomain != 3.0) {
-        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
-                    "domain must be 2 or 3, got {}", requestedDomain);
+    // The script runs before anything is sized, because what it builds is what decides the domain,
+    // and the domain decides the grid, the section shape and the output formats.
+    Graph                     graph;
+    const lua::ScriptEnvironment environment{.seed       = job.seed,
+                                             .minX       = job.minX,
+                                             .minY       = job.minY,
+                                             .minZ       = job.minZ,
+                                             .maxX       = job.maxX,
+                                             .maxY       = job.maxY,
+                                             .maxZ       = job.maxZ,
+                                             .resolution = job.resolution,
+                                             .params     = &job.params};
+    const Clock::time_point      scriptStart = Clock::now();
+    if (Status built = lua::RunScript(graph, job.script, environment); !built) {
+        return std::unexpected(built.error());
     }
+    const f64_t scriptMs = MillisecondsSince(scriptStart);
+
+    Result<Domain> resolvedDomain = DomainOf(graph, job.script);
+    if (!resolvedDomain) {
+        return std::unexpected(resolvedDomain.error());
+    }
+    const Domain domain = *resolvedDomain;
 
     Result<Grid> grid = MakeGrid(job, domain);
     if (!grid) {
@@ -404,11 +357,6 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     LOG_INFO("export: {}x{}x{} samples, {}x{}x{} section(s) of {}, resolution {} m/px, {}",
              grid->width, grid->depth, grid->height, grid->sectionsX, grid->sectionsY,
              grid->sectionsZ, section, job.resolution, domain == Domain::R3 ? "R3" : "R2");
-
-    Graph graph;
-    if (Status built = BuildJobGraph(graph, job.params, domain); !built) {
-        return std::unexpected(built.error());
-    }
 
     Result<CompiledGraph> compiled =
         Compile(graph, CompileOptions{.extent     = extent,
@@ -648,6 +596,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     metadata.width              = grid->width;
     metadata.height             = grid->height;
     metadata.depth              = grid->depth;
+    metadata.timings.scriptMs   = scriptMs;
     metadata.timings.compileMs  = compiled->stats.milliseconds;
     metadata.timings.pipelineMs = kernels.CreationMilliseconds();
     metadata.timings.gpuMs      = gpuMs;

@@ -1,10 +1,20 @@
 -- Case: blurred_r2
 --
--- The parameters in case.json drive the graph directly until the Lua runtime lands (milestone 6).
--- This file is hashed into the metadata sidecar, so a change to it is visible in the golden data.
+-- The only case with a nonzero halo: the blur radius propagates back to the noise node, so the
+-- padded sections and the halo-aware input indexing are exercised end to end.
 
-local function main(params)
-    return {}
+local function main()
+    local noise = Noises.fBm{
+        frequency = 0.02,
+        octaves   = 2,
+        amplitude = 500.0,
+        offset    = 500.0,
+    }
+
+    return {
+        height = { value = Filters.Blur{ input = noise.value, radius = 3 },
+                   range = { 0, 1000 } },
+    }
 end
 
 return main

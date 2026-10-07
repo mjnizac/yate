@@ -24,6 +24,7 @@ engine_add_unit_test(test_allocators)
 engine_add_unit_test(test_mapping)
 engine_add_unit_test(test_errors)
 engine_add_unit_test(test_compiler)
+engine_add_unit_test(test_lua_errors)
 
 # Needs a Vulkan 1.4 device and the compiled shaders.
 engine_add_unit_test(test_compute_roundtrip)

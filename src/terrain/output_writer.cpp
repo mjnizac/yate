@@ -606,6 +606,7 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
 
     json.BeginObject("timings_ms");
     json.Key("total", metadata.timings.totalMs);
+    json.Key("script", metadata.timings.scriptMs);
     json.Key("graph_compilation", metadata.timings.compileMs);
     json.Key("pipeline_creation", metadata.timings.pipelineMs);
     json.Key("gpu", metadata.timings.gpuMs);

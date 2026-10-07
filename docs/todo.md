@@ -33,6 +33,17 @@
 - [ ] Route what is still landing in `CPU/Untracked new` at shutdown (about 1.4 MB in 8k allocations,
       mostly spdlog and VMA internals) through named allocators.
 
+## Milestone 6 — follow-ups
+
+- [ ] `Terrain.Normals` and `Masks.Slope` take a gradient, so a height that is not a noise channel
+      cannot be turned into normals. The spec's own example writes `Terrain.Normals{ input =
+      eroded.value }`, which needs a `Gradient` neighbourhood op over central differences. It is the
+      first op in the engine that would not be analytic, which is why it is a decision and not a
+      chore: decide alongside milestone 8, where erosion produces exactly such a field.
+- [ ] A script runs on whichever thread asked for it and the error slot is thread-local, but two
+      scripts on two threads would still share the interned chunk-name table. Fine today, since the
+      exporter runs one script; revisit when the viewer reloads on a worker thread (milestone 9).
+
 ## Carried over
 
 - [ ] `SectionPool::Trim` asserts rather than remapping block indices. Decide whether slots should

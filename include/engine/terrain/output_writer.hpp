@@ -170,6 +170,8 @@ struct ExportMetadata {
 
     struct Timings {
         f64_t totalMs    = 0.0;
+        /// Loading the script and running its `main`, which is where the graph comes from.
+        f64_t scriptMs   = 0.0;
         f64_t compileMs  = 0.0;
         f64_t pipelineMs = 0.0;
         f64_t gpuMs      = 0.0;

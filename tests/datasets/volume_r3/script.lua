@@ -1,10 +1,19 @@
 -- Case: volume_r3
 --
--- The parameters in case.json drive the graph directly until the Lua runtime lands (milestone 6).
--- This file is hashed into the metadata sidecar, so a change to it is visible in the golden data.
+-- An R3->R1 density field written as a raw little-endian f32 volume. The domain comes from the
+-- noise node, and the exporter lays the grid out from what the script built.
 
-local function main(params)
-    return {}
+local function main()
+    local noise = Noises.fBm{
+        domain    = 3,
+        frequency = 0.01,
+        octaves   = 3,
+        amplitude = 1.0,
+    }
+
+    return {
+        height = { value = noise.value, range = { -1, 1 } },
+    }
 end
 
 return main

@@ -7,20 +7,21 @@
 | 3 | Vulkan context in Headless mode | **done**, accepted |
 | 4 | First export | **done**, accepted |
 | 5 | Graph and compiler, without Lua | **done**, pending acceptance |
-| 6 | Lua bindings | not started |
+| 6 | Lua bindings | **done**, accepted |
 | 7 | Sections and streaming | not started |
 | 8 | Iterative kernels | not started |
 | 9 | Viewer (Graphics mode) | not started |
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 8 of 8 in each:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 9 of 9 in each:
 
 ```
 test_allocators ......... Passed
 test_mapping ............ Passed
 test_errors ............. Passed
 test_compiler ........... Passed
+test_lua_errors ......... Passed
 test_compute_roundtrip .. Passed
 test_noise .............. Passed
 test_kernels ............ Passed
@@ -222,3 +223,47 @@ pixels.
 **`R3` end to end.** `terrain_export` builds an `R3` graph when the job asks for it, evaluates it brick
 by brick in y, z, x order and streams each brick into `RawVolumeWriter` with `fseek`, so a volume is
 never fully resident.
+
+## 6. Lua bindings
+
+Lua 5.4 through Sol2, all of it in `src/lua.cpp`. `terrain_export` no longer builds a graph from
+`--param`: it runs the script, and what the script built decides the domain, which decides the grid,
+the section shape and the output formats. `docs/lua_api.md` is the reference.
+
+**Lazy, as specified.** A binding reads its named arguments, validates them, appends one node and
+returns a handle. A handle is one `Value`: a node index, a channel and a mapping, with no back
+pointer, because the bindings reach the graph by capture. `.value` and `.gradient` select a channel,
+`.x` to `.w` extract a component, and the four arithmetic operators plus unary minus work with a
+number on either side.
+
+**Named arguments that reject what they were not given.** `Noises.fBm{ persistance = 0.3 }` is an
+error naming the key and listing the ones the op accepts. A silently ignored key is the one failure
+mode of a named-parameter API that produces a plausible wrong result instead of a message, so every
+key read is recorded and anything left over is reported.
+
+**Errors land on the script line.** Every binding reads the caller's line out of the Lua stack before
+it touches the graph. Two stages show up, both with the line: `[script]` when a binding rejects its
+own arguments, `[validation]` when a graph builder rejects a mapping, which is the stage the spec's own
+example shows.
+
+**Nothing throws across the C boundary.** A failing binding throws a C++ exception that Sol2's wrapper
+catches one frame later; the structured `Error` travels in a thread-local slot, because Lua's error
+channel carries only a string. Every call into Lua is protected, and the panic handler logs and aborts
+instead of throwing, since a panic returns into C.
+
+**Memory and sandbox.** Every byte the interpreter touches comes from the `CPU/Lua` allocator, so the
+script's cost is its own pool in the Tracy memory view, and `test_lua_errors` asserts the pool is empty
+after the last script. Only `base`, `math`, `string` and `table` are opened: no `io`, no `os`, no
+`package`, no `require`.
+
+**Verification.** `test_lua_errors` is the acceptance test, 126 checks over 27 bad scripts and one good
+one. Each case pins the stage, the line and the words the message has to contain. And the stronger
+check: all five dataset cases reproduce **bit-exactly** through the Lua runtime, which is what says the
+bindings build the same graph the parameter path did, node for node.
+
+### Not in this milestone
+
+- `Erosion.Hydraulic` is milestone 8.
+- Hot reload is viewer work (milestone 9). Reloading is already just another `RunScript` call, which
+  creates and destroys its own state.
+- `Terrain.Normals` has no `R2->R1` overload: it would need a finite-difference gradient op.
