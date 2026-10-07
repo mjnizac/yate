@@ -32,9 +32,9 @@ void PrintUsage() {
         "\n"
         "Until the Lua runtime lands (milestone 6) the graph is a single fBm node driven by\n"
         "--param: frequency, octaves, lacunarity, persistence, amplitude, offset,\n"
-        "range=<min>,<max>, normalize=0, normals=1, blur=<radius>, kind=<simplex|ridged|billow>\n"
-        "and domain=3 for a volume, which also needs a y component on --min and --max.\n"
-        "and normals=1.\n",
+        "range=<min>,<max>, normalize=0, normals=1, gradient=1, blur=<radius>,\n"
+        "kind=<simplex|ridged|billow>, and domain=3 for a volume, which also needs a y\n"
+        "component on --min and --max.\n",
         stderr);
 }
 
