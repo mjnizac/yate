@@ -16,10 +16,6 @@
       `TracyVkCollect`, 107 microseconds of CPU per section against dispatches of 2 to 11
       microseconds. Collecting every N sections would amortise it; measure whether the query pool
       tolerates the backlog first. Profiling-only overhead either way.
-- [ ] Total export time is about 18% above the pre-milestone-5 baseline and the cause is not
-      identified. Pipeline creation was one part and is fixed; the rest is unexplained. PNG encoding
-      dominates the wall time, so measure before optimising.
-
 ## Next
 
 - [ ] Confirm the Tracy memory view shows every CPU and VRAM pool with correct reserved and used
@@ -36,8 +32,5 @@
       callbacks, or switch to a private `mi_heap_t` per allocator with explicit locking.
 - [ ] `ENGINE_ASSERT` compiles away in Release, so a condition with side effects would be dropped.
       Consider a compile-time check that forbids that.
-- [ ] PNG encoding is about 99% of export wall time. Before optimising, measure whether a lower zlib
-      level or a different filter choice is enough; the data is high-entropy noise, so compression has
-      little to work with.
 - [ ] `ENGINE_SIMPLEX2_SCALE` was chosen to put a unit-amplitude fBm inside roughly [-1, 1] and is
       checked loosely by `test_noise`. Measure the true bound once there are more noise kinds.

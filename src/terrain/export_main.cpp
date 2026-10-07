@@ -25,6 +25,8 @@ void PrintUsage() {
         "  --section <n>          section size in samples, a power of two (default 512)\n"
         "  --out <dir>            output directory (default out/)\n"
         "  --tiles                write one file per tile instead of one stitched image\n"
+        "  --png-level <0-9>      zlib level for PNG outputs (default 1)\n"
+        "  --png-filter <f>       PNG row filter: none, up or all (default up)\n"
         "  --param key=value      script parameter, repeatable\n"
         "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"
         "  --log-format <text|json>  log encoding (default text)\n"
@@ -125,6 +127,19 @@ struct Options {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--param expects key=value, got {}", value);
             }
+        } else if (argument == "--png-level") {
+            const unsigned long level = std::strtoul(value.data(), nullptr, 10);
+            if (level > 9) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--png-level expects 0 to 9, got {}", value);
+            }
+            options.job.png.level = static_cast<u32_t>(level);
+        } else if (argument == "--png-filter") {
+            Result<terrain::PngFilter> filter = terrain::ParsePngFilter(value);
+            if (!filter) {
+                return std::unexpected(filter.error());
+            }
+            options.job.png.filter = *filter;
         } else if (argument == "--log-format") {
             if (value == "json") {
                 options.logFormat = log::Format::Json;

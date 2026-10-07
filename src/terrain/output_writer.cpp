@@ -182,8 +182,32 @@ Result<OutputFormat> FormatFor(Mapping mapping) {
 
 // --- PngWriter ----------------------------------------------------------------------------------
 
+const char* ToString(PngFilter filter) noexcept {
+    switch (filter) {
+        case PngFilter::None: return "none";
+        case PngFilter::Up: return "up";
+        case PngFilter::All: return "all";
+    }
+    return "unknown";
+}
+
+Result<PngFilter> ParsePngFilter(std::string_view name) {
+    if (name == "none") {
+        return PngFilter::None;
+    }
+    if (name == "up") {
+        return PngFilter::Up;
+    }
+    if (name == "all") {
+        return PngFilter::All;
+    }
+    ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                "unknown PNG filter '{}'; expected none, up or all", name);
+}
+
 Result<PngWriter> PngWriter::Create(std::string_view path, u32_t width, u32_t height,
-                                   Mapping mapping, f32_t rangeMin, f32_t rangeMax) {
+                                   Mapping mapping, f32_t rangeMin, f32_t rangeMax,
+                                   PngCompression compression) {
     Result<OutputFormat> resolved = FormatFor(mapping);
     if (!resolved) {
         return std::unexpected(resolved.error());
@@ -229,6 +253,17 @@ Result<PngWriter> PngWriter::Create(std::string_view path, u32_t width, u32_t he
                                         call, spng_strerror(code)));
     };
 
+    const int filterChoice = compression.filter == PngFilter::All ? SPNG_FILTER_CHOICE_ALL
+                             : compression.filter == PngFilter::Up ? SPNG_FILTER_CHOICE_UP
+                                                                   : SPNG_FILTER_CHOICE_NONE;
+    if (const int code = spng_set_option(context, SPNG_FILTER_CHOICE, filterChoice); code != 0) {
+        return fail(code, "spng_set_option(SPNG_FILTER_CHOICE)");
+    }
+    if (const int code = spng_set_option(context, SPNG_IMG_COMPRESSION_LEVEL,
+                                         static_cast<int>(compression.level));
+        code != 0) {
+        return fail(code, "spng_set_option(SPNG_IMG_COMPRESSION_LEVEL)");
+    }
     if (const int code = spng_set_png_file(context, file); code != 0) {
         return fail(code, "spng_set_png_file");
     }

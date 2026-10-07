@@ -3,6 +3,7 @@
 #include <engine/application.hpp>
 #include <engine/common.hpp>
 #include <engine/error.hpp>
+#include <engine/terrain/output_writer.hpp>
 
 #include <array>
 #include <string_view>
@@ -61,7 +62,9 @@ struct ExportJob {
     f64_t            resolution      = 1.0;
     u32_t            sectionSize     = 512;
     /// One file per tile instead of one stitched image.
-    b8_t   tiles = false;
+    b8_t tiles = false;
+    /// Encoder effort for PNG outputs. See `PngCompression` for why the defaults are what they are.
+    PngCompression png;
     Params params;
 };
 

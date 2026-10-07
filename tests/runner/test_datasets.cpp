@@ -199,7 +199,7 @@ struct Comparison {
     // one-unit difference is visible.
     Result<terrain::PngWriter> writer = terrain::PngWriter::Create(
         diffPath, actual.width, actual.height, terrain::Mapping{terrain::Domain::R2, 1}, 0.0f,
-        static_cast<f32_t>(comparison.maximumDifference));
+        static_cast<f32_t>(comparison.maximumDifference), terrain::PngCompression{});
     if (!writer) {
         Warn("could not write the difference image: %s", writer.error().Format().data());
         return comparison;

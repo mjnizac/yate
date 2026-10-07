@@ -2,6 +2,33 @@
 
 #include <engine/common.hpp>
 
+#include <engine/error.hpp>
+
+#include <string_view>
+
+namespace engine::terrain {
+
+/// Row filter the PNG encoder may use. `All` makes libspng try every filter per row and keep the
+/// smallest, which is what it does by default.
+enum class PngFilter : u8_t { None = 0, Up, All };
+
+[[nodiscard]] ENGINE_API const char* ToString(PngFilter filter) noexcept;
+
+[[nodiscard]] ENGINE_API Result<PngFilter> ParsePngFilter(std::string_view name);
+
+/// How hard the PNG encoder works. The defaults were measured on the `basic_fbm` case, where
+/// encoding is 96% of the wall time: libspng's own defaults (`All`, level 6) take 341 ms and produce
+/// 1072 KiB, while `Up` at level 1 takes 82 ms and produces 1124 KiB. Terrain data is high-entropy
+/// noise, so searching filters and running the slow zlib passes buys about 5% of size for 4.2x the
+/// time. Overridable per job because an archival export may want the opposite trade.
+struct PngCompression {
+    PngFilter filter = PngFilter::Up;
+    /// zlib level, 0 to 9.
+    u32_t level = 1;
+};
+
+} // namespace engine::terrain
+
 #ifdef IS_ENGINE
 
 #    include <engine/error.hpp>
@@ -48,7 +75,8 @@ public:
     /// The format and the number of source components both come from `mapping`.
     /// `rangeMin`/`rangeMax` are used by `Grayscale16`; `Rgb16` always remaps from [-1, 1].
     [[nodiscard]] static Result<PngWriter> Create(std::string_view path, u32_t width, u32_t height,
-                                                 Mapping mapping, f32_t rangeMin, f32_t rangeMax);
+                                                 Mapping mapping, f32_t rangeMin, f32_t rangeMax,
+                                                 PngCompression compression);
 
     /// Writes one row of `width * components` samples, where components comes from the format.
     [[nodiscard]] Status WriteRow(const f32_t* samples);

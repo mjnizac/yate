@@ -119,8 +119,8 @@ The first case, `basic_fbm`, is a 512x512 heightmap plus normals over 2x2 sectio
 - `graph_compilation` in the sidecar is 0 until there is a graph to compile (milestone 5).
 - `gpu` in the sidecar is the total of the per-section timestamp pairs. The per-op breakdown needs the
   evaluator (milestone 5).
-- Encoding dominates the wall time: a 2048x2048 export with normals takes about 5.7 s in Release, of
-  which the GPU accounts for 3.2 ms and zlib for nearly all the rest.
+- Encoding dominates the wall time; see the PNG encoder settings under milestone 5 for what that
+  measurement led to.
 
 ## 5. Graph and compiler
 
@@ -194,6 +194,24 @@ halo is the maximum over its consumers of consumer halo plus consumer radius.
 volume). The runner reads the output file names from `case.json` and dispatches on the extension, so a
 case declares whatever set of outputs it produces; volumes are compared sample by sample in raw units
 instead of 16-bit steps, since there is no useful 2D difference image for a 3D output.
+
+**PNG encoder settings, chosen by measurement.** Encoding was 96% of the wall time of the
+`basic_fbm` case, so the filter choice and the zlib level were measured across the grid rather than
+left at libspng's defaults:
+
+| Filter | Level | Total | Bytes |
+| --- | --- | --- | --- |
+| all | 6 (libspng default) | 341 ms | 1072 KiB |
+| all | 1 | 124 ms | 1124 KiB |
+| up | 3 | 153 ms | 1091 KiB |
+| **up** | **1** | **82 ms** | **1124 KiB** |
+| none | 1 | 72 ms | 1273 KiB |
+
+Terrain data is high-entropy noise, so searching every filter per row and running the slow zlib
+passes buys about 5% of size for 4.2x the time. `up` at level 1 is the default, overridable with
+`--png-level` and `--png-filter`. The dataset goldens did not have to change, because the runner
+compares decoded samples rather than file bytes: `basic_fbm` went from 382 ms to 66 ms with the same
+pixels.
 
 **`R3` end to end.** `terrain_export` builds an `R3` graph when the job asks for it, evaluates it brick
 by brick in y, z, x order and streams each brick into `RawVolumeWriter` with `fseek`, so a volume is

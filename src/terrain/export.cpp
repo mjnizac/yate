@@ -477,8 +477,9 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             }
             out.raw = std::move(*writer);
         } else {
-            Result<PngWriter> writer = PngWriter::Create(out.path.data(), grid->width, grid->height,
-                                                        info.mapping, info.rangeMin, info.rangeMax);
+            Result<PngWriter> writer =
+                PngWriter::Create(out.path.data(), grid->width, grid->height, info.mapping,
+                                  info.rangeMin, info.rangeMax, job.png);
             if (!writer) {
                 return std::unexpected(writer.error());
             }
