@@ -7,6 +7,7 @@
 #include <engine/platform.hpp>
 #include <engine/render/camera.hpp>
 #include <engine/render/input.hpp>
+#include <engine/render/ui.hpp>
 #include <engine/terrain/compiler.hpp>
 #include <engine/terrain/evaluator.hpp>
 #include <engine/terrain/export.hpp>
@@ -52,6 +53,29 @@ constexpr f64_t kReloadDebounceSeconds = 0.150;
 /// How often the script's modification time is checked. Polling, because no OS watch API is needed for
 /// one file and a cross-platform one would be the only thing in the engine that needed it.
 constexpr f64_t kWatchIntervalSeconds = 0.25;
+
+/// Drawn grid density by distance, as a fraction of the tile's sample count.
+///
+/// The spec asks for "a resolution appropriate to camera distance". This is the render half of that: a
+/// tile twenty tile-widths away contributes a handful of pixels per quad, so drawing it at full density
+/// spends triangles on detail no one can see. The *evaluation* half, re-evaluating distant tiles at a
+/// coarser sample spacing, is a streaming problem and is listed in docs/todo.md.
+///
+/// Powers of two, so a coarser grid lands on a subset of the same samples and neighbouring tiles at
+/// different levels still meet along their shared edge.
+[[nodiscard]] u32_t GridVerticesFor(u32_t full, f32_t distance, f32_t tileSide) {
+    const f32_t tiles = tileSide > 1e-6f ? distance / tileSide : 0.0f;
+    u32_t       divisor = 1;
+    if (tiles > 16.0f) {
+        divisor = 8;
+    } else if (tiles > 8.0f) {
+        divisor = 4;
+    } else if (tiles > 4.0f) {
+        divisor = 2;
+    }
+    const u32_t quads = std::max((full - 1) / divisor, 1u);
+    return quads + 1;
+}
 
 /// Largest tile side the preview accepts.
 ///
@@ -465,6 +489,10 @@ struct ViewerLayer::State {
     vulkan::GraphicsPipeline pipeline;
     Camera                   camera;
     Input                    input;
+    Ui                       ui;
+    /// Smoothed, because a per-frame figure flickers too fast to read.
+    f32_t framesPerSecond   = 0.0f;
+    f32_t frameMilliseconds = 0.0f;
 
     Preview preview;
     /// Kept so a reload can be compiled against the same node storage without reallocating it.
@@ -611,6 +639,15 @@ void ViewerLayer::OnAttach() {
     m_state->lastModifiedSeconds = FileModifiedSeconds(m_state->settings.script);
     m_state->lastWatchSeconds    = NowSeconds();
 
+    if (Status ui = m_state->ui.Initialize(*m_state->context, *m_state->window,
+                                           m_state->swapchain->Pass().Handle(),
+                                           static_cast<u32_t>(m_state->swapchain->ImageCount()));
+        !ui) {
+        // Not fatal: a viewer without panels still shows terrain, and losing the whole preview because
+        // the UI backend failed would be the wrong trade.
+        LOG_WARN("the UI is unavailable: {}", ui.error().Format().data());
+    }
+
     m_state->windowLayer->SetRecorder(
         [](const WindowLayer::FrameContext& frame, void* user) {
             static_cast<ViewerLayer*>(user)->Record(frame);
@@ -624,15 +661,32 @@ void ViewerLayer::OnDetach() {
     if (m_state == nullptr) {
         return;
     }
+    // Stop being called into first, so nothing records against resources that are about to go.
     if (m_state->windowLayer != nullptr) {
         m_state->windowLayer->SetRecorder(nullptr, nullptr);
     }
     WaitForReload();
+
     if (m_state->context != nullptr) {
         if (Status idle = m_state->context->WaitIdle(); !idle) {
-            LOG_WARN("could not wait for the device before releasing the preview: {}",
+            LOG_WARN("could not wait for the device before releasing the viewer: {}",
                      idle.error().Format().data());
         }
+    }
+    // An idle device is not enough. The last frame the window layer recorded still *names* this layer's
+    // pipeline and the UI's buffers and descriptor sets, and a command buffer keeps referencing what it
+    // mentions until it is reset. Layers detach in reverse push order, so this one tears down while that
+    // recording is still alive; resetting it is what releases the references. See
+    // `Swapchain::ResetFrames`.
+    if (m_state->swapchain != nullptr) {
+        if (Status reset = m_state->swapchain->ResetFrames(); !reset) {
+            LOG_WARN("could not reset the frame commands before releasing the viewer: {}",
+                     reset.error().Format().data());
+        }
+    }
+
+    m_state->ui.Shutdown();
+    if (m_state->context != nullptr) {
         m_state->preview.Release(*m_state->context);
     }
     m_state->pipeline = vulkan::GraphicsPipeline{};
@@ -646,6 +700,7 @@ void ViewerLayer::OnUpdate() {
         return;
     }
     UpdateInput();
+    UpdatePanels();
     UpdateReload();
 }
 
@@ -655,24 +710,35 @@ void ViewerLayer::UpdateInput() {
 
     state.input.Update(*state.window);
 
-    if (state.input.Pressed(Key::ToggleMode)) {
+    // A panel under the pointer takes the pointer. Without this, dragging a slider also turns the
+    // camera, which is the single most irritating bug an immediate-mode UI can have.
+    //
+    // These flags come from the panels built during the *previous* frame's recording, because that is
+    // when the UI frame is laid out. One frame of latency on "is the cursor over a panel", which is
+    // inherent to an immediate-mode UI and invisible at any frame rate worth using.
+    const b8_t uiHasMouse    = state.ui.WantsMouse();
+    const b8_t uiHasKeyboard = state.ui.WantsKeyboard();
+
+    if (!uiHasKeyboard && state.input.Pressed(Key::ToggleMode)) {
         const b8_t toFly = state.camera.Mode() == CameraMode::Orbit;
         state.camera.SetMode(toFly ? CameraMode::Fly : CameraMode::Orbit);
         LOG_INFO("camera mode: {}", toFly ? "fly" : "orbit");
     }
-    if (state.input.Pressed(Key::Reload)) {
+    if (!uiHasKeyboard && state.input.Pressed(Key::Reload)) {
         RequestReload();
     }
 
     // Left drag turns, middle drag pans, wheel zooms. Dragging rather than captured-cursor look, because
     // the viewer also wants a usable pointer for the parameter panel.
-    if (state.input.Held(MouseButton::Left)) {
+    if (!uiHasMouse && state.input.Held(MouseButton::Left)) {
         state.camera.Turn(state.input.CursorDeltaX(), state.input.CursorDeltaY());
     }
-    if (state.input.Held(MouseButton::Middle)) {
+    if (!uiHasMouse && state.input.Held(MouseButton::Middle)) {
         state.camera.Pan(state.input.CursorDeltaX(), state.input.CursorDeltaY());
     }
-    if (const f32_t scroll = state.input.ScrollDelta(); scroll != 0.0f) {
+    // Read either way, so a tick spent over a panel is consumed rather than applied on the next frame.
+    const f32_t scroll = state.input.ScrollDelta();
+    if (!uiHasMouse && scroll != 0.0f) {
         state.camera.Zoom(scroll);
     }
 
@@ -682,11 +748,65 @@ void ViewerLayer::UpdateInput() {
                         - (state.input.Held(Key::MoveLeft) ? 1.0f : 0.0f);
     const f32_t up = (state.input.Held(Key::MoveUp) ? 1.0f : 0.0f)
                      - (state.input.Held(Key::MoveDown) ? 1.0f : 0.0f);
-    if (forward != 0.0f || right != 0.0f || up != 0.0f) {
+    if (!uiHasKeyboard && (forward != 0.0f || right != 0.0f || up != 0.0f)) {
         const f32_t boost = state.input.Held(Key::Faster) ? 5.0f : 1.0f;
         state.camera.Move(forward * boost, right * boost, up * boost,
                           static_cast<f32_t>(delta));
     }
+}
+
+void ViewerLayer::UpdatePanels() {
+    State&      state = *m_state;
+    const f64_t delta = state.windowLayer->DeltaSeconds();
+    if (delta > 0.0) {
+        // Exponential smoothing. A per-frame figure changes faster than it can be read.
+        const f32_t instant = static_cast<f32_t>(1.0 / delta);
+        state.framesPerSecond =
+            state.framesPerSecond == 0.0f ? instant : state.framesPerSecond * 0.9f + instant * 0.1f;
+        const f32_t milliseconds = static_cast<f32_t>(delta * 1000.0);
+        state.frameMilliseconds  = state.frameMilliseconds == 0.0f
+                                       ? milliseconds
+                                       : state.frameMilliseconds * 0.9f + milliseconds * 0.1f;
+    }
+}
+
+/// Builds and records the panels.
+///
+/// The whole UI frame lives here, including `NewFrame`, rather than being split between the layer update
+/// and the recorder. The layer stack is `WindowLayer` then `ViewerLayer`, and the window layer owns the
+/// frame: it calls the recorder from inside its own update, which runs *before* this layer's. Building
+/// the UI in `OnUpdate` therefore put `NewFrame` after the `Render` that consumes it, and ImGui said so
+/// on the first frame. Keeping the pair together removes the ordering question instead of answering it.
+void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
+    State& state = *m_state;
+    if (!state.ui.IsValid()) {
+        return;
+    }
+    state.ui.Begin();
+
+    const Vec3 eye = state.camera.Position();
+    Ui::Panels panels;
+    panels.scriptPath        = state.scriptPath.data();
+    panels.error             = state.hasError ? state.lastError.data() : "";
+    panels.cameraMode        = state.camera.Mode() == CameraMode::Orbit ? "orbit camera (F to fly)"
+                                                                       : "fly camera (F to orbit)";
+    panels.tilesDrawn        = state.tilesDrawn;
+    panels.tileCount         = static_cast<u32_t>(state.preview.tiles.size());
+    panels.loadCount         = state.loadCount;
+    panels.framesPerSecond   = state.framesPerSecond;
+    panels.frameMilliseconds = state.frameMilliseconds;
+    panels.eye               = {eye.x, eye.y, eye.z};
+    panels.params            = &state.params;
+
+    // Editing a parameter reloads: the script is what turns a parameter into terrain, so there is no
+    // shortcut that updates push constants instead. The spec's "only numeric parameters changed, so no
+    // pipeline is created" holds anyway, because the pipeline map is keyed on op and variant and a
+    // changed number produces the same variants.
+    if (state.ui.Draw(panels)) {
+        RequestReload();
+    }
+
+    state.ui.Record(commands);
 }
 
 void ViewerLayer::UpdateReload() {
@@ -779,6 +899,7 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     State& state = *m_state;
     if (state.preview.tiles.empty() || !state.pipeline.IsValid()) {
         state.tilesDrawn = 0;
+        RecordPanels(frame.commands);
         return;
     }
 
@@ -789,15 +910,14 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     const Mat4    viewProjection = state.camera.ViewProjection(aspect);
     const Frustum frustum        = FrustumOf(viewProjection);
 
-    const u32_t gridVertices = state.settings.gridVertices;
-    const u32_t quadsPerSide = gridVertices - 1;
-    const u32_t vertexCount  = quadsPerSide * quadsPerSide * 6;
-
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
     constants.resolution     = state.preview.resolution;
     constants.samples        = state.preview.samplesPerTile;
-    constants.gridVertices   = gridVertices;
+
+    const Vec3  eye      = state.camera.Position();
+    const f32_t tileSide = static_cast<f32_t>(state.preview.samplesPerTile - 1)
+                           * state.preview.resolution;
 
     b8_t  bound = false;
     u32_t drawn = 0;
@@ -814,9 +934,21 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
             continue;
         }
 
-        constants.tileOrigin = tile.origin;
-        constants.heights    = tile.height.address;
-        constants.normals    = tile.normals.address;
+        // Grid density from the distance to the tile's centre, so a far tile costs a fraction of the
+        // triangles. The centre rather than the nearest corner: using the nearest point makes the level
+        // change as the camera slides along a tile edge, which flickers.
+        const Vec3  centre{(minimum[0] + maximum[0]) * 0.5f, (minimum[1] + maximum[1]) * 0.5f,
+                          (minimum[2] + maximum[2]) * 0.5f};
+        const f32_t distance     = Length(centre - eye);
+        const u32_t gridVertices =
+            GridVerticesFor(state.settings.gridVertices, distance, tileSide);
+        const u32_t quadsPerSide = gridVertices - 1;
+        const u32_t vertexCount  = quadsPerSide * quadsPerSide * 6;
+
+        constants.gridVertices = gridVertices;
+        constants.tileOrigin   = tile.origin;
+        constants.heights      = tile.height.address;
+        constants.normals      = tile.normals.address;
 
         if (!bound) {
             state.pipeline.Bind(frame.commands, frame.extent, constants);
@@ -828,6 +960,10 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
         ++drawn;
     }
     state.tilesDrawn = drawn;
+
+    // Panels last, so they sit on top of the terrain. Same render pass, no depth test in the UI
+    // pipeline, so ordering inside the pass is all that is needed.
+    RecordPanels(frame.commands);
 }
 
 u32_t ViewerLayer::TilesDrawn() const noexcept {

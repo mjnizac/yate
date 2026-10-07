@@ -115,20 +115,21 @@
       case, where the stencil is four taps. Measure before building: at 24 iterations over a 512 section
       the working set is 1 MiB, which may already sit in L2.
 
-## Milestone 9 — remaining
+## Milestone 9 — follow-ups
 
-- [ ] The renderer: a GPU-displaced grid whose vertex shader samples the compute output directly, so no
-      mesh is uploaded. Needs a graphics pipeline against the existing render pass and a way for the
-      viewer to keep one evaluated section resident rather than streaming it to disk.
-- [ ] Camera with orbit and fly modes, and an input system abstracted from GLFW key codes.
-- [ ] Hot reload: poll the script's modification time with a 150 ms debounce, re-run it in a fresh Lua
-      state on a worker thread, and keep rendering the previous valid graph until the new one compiles.
-      A reload that changed only numeric parameters must not create a pipeline.
-- [ ] Auto-generated UI for the user parameters, and an on-screen panel for errors. No UI library is in
-      the dependency list yet; decide between adding one and drawing the panel with the engine's own
-      pipeline before writing either.
-- [ ] Frustum culling of sections, and evaluating only visible ones at a resolution that follows camera
-      distance. This is the part that needs the "one section in flight" decision from milestone 7
-      revisited, because the viewer evaluates continuously rather than once.
-- [ ] A second `WindowLayer` is refused rather than supported. Decide whether multiple windows are worth
-      it before the viewer grows a second panel.
+- [ ] **Evaluation that follows the camera.** The one part of the spec's viewer section that is not done:
+      the preview evaluates a fixed square once, so flying past its edge flies off the terrain. What it
+      needs is a scheduler that keeps a ring of tiles around the camera, evaluates the ones that came
+      into view, evicts the ones that left, and picks a sample spacing from the distance — which is the
+      streaming system milestone 7 scoped down to one section in flight. Now that erosion makes the GPU a
+      real cost (28 ms of a 40 ms export), the "one section in flight" decision is worth revisiting at
+      the same time.
+- [ ] A reload re-evaluates every tile, which takes 57 ms for 64 tiles. Most of a parameter tweak changes
+      every sample, so there is nothing to cache; what *is* worth measuring is whether the tiles can be
+      evaluated on a second queue so the frame loop does not stall on them.
+- [ ] The viewer has no wireframe mode, though `Key::Wireframe` is bound. It needs a second pipeline with
+      `POLYGON_MODE_LINE`, which is five lines and a variant, and is genuinely useful for judging the grid
+      density the distance LOD picked.
+- [ ] `Input` keys its scroll accumulator to a file-scope variable, because GLFW's callback has no user
+      pointer the window hands out. Fine for one window; it is the thing to fix first if multiple windows
+      ever happen.

@@ -74,6 +74,7 @@ add_library(engine_objects OBJECT
     src/render/camera.cpp
     src/render/input.cpp
     src/render/renderer.cpp
+    src/render/ui.cpp
     src/terrain/mapping.cpp
     src/terrain/export.cpp
     src/terrain/graph.cpp

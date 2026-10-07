@@ -150,6 +150,50 @@ FetchContent_Declare(glfw
 )
 FetchContent_MakeAvailable(glfw)
 
+# --- Dear ImGui ---------------------------------------------------------------------------------
+# The viewer's parameter panel and error panel. Not in the spec's dependency table, because the spec
+# asks for "auto-generated UI for user parameters" without naming a library, so the choice was open.
+#
+# The alternative considered was drawing the panels with the engine's own pipeline and an embedded
+# bitmap font, which would have added no dependency. It was rejected on the amount of work that buys
+# nothing: a legible font is 95 hand-authored glyphs, and sliders and text entry would all be written
+# from scratch, while ImGui ships its own atlas and its own Vulkan backend that manages its descriptor
+# sets internally -- so it needs no image upload or sampler support from the engine, which has none.
+#
+# Its allocations are routed through `CPU/General` with `ImGui::SetAllocatorFunctions`, so it does not
+# become another untracked pool.
+#
+# No CMakeLists upstream, so the target is declared here from the core sources plus the two backends.
+
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.5
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(imgui)
+
+add_library(imgui_static STATIC
+    "${imgui_SOURCE_DIR}/imgui.cpp"
+    "${imgui_SOURCE_DIR}/imgui_draw.cpp"
+    "${imgui_SOURCE_DIR}/imgui_tables.cpp"
+    "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+)
+target_include_directories(imgui_static SYSTEM PUBLIC
+    "${imgui_SOURCE_DIR}"
+    "${imgui_SOURCE_DIR}/backends"
+)
+target_link_libraries(imgui_static PUBLIC glfw Vulkan::Vulkan)
+set_target_properties(imgui_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Deliberately *not* defining IMGUI_IMPL_VULKAN_NO_PROTOTYPES: the backend tests whether that symbol is
+# defined, not what it is defined to, so setting it to 0 still switches it to the load-your-own-functions
+# path and it then asserts that nobody loaded them. The engine links the SDK loader and has prototypes.
+if(MSVC)
+    # Not ours to fix.
+    target_compile_options(imgui_static PRIVATE /W0)
+endif()
+
 # --- Vulkan SDK ---------------------------------------------------------------------------------
 # Looked up last so a missing SDK is the only thing a fresh configure can fail on, after the
 # fetched dependencies are already in place.
@@ -161,7 +205,8 @@ find_package(Vulkan 1.4 REQUIRED COMPONENTS glslc)
 # VMA's single-header implementation does not compile clean under /W4, and it is not ours to fix.
 # Marking the fetched include directories as SYSTEM keeps third-party warnings out of our build log
 # without lowering the warning level on engine code.
-foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static sol2 glfw)
+foreach(dependency spdlog TracyClient mimalloc-static VulkanMemoryAllocator spng_static sol2 glfw
+                   imgui_static)
     if(TARGET ${dependency})
         get_target_property(_dirs ${dependency} INTERFACE_INCLUDE_DIRECTORIES)
         if(_dirs)
@@ -187,6 +232,7 @@ target_link_libraries(engine_third_party INTERFACE
     lua_static
     sol2::sol2
     glfw
+    imgui_static
 )
 target_compile_definitions(engine_third_party INTERFACE
     $<$<BOOL:${ENGINE_TRACY_CALLSTACKS}>:ENGINE_TRACY_CALLSTACKS>

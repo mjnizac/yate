@@ -10,7 +10,7 @@
 | 6 | Lua bindings | **done**, accepted |
 | 7 | Sections and streaming | **done**, accepted |
 | 8 | Iterative kernels | **done**, accepted |
-| 9 | Viewer (Graphics mode) | in progress: window, swapchain and frame loop done |
+| 9 | Viewer (Graphics mode) | **done**, pending visual review |
 
 ## Verification
 
@@ -411,11 +411,19 @@ because an iterative op has no CPU reference worth maintaining:
   24 ms on its own, a 37% "regression" caused by the test before it. The baseline comparison now uses the
   fastest pass, which is the only number that reflects the code rather than the machine.
 
-## 9. Viewer (in progress)
+## 9. Viewer
 
-Window, surface, swapchain, render pass and the frame loop. `terrain_viewer` opens a window and presents;
-it does not draw terrain yet. What is left is the renderer, the camera and input, hot reload, the
-parameter UI, and culling with distance-based resolution.
+`terrain_viewer` runs a script, keeps the result resident on the GPU and draws it as a displaced grid,
+with an orbit and fly camera, a parameter panel, an error panel and hot reload.
+
+```
+terrain_viewer --script assets/scripts/basic.lua --extent 2048 --resolution 2 --section 128
+```
+
+Left-drag turns, middle-drag pans, the wheel zooms, F switches between orbit and fly, WASDQE moves in
+fly mode and shift goes faster. R reloads, which also happens on its own when the file changes.
+
+### Window, swapchain and the frame loop
 
 **The ordering problem at startup, and what it cost.** A `VkSurfaceKHR` needs an instance. Choosing a
 physical device needs a surface, because presentation support is part of what makes a device acceptable
@@ -434,30 +442,122 @@ one: colour waits on the presentation engine for the image just acquired, and de
 frame's fragment tests, because there is a single depth buffer shared by every frame in flight. Without
 the second one, frame N's depth clear races frame N-1's depth tests.
 
-**The bug the test found.** `renderFinished` started out as one semaphore per frame slot, alongside
-`imageAvailable` and the fence. That is wrong, and only validation says so: the semaphore is signalled by
-the submit and waited on by the *present*, so it stays in use until the presentation engine is done with
-the image, which the frame fence knows nothing about — the fence reports that the submit finished. With
-three swapchain images and two frame slots, a slot comes round again while the present that used its
-semaphore is still pending:
+**Reversed depth.** Near is 1, far is 0, the pass clears depth to 0 and the pipeline compares with
+`GREATER_OR_EQUAL`. A float depth buffer keeps most of its precision near zero, and reversing the range
+puts that precision where the geometry is close, which is what stops the horizon z-fighting when terrain
+stretches to the far plane.
+
+### The renderer
+
+**No mesh.** Each vertex derives its grid position from `gl_VertexIndex` and reads the height and the
+normal through a buffer device address, exactly as the compute kernels pass buffers to each other. Six
+vertices per quad rather than an index buffer, because an index buffer is a second allocation describing
+what the vertex index already encodes. Nothing is uploaded and nothing is copied per frame.
+
+**Resident tiles.** The previewed square is split into tiles, each evaluated once into its own pair of
+section-pool slots. The evaluator reuses one set of buffers for every section, so the tile's copy is what
+makes it outlive the next tile's dispatches; a tile is a `samples x samples` field with no padding.
+
+**Grid density follows distance.** A tile more than four tile-widths away drops to half the grid, past
+eight to a quarter, past sixteen to an eighth, in powers of two so a coarser grid lands on a subset of
+the same samples and neighbouring tiles at different levels still meet along their shared edge.
+
+**Frustum culling** from the six planes of the view-projection matrix against each tile's box, where the
+height range comes from what the script declared rather than from the data: that can only make the box
+too large, which is the only direction that cannot cull something visible.
+
+### Hot reload
+
+The script's modification time is polled four times a second with a 150 ms debounce, because an editor
+writes a file in several steps and reloading on the first one reads a half-written script.
+
+The CPU half of a reload — running the script and resolving its outputs — happens on a worker thread.
+The GPU half stays on the main thread, because the queue and the section pool are not synchronized for
+concurrent use and making them so would be a large change to serve one feature. The previous preview
+keeps rendering until the new one has been both compiled *and* evaluated, so a broken edit leaves the
+terrain on screen and puts the error in the panel:
 
 ```
-vkQueueSubmit(): pSignalSemaphores[0] is being signaled by VkQueue, but it may still be in use by
-VkSwapchainKHR
+terrain.lua:12: [script] Noises.fBm does not take 'persistance'; it accepts domain, kind, frequency, ...
 ```
 
-It is now one semaphore per swapchain image. An image can only be reused after being acquired again, and
-acquiring it means its previous present completed. The Release build never showed this, because
-validation is a Debug-only layer here; it is exactly the class of error that ships silently and then
-corrupts a frame on someone else's driver.
+**A script written for the exporter works unchanged.** If it produces only a height, the viewer appends
+the two nodes it needs — a measured gradient and the normals from it — rather than refusing to show it.
 
-**Testable without a human.** `--frames N` presents that many frames and exits, and `test_viewer` uses it:
-it checks that the surface exists, that the swapchain is at least double buffered with a valid render
-pass, that frames are acquired and presented, that three forced resizes rebuild everything, that the loop
-still runs afterwards, and that the debug messenger reported nothing. On a machine with no display it
-returns 77 and ctest reports it as skipped rather than failed.
+### The UI, and why Dear ImGui
 
-### Still a human's job
+The spec asks for an auto-generated parameter UI and an on-screen error panel without naming a library,
+so the choice was open. The alternative considered was drawing the panels with the engine's own pipeline
+and an embedded bitmap font, adding no dependency. It was rejected on the work it buys nothing for: a
+legible font is 95 hand-authored glyphs, and sliders and text entry would all be written from scratch,
+while ImGui ships its own atlas and a Vulkan backend that manages its descriptor sets internally — so it
+needs no image upload or sampler support from the engine, which has neither.
 
-Nothing above says the picture is right, because nothing is drawn yet. Once the renderer lands, whether
-the terrain *looks* correct stays outside what these tests can judge.
+It is confined to `src/render/ui.cpp` the way Sol2 is confined to `lua.cpp`, so no UI type reaches a
+header, and its allocations are routed through `CPU/General` instead of becoming another untracked pool.
+
+"Auto-generated" means exactly that: the engine does not know what a parameter means, only its name and
+its text, so a numeric one gets a drag field whose step scales with its value and anything else gets a
+text box. Editing one triggers a reload, because the script is what turns a parameter into terrain.
+
+### What the tests check, and what they cannot
+
+`test_viewer` is 45 checks: the surface exists, the swapchain is at least double buffered with a valid
+render pass, frames are acquired and presented, three forced resizes rebuild everything, the loop still
+runs afterwards, a script loads into 16 tiles, **something is actually drawn** after culling, a changed
+script reloads, a script with no normals output still loads, and a broken script leaves the load count
+where it was with a non-empty error. On a machine with no display it returns 77 and ctest reports it as
+skipped.
+
+The "something is actually drawn" check is the one that earns its place: a culling bug that rejected
+every tile looks exactly like a successful empty frame, which is how that whole class of error hides.
+
+**Still a human's job.** Nothing here says the picture is *right*. Whether the terrain looks like terrain,
+whether the shading reads, whether the camera feels right — none of that is in reach of a test, and it is
+the part that needs looking at.
+
+### The bugs this milestone found
+
+- **`renderFinished` cannot be a per-frame semaphore.** It started out next to `imageAvailable` and the
+  fence, which is wrong and only validation says so: the semaphore is signalled by the submit and waited
+  on by the *present*, so it stays in use until the presentation engine is done with the image, which the
+  frame fence knows nothing about. With three images and two frame slots, a slot comes round again while
+  the present that used its semaphore is still pending. It is now one per swapchain image, because an
+  image can only be reused after being acquired again. Release never showed it; validation is Debug-only
+  here.
+- **`Stop()` during `OnAttach` was discarded.** A layer's `OnAttach` runs inside `PushLayer`, before
+  `Run`, and `Run` set `running` to true unconditionally. The viewer failing to load its script looked
+  like a successful run of sixty empty frames. `Stop` now records the request when there is no loop to
+  stop — and only then, because setting the flag unconditionally made the first `StopAfter` poison every
+  later `Run`.
+- **A requested output is not necessarily a tight buffer.** A value some other op reads with a radius
+  carries that halo even when it is also an output, and in a script that takes the gradient of its own
+  height the height buffer ends up with the whole erosion chain's halo: a 202x202 buffer where the tile
+  wants 128x128. The copy into a tile now takes the interior row by row.
+- **The one-shot command pool filled up in a viewer.** Per-frame GPU zone collection submits on the
+  compute queue, and the viewer's frames go through the *graphics* queue, so nothing ever called
+  `WaitTimeline` on the compute one and the pool was exhausted after sixteen frames. `BeginOneShot` now
+  polls the timeline and recycles before giving up, which makes the pool self-healing for every caller
+  rather than only for the ones that happen to wait.
+- **An idle device does not release a command buffer's references.** A recorded command buffer keeps
+  referencing the pipelines, buffers and descriptor sets it mentions until it is reset, and layers detach
+  in reverse push order, so the viewer tore down its pipeline and the UI's resources while the window
+  layer's last recording still named them. `Swapchain::ResetFrames` exists for exactly that moment.
+- **`IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0` still means "no prototypes".** The backend tests whether the
+  symbol is defined, not what it is defined to.
+- **The UI frame cannot be built in the layer update.** The window layer owns the frame and calls the
+  recorder from inside its own update, which runs *before* the viewer's, so `NewFrame` landed after the
+  `Render` that consumes it. The whole UI frame now lives in the recorder, which removes the ordering
+  question instead of answering it.
+
+### Not in this milestone
+
+- **Evaluation does not follow the camera.** The preview evaluates a fixed square once and on reload;
+  "evaluation restricted to visible sections at a resolution appropriate to camera distance" is done for
+  *rendering* (culling and grid density) but not for evaluation. Doing it properly means a streaming
+  scheduler that evaluates and evicts tiles as the camera moves, which is the piece milestone 7
+  deliberately scoped down to one section in flight. `docs/todo.md` says what it would take.
+- **A second `WindowLayer` is refused, deliberately.** The main window's surface is what chose the
+  physical device, so a second window cannot make that choice and has to be checked against it; and the
+  input module keys its scroll accumulator to one window. A terrain viewer with one viewport has nothing
+  to gain, so the refusal is explicit and the message says why.

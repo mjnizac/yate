@@ -88,6 +88,18 @@ public:
     /// Frames presented since creation, for the frame-pacing plots and for the smoke test.
     [[nodiscard]] u64_t FramesPresented() const noexcept { return m_framesPresented; }
 
+    /// Resets the frame command buffers, dropping every reference they hold.
+    ///
+    /// `vkDeviceWaitIdle` is not enough before destroying something a frame referenced. A recorded
+    /// command buffer keeps referencing the pipelines, buffers and descriptor sets it mentions until it
+    /// is reset, idle GPU or not, and destroying one of those is an error validation reports as "can't
+    /// be called on X that is currently in use by VkCommandBuffer Y".
+    ///
+    /// It matters because layers detach in reverse push order: whatever was pushed above the window
+    /// layer tears its resources down first, while the window layer's last recorded frame still names
+    /// them. Such a layer calls this after waiting for the device and before destroying anything.
+    [[nodiscard]] Status ResetFrames();
+
 private:
     void   Release() noexcept;
     void   ReleaseSizeDependent() noexcept;

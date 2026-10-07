@@ -259,6 +259,27 @@ Status Swapchain::CreateSizeDependent(u32_t width, u32_t height) {
     return {};
 }
 
+Status Swapchain::ResetFrames() {
+    if (m_commandPool == VK_NULL_HANDLE) {
+        return {};
+    }
+    // Every fence first: resetting a pool whose buffers are still executing is undefined, and the
+    // fences are the only thing that says they are not.
+    std::array<VkFence, kFramesInFlight> fences{};
+    u32_t                                count = 0;
+    for (const FrameSync& frame : m_frames) {
+        if (frame.inFlight != VK_NULL_HANDLE) {
+            fences[count++] = frame.inFlight;
+        }
+    }
+    if (count != 0) {
+        VK_TRY(vkWaitForFences(m_device, count, fences.data(), VK_TRUE,
+                               kFrameTimeoutNanoseconds));
+    }
+    VK_TRY(vkResetCommandPool(m_device, m_commandPool, 0));
+    return {};
+}
+
 Status Swapchain::Recreate(u32_t width, u32_t height) {
     ReleaseSizeDependent();
     return CreateSizeDependent(width, height);

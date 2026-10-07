@@ -106,3 +106,31 @@ build/Release/bin/terrain_export --script assets/scripts/basic.lua --min 0,0 --m
 
 `tracy-profiler` instead of `tracy-capture` shows it live. `tracy-csvexport <trace>` dumps the zone
 statistics as text, which is the quickest way to check a trace without opening the UI.
+
+## The viewer
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/basic.lua --extent 2048 --resolution 2 --section 128
+```
+
+Left-drag turns, middle-drag pans, the wheel zooms. `F` switches between orbit and fly; in fly mode
+`WASD` moves, `Q` and `E` go down and up, and shift goes faster. `R` reloads the script, which also
+happens on its own about a quarter of a second after the file changes.
+
+`--extent` is the side of the previewed square in metres and `--resolution` is metres per sample, so the
+two together decide how much work a load is: 2048 m at 2 m/sample is 1024x1024 samples, which is 64
+tiles of 128 and takes about 60 ms to evaluate for the sample script.
+
+`--frames <n>` presents that many frames and exits. That is what makes the viewer runnable from a script
+or a test, and it is how `test_viewer` drives it:
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/basic.lua --frames 300 --extent 1024
+```
+
+A trace of the viewer is captured the same way as one of an export; the GPU zones carry the script line
+of the op that produced them, so `ThermalErosion:53` is the erosion on line 53 of the script:
+
+```bash
+tracy-capture -o traces/viewer.tracy -f
+```

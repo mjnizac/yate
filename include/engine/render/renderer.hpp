@@ -74,10 +74,12 @@ private:
     struct State;
 
     void UpdateInput();
+    void UpdatePanels();
     void UpdateReload();
 #ifdef IS_ENGINE
     /// Records this frame's tiles inside the window layer's render pass.
     void Record(const WindowLayer::FrameContext& frame);
+    void RecordPanels(VkCommandBuffer commands);
 #endif
 
     State* m_state = nullptr;
