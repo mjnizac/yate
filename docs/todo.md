@@ -193,3 +193,15 @@
       measures -173 to 166 at 8 m sampling, so most of the 16-bit depth is spent on heights that never
       occur. Narrowing it is a one-line change, but the right number depends on the amplitude, which is a
       script parameter, so the clamp should be derived from it rather than written as a constant.
+
+## Found while writing the Lua reference
+
+- [ ] **`Terrain.Coords` returns sample indices, not metres.** Every positional script — an island
+      falloff, a region mask, a domain warp — therefore describes different terrain at every resolution
+      unless it multiplies by `params.resolution` by hand, and nothing reminds it to. This is the same
+      class as the erosion units and should be decided with them: either the op returns metres, or the
+      name says what it returns.
+- [ ] **On an `R2->R2`, world z is `.y`.** The component accessors are positional, so
+      `Terrain.Coords{ domain = 2 }.z` is an error about component 2 not existing rather than about the
+      axis. The accessor could know that an `R2` value's second component is the z axis and accept `.z`
+      for it, which is what every script actually means.
