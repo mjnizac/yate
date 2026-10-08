@@ -54,29 +54,6 @@ constexpr f64_t kReloadDebounceSeconds = 0.150;
 /// one file and a cross-platform one would be the only thing in the engine that needed it.
 constexpr f64_t kWatchIntervalSeconds = 0.25;
 
-/// Drawn grid density by distance, as a fraction of the tile's sample count.
-///
-/// The spec asks for "a resolution appropriate to camera distance". This is the render half of that: a
-/// tile twenty tile-widths away contributes a handful of pixels per quad, so drawing it at full density
-/// spends triangles on detail no one can see. The *evaluation* half, re-evaluating distant tiles at a
-/// coarser sample spacing, is a streaming problem and is listed in docs/todo.md.
-///
-/// Powers of two, so a coarser grid lands on a subset of the same samples and neighbouring tiles at
-/// different levels still meet along their shared edge.
-[[nodiscard]] u32_t GridVerticesFor(u32_t full, f32_t distance, f32_t tileSide) {
-    const f32_t tiles = tileSide > 1e-6f ? distance / tileSide : 0.0f;
-    u32_t       divisor = 1;
-    if (tiles > 16.0f) {
-        divisor = 8;
-    } else if (tiles > 8.0f) {
-        divisor = 4;
-    } else if (tiles > 4.0f) {
-        divisor = 2;
-    }
-    const u32_t quads = std::max((full - 1) / divisor, 1u);
-    return quads + 1;
-}
-
 /// Frames the ideal level must disagree with the active one before the ring switches.
 ///
 /// A level change evicts and re-evaluates every tile, so acting on a single frame's measurement would
@@ -420,10 +397,16 @@ struct TileCache {
     // Sample coordinates are in this level's units, which is why the compiled graph carries this level's
     // spacing: the kernels build a world position as `(origin + local) * resolution`, so a coarser level
     // is a coarser resolution over the same integer lattice rather than a stride through a finer one.
-    // Tile origins are multiples of the tile size, so a level's lattice is a subset of the one below and
-    // changing level does not shift the terrain sideways.
-    const i32_t originX = key.x * static_cast<i32_t>(samples);
-    const i32_t originZ = key.z * static_cast<i32_t>(samples);
+    // Origins step by `samples - 1`, not by `samples`, so a tile's last sample *is* its neighbour's
+    // first one. A tile of N samples spans N-1 intervals; stepping by N would leave one interval
+    // undrawn between every pair of tiles, which is the hairline of background that showed along every
+    // tile border. The shared sample is the same world position in both tiles and the evaluator is
+    // position-based, so the two surfaces meet exactly rather than merely closely.
+    //
+    // The level lattices still nest: a coarse origin is a multiple of the coarse spacing, which is a
+    // multiple of the fine one, so changing level does not shift the terrain sideways.
+    const i32_t originX = key.x * static_cast<i32_t>(samples - 1);
+    const i32_t originZ = key.z * static_cast<i32_t>(samples - 1);
 
     Tile tile;
     tile.key     = key;
@@ -1055,9 +1038,6 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     constants.viewProjection = viewProjection.m;
     constants.samples        = state.terrain.samples;
 
-    const Vec3  eye      = state.camera.Position();
-    const f32_t tileSide = static_cast<f32_t>(state.terrain.samples) * state.terrain.spacing;
-
     const vulkan::GraphicsPipeline& pipeline =
         state.wireframe && state.wirePipeline.IsValid() ? state.wirePipeline : state.pipeline;
 
@@ -1076,14 +1056,12 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
             continue;
         }
 
-        // Grid density from the distance to the tile's centre, so a far tile costs a fraction of the
-        // triangles. The centre rather than the nearest corner: using the nearest point makes the level
-        // change as the camera slides along a tile edge, which flickers.
-        const Vec3  centre{(minimum[0] + maximum[0]) * 0.5f, (minimum[1] + maximum[1]) * 0.5f,
-                          (minimum[2] + maximum[2]) * 0.5f};
-        const f32_t distance     = Length(centre - eye);
-        const u32_t gridVertices =
-            GridVerticesFor(state.settings.gridVertices, distance, tileSide);
+        // One grid density for every tile, for the same reason there is one evaluation level: two
+        // densities meeting along a shared edge is a T-junction. The coarse side spans its edge with a
+        // chord between every nth sample while the fine side follows each one, so the surfaces part
+        // company and the background shows through as a hairline crack. Distance is already handled,
+        // and handled once, by the level that chooses the sample spacing.
+        const u32_t gridVertices = std::min(state.settings.gridVertices, tile.samples);
         const u32_t quadsPerSide = gridVertices - 1;
         const u32_t vertexCount  = quadsPerSide * quadsPerSide * 6;
 
@@ -1126,7 +1104,8 @@ void ViewerLayer::StreamTiles(u32_t budget) {
     }
 
     const i32_t radius   = static_cast<i32_t>(state.settings.ringRadius);
-    const f32_t tileSide = static_cast<f32_t>(state.terrain.samples) * state.terrain.spacing;
+    // `samples - 1`, matching the origins a key maps to: a tile covers that many intervals.
+    const f32_t tileSide = static_cast<f32_t>(state.terrain.samples - 1) * state.terrain.spacing;
     // Centred on what the camera is about rather than on the eye: see `Camera::Focus`.
     const Vec3 focus = state.camera.Focus();
 
