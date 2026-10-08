@@ -89,12 +89,15 @@ void main() {
     float centreSurface = centre.height + centre.water;
 
     // What this cell sends and what its neighbours send it, both from the same previous state. The
-    // steepest drop is tracked at the same time, because the sediment capacity depends on it.
+    // drop the outflow descends is tracked at the same time, because the sediment capacity depends on
+    // it, and so is the drop to the lowest neighbour, which is what bounds how deep one iteration may
+    // cut.
     float waterOut    = 0.0;
     float waterIn     = 0.0;
     float sedimentOut = 0.0;
     float sedimentIn  = 0.0;
     float steepest    = 0.0;
+    float lowest      = centre.height;
 
     for (uint n = 0u; n < 4u; ++n) {
         ivec3 offset = kNeighbours[n];
@@ -111,11 +114,18 @@ void main() {
         float neighbourSurface = neighbour.height + neighbour.water;
 
         float down = centreSurface - neighbourSurface;
-        steepest   = max(steepest, abs(centre.height - neighbour.height));
+        lowest     = min(lowest, neighbour.height);
 
         if (down > 0.0) {
             float moved = flowRate * min(centre.water, down);
             waterOut += moved;
+            // The slope that sets the capacity is the one the water is going *down*. Taking the largest
+            // absolute difference to any neighbour instead, uphill ones included, gives a cell at the
+            // foot of a slope the capacity of the slope above it: it erodes although nothing descends
+            // there, digging a pit, which steepens the drop into it, which erodes harder. That feedback
+            // is what made the op diverge for any rainfall large enough to do visible work, so the only
+            // settings that stayed stable were the ones that did nothing.
+            steepest = max(steepest, centre.height - neighbour.height);
             // Sediment travels at the concentration of the water that carries it.
             sedimentOut += moved * centre.sediment / max(centre.water, kMinimumWater);
         } else if (down < 0.0) {
@@ -136,9 +146,12 @@ void main() {
     float holds   = capacity * flow * steepest;
 
     if (next.sediment < holds) {
-        // Room to spare: take the difference out of the bed, but never more bed than there is sediment
-        // capacity for, so a single iteration cannot cut a hole.
-        float taken = erosionRate * (holds - next.sediment);
+        // Room to spare: take the difference out of the bed. Never more than half the drop to the
+        // lowest neighbour, so one iteration cannot cut the cell below what surrounds it — without that
+        // bound the capacity term alone does not stop a cell from digging past its own outlet, and the
+        // next iteration sees a steeper drop and takes more.
+        float taken = min(erosionRate * (holds - next.sediment),
+                          0.5 * max(centre.height - lowest, 0.0));
         next.height -= taken;
         next.sediment += taken;
     } else {
