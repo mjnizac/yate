@@ -147,14 +147,19 @@
 
 ## Found during the milestone 9 visual review
 
-- [ ] **No check looks at a rendered pixel.** The reversed-Z depth clear was wrong since the viewer was
-      written, and every viewer check passed throughout: the ring was evaluated, the tiles cleared the
-      frustum, the draws were recorded. What was missing was the last step. The swapchain images are
-      created `COLOR_ATTACHMENT` only, so this needs `TRANSFER_SRC` on them and a copy to a host-visible
-      buffer; then a check that a frame of terrain is not uniformly the clear colour, and that the colour
-      changes when the camera moves, would close the class rather than this one instance. A
-      `--screenshot <file>` option on the viewer falls out of the same readback and is what makes the
-      thing debuggable by eye without a human at the keyboard.
+- [x] **The viewer can be looked at.** `--screenshot <file>` copies the presented swapchain image out of
+      the frame's own command buffer and writes it as an 8-bit PNG, which is what made the visual review
+      possible at all. The *check* is still missing, below.
+- [ ] **No check looks at a rendered pixel.** The readback exists now, so a check that a frame of terrain
+      is not uniformly the clear colour, and that it changes when the camera moves, is a few lines in
+      `test_viewer`. It would have caught the reversed-Z depth clear on the day it was written, and the
+      tile gap on the day after. Everything the suite asserts about the viewer today stops one step short
+      of a pixel.
+- [ ] **Nothing checks a written file against a value, only against another written file.** The dataset
+      runner compares decoded samples, which is what makes it survive a compressor swap, but both sides
+      are PNGs the engine produced, so it was blind to every 16-bit sample being byte-reversed for the
+      whole life of the project. One check that writes a known constant over a known range and asserts
+      the bytes in the file closes it.
 - [ ] **The startup framing ignores the level it is about to pick.** `Frame` is called with
       `sectionSize * resolution * (ring + 1)`, which is the ring's radius at level 0. `IdealLevel` then
       reads the resulting distance and picks a level, and at the defaults that is level 2, where a tile is
@@ -162,3 +167,29 @@
       camera ends up inside a ring four times larger than intended. It is not wrong enough to hide
       anything — the terrain fills the view from 2128 m out — but the number is a lie and the fix is to
       frame, pick the level, then reframe on the radius that level implies.
+
+## Found during the milestone 9 visual review
+
+- [ ] **The erosion ops measure slope per cell, so the terrain changes shape with the sample spacing.**
+      `Erosion.Thermal`'s `talus` is a height difference between neighbours, and hydraulic erosion's
+      capacity term is too. Halve the spacing and the same drop is half as many metres per metre, so the
+      same script describes different terrain. Measured on `basic.lua` over the same region at 8 m and at
+      16 m, comparing the samples that share a world position: the noise alone is **identical**, to the
+      bit, and with erosion the mean difference is 8.0 m and the worst is 94.7 m.
+
+      That is not an abstract wart. The viewer picks its sample spacing from camera distance, so the
+      terrain visibly changes shape when the ring changes level — the one thing the single global level
+      was chosen to avoid.
+
+      The fix is to divide the neighbour difference by the sample spacing in both kernels and let `talus`
+      mean a slope rather than a drop. Both already have a parameter word free, and `ResolutionParamWord`
+      is the mechanism. It changes what `talus` means to a script, which is a published convention, so it
+      is written down here rather than done.
+- [ ] **The viewer's startup framing still ignores the level it is about to pick.** Unchanged from the
+      previous entry: `Frame` is called with the ring radius at level 0, `IdealLevel` reads the resulting
+      distance, and at the defaults the ring then spans 3584 m rather than the 1024 m it was framed for.
+      Nothing is hidden by it, but the number is a lie.
+- [ ] **`basic.lua` declares a range it does not use.** The clamp is at -600 and 800 while the terrain
+      measures -173 to 166 at 8 m sampling, so most of the 16-bit depth is spent on heights that never
+      occur. Narrowing it is a one-line change, but the right number depends on the amplitude, which is a
+      script parameter, so the clamp should be derived from it rather than written as a constant.

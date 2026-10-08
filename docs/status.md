@@ -782,3 +782,115 @@ Nothing in the suite could have caught it. `test_viewer` checks that the ring is
 pass frustum culling and that the draws are recorded, and all of that was true. No check looks at a
 pixel, because the swapchain images are created `COLOR_ATTACHMENT` only and there is no readback path to
 look through. That is the gap, and it is in `docs/todo.md` rather than fixed here.
+
+## The visual review of milestone 9
+
+The viewer opened and the terrain in it was wrong in four separate ways, none of which any check in the
+suite could see. They are listed here in the order they were found, because each one hid the next.
+
+### A screenshot, first
+
+Nothing could be judged without being able to look at a frame from a script, so `--screenshot <file>`
+came first: the presented swapchain image is copied into a host buffer inside the frame's own command
+buffer, after the render pass, and written as an 8-bit PNG. It needs `TRANSFER_SRC` on the swapchain
+images, which is requested only when the surface offers it. With no `--frames` it defaults to 90, because
+the first frames of a viewer are a half-streamed ring and a picture of those says nothing.
+
+This is the tool the whole rest of this section depended on. Every check in `test_viewer` passed while the
+screen was empty, because they all stop one step short of a pixel.
+
+### Every 16-bit PNG the engine ever wrote was byte-reversed
+
+The heightmaps looked like white noise at 8 m sampling and like interference rings at 1 m. The values
+themselves were fine: the exporter reported no clamped samples, and `test_noise` measures the kernel
+against a CPU reference to within 1e-6. It was the file.
+
+PNG stores 16-bit samples big-endian and the writer swapped each one before handing the row to libspng.
+libspng does that conversion itself, so the two cancelled and the file came out little-endian. Measured
+rather than argued: a field whose values are all near zero, declared over a range of ±100000, must appear
+in the file as `80 00`, and it appeared as `00 80`.
+
+What that does to a picture is the giveaway in hindsight. The low byte lands in the high one, so a height
+that changes slowly across the image produces a fast sawtooth — white noise where the field is rough,
+contour rings where it is smooth.
+
+The dataset runner could not catch it. It compares decoded samples, which is what makes it immune to a
+compressor swap, but both sides of the comparison are PNGs the engine wrote, so a consistent error in
+writing them is invisible. One corroboration came for free when the goldens were re-recorded:
+`blended_r2/mask.png` was the only file that did not change, because a mask is almost all `0x0000` and
+`0xFFFF`, and those two are the same byte-reversed.
+
+### Hydraulic erosion had no setting that both worked and held together
+
+With the sample script's rainfall it moved about a metre of bed across 400 m of relief — nothing. Turn the
+rain up and every sample clamped: 65536 of 65536 at 0.5 m per iteration.
+
+The capacity term was the cause. It read
+
+```
+steepest = max(steepest, abs(centre.height - neighbour.height))
+```
+
+over all four neighbours, uphill ones included, so a cell at the foot of a slope was given the carrying
+capacity of the slope above it. It eroded although nothing descended there, which dug a pit, which
+steepened the drop into the pit, which eroded harder. The capacity now comes from the drop the outflow
+actually descends, and a cut is bounded by half the drop to the lowest neighbour so one iteration can
+never take a cell below what surrounds it.
+
+Measured over the same graph, 24 iterations at 8 m sampling:
+
+| Rain per iteration | Before | After |
+| --- | --- | --- |
+| 0.02 m | 0 clamped, relief 391 m (no effect) | 0 clamped, relief 358 m |
+| 0.2 m | 56041 clamped, relief 3081 m | 0 clamped, relief 350 m |
+| 0.5 m | all 65536 clamped | 0 clamped, relief 338 m |
+| 10 m | all 65536 clamped | 0 clamped, relief 341 m |
+
+It saturates past about 0.5 m rather than diverging, which is the bound doing its job.
+
+### A tile drew one interval less than it occupied
+
+A dark line along every tile border, with the background showing through. Tile origins stepped by
+`samples * spacing` while a tile of N samples spans N-1 intervals, so 8 m of every 1024 was never drawn.
+Origins step by `samples - 1` now, which makes a tile's last sample its neighbour's first: the same world
+position in both, and the evaluator is position-based, so the two surfaces meet exactly rather than
+closely.
+
+The per-tile grid density went at the same time, for a related reason. It reduced the drawn vertices of a
+distant tile by a power of two, and two densities meeting along an edge is a T-junction — the coarse side
+spans the edge with a chord between every nth sample while the fine side follows each one. Distance is
+already handled, and handled once, by the level that chooses the sample spacing. Drawing every tile at
+full density costs nothing measurable here: 0.72 ms a frame against 0.63.
+
+### The sample script was asking for spikes
+
+With the files finally readable, `basic.lua` still produced a field of spikes, and that one was not a bug.
+
+A sine of amplitude A and wavelength L has a maximum slope of 2*pi*A/L, and with lacunarity 2 and
+persistence 0.5 every octave of an fBm contributes the same slope, so the stack is about six times that.
+At 400 m of amplitude over the 500 m wavelength the script asked for, that is a 62-degree mean slope
+measured at 8 m sampling. The frequency is 0.0002 now, a 5 km wavelength, which measures 11 degrees.
+
+The second half was the slope mask. `Masks.Slope` read the base's own analytic gradient, and
+differentiating an fBm weights each octave by its frequency, so the gradient of a six-octave field is
+dominated by the finest octave and the mask flickers between 0 and 1 from sample to sample. Blending two
+surfaces hundreds of metres apart with a flickering weight is its own roughness generator:
+
+| Octaves feeding the mask | Mean slope | Relief |
+| --- | --- | --- |
+| 6 | 38.0 deg | 528 m |
+| 3 | 13.6 deg | 528 m |
+| 2 | 12.1 deg | 528 m |
+
+Three octaves, with the relief untouched. "Where is the terrain steep" is a question about its shape, not
+about its roughness.
+
+The script as it stands measures 12.1 degrees of mean slope over 624 m of relief across 8 km.
+
+### What this says about the test suite
+
+Every one of the four was invisible to twelve passing tests, and for the same reason in each case: the
+suite checks the step before the one that was wrong. It verifies that the noise kernel matches a CPU
+reference, and the file was written wrong. It verifies that tiles are evaluated, cleared the frustum and
+were recorded as draws, and the fragments were discarded. It compares PNGs the engine wrote against PNGs
+the engine wrote. The gap is listed in `docs/todo.md`.

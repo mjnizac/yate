@@ -130,6 +130,16 @@ statistics as text, which is the quickest way to check a trace without opening t
 build/Release/bin/terrain_viewer --script assets/scripts/basic.lua --resolution 2 --section 128 --ring 3
 ```
 
+Taking a picture of a frame, which is how the renderer gets looked at without a human at the keyboard:
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/basic.lua --screenshot out/frame.png
+```
+
+It writes the last frame before the viewer stops, so it implies `--frames 90` unless a count is given:
+the first frames show a half-streamed ring. The copy comes out of the presented swapchain image, so the
+file is what the window showed.
+
 Left-drag turns, middle-drag pans, the wheel zooms. `F` switches between orbit and fly; in fly mode
 `WASD` moves, `Q` and `E` go down and up, and shift goes faster. `R` reloads the script, which also
 happens on its own about a quarter of a second after the file changes. `T` toggles wireframe, which is
