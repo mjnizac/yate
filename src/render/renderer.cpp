@@ -594,8 +594,15 @@ struct ViewerLayer::State {
 namespace {
 
 /// Runs the script and resolves its outputs. CPU only, safe on a worker thread.
+/// `resolution` is the *level's* sample spacing, not the one on the command line.
+///
+/// It used to be hardcoded to 1.0, which quietly made the viewer a liar: a script that derives
+/// anything from `params.resolution` — a talus angle, metres out of `Terrain.Coords`, a blur radius —
+/// got one answer here and a different one from the exporter, so the preview showed terrain the export
+/// would never produce. Since the spacing changes with the level, the script is re-run when the level
+/// changes; that is why this takes the spacing rather than reading it from the settings.
 [[nodiscard]] Status LoadScript(LoadedGraph& loaded, std::string_view path, u64_t seed,
-                                const terrain::Params& params) {
+                                const terrain::Params& params, f64_t resolution) {
     const lua::ScriptEnvironment environment{.seed       = seed,
                                              .minX       = 0.0,
                                              .minY       = 0.0,
@@ -603,7 +610,7 @@ namespace {
                                              .maxX       = 0.0,
                                              .maxY       = 0.0,
                                              .maxZ       = 0.0,
-                                             .resolution = 1.0,
+                                             .resolution = resolution,
                                              .params     = &params};
     if (Status ran = lua::RunScript(loaded.graph, path, environment); !ran) {
         return ran;
@@ -705,19 +712,8 @@ void ViewerLayer::OnAttach() {
         LOG_WARN("wireframe is unavailable: {}", wire.error().Format().data());
     }
 
-    // First load is synchronous: there is nothing to keep rendering yet, so there is no reason to defer
-    // it and every reason to fail here rather than after the window has opened on an empty scene.
-    if (Status loaded = LoadScript(m_state->current, m_state->settings.script,
-                                   m_state->settings.seed, m_state->params);
-        !loaded) {
-        detail::CopyBounded(m_state->lastError, std::string_view{loaded.error().Format().data()});
-        m_state->hasError = true;
-        LOG_ERROR("{}", m_state->lastError.data());
-        App().Stop();
-        return;
-    }
-    // Framed before anything is evaluated, because the camera is what decides which tiles to evaluate
-    // and at what spacing. The radius it is framed on is the ring's own radius in world units.
+    // The camera is framed and the level chosen *before* the script runs, because the script is given
+    // the level's sample spacing and `IdealLevel` needs only the camera, not the graph.
     const f32_t ringRadius = static_cast<f32_t>(m_state->settings.sectionSize)
                              * static_cast<f32_t>(m_state->settings.resolution)
                              * static_cast<f32_t>(m_state->settings.ringRadius + 1);
@@ -725,6 +721,18 @@ void ViewerLayer::OnAttach() {
     m_state->level = IdealLevel(m_state->camera.ViewDistance(0.0f), m_state->settings.sectionSize,
                                 m_state->settings.resolution, m_state->settings.maxLevel);
 
+    // First load is synchronous: there is nothing to keep rendering yet, so there is no reason to defer
+    // it and every reason to fail here rather than after the window has opened on an empty scene.
+    if (Status loaded = LoadScript(m_state->current, m_state->settings.script,
+                                   m_state->settings.seed, m_state->params,
+                                   SpacingOf(m_state->settings.resolution, m_state->level));
+        !loaded) {
+        detail::CopyBounded(m_state->lastError, std::string_view{loaded.error().Format().data()});
+        m_state->hasError = true;
+        LOG_ERROR("{}", m_state->lastError.data());
+        App().Stop();
+        return;
+    }
     Result<Terrain> terrain = BuildTerrain(*m_state->context, m_state->current, m_state->settings,
                                            m_state->level);
     if (!terrain) {
@@ -1007,7 +1015,8 @@ void ViewerLayer::UpdateReload() {
         // Emptied every time, so a script that fails halfway cannot leave half its nodes behind.
         state.pending.Reset();
         if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.seed,
-                                       state.params);
+                                       state.params,
+                                       SpacingOf(state.settings.resolution, state.level));
             !loaded) {
             state.reload.error  = loaded.error();
             state.reload.failed = true;
@@ -1190,8 +1199,20 @@ void ViewerLayer::UpdateLevel() {
     }
     state.disagreeingFrames = 0;
 
+    // The script sees the level's spacing, so a level change re-runs it. Into `pending`, which is also
+    // where a hot reload leaves its graph: building from `current` here would rebuild the script as it
+    // was at startup and silently undo the last reload.
+    state.pending.Reset();
+    if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.seed,
+                                   state.params, SpacingOf(state.settings.resolution, ideal));
+        !loaded) {
+        LOG_WARN("could not switch to level {}, staying at {}: {}", ideal, state.level,
+                 loaded.error().Format().data());
+        return;
+    }
+
     Result<Terrain> terrain =
-        BuildTerrain(*state.context, state.current, state.settings, ideal);
+        BuildTerrain(*state.context, state.pending, state.settings, ideal);
     if (!terrain) {
         LOG_WARN("could not switch to level {}, staying at {}: {}", ideal, state.level,
                  terrain.error().Format().data());
