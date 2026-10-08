@@ -211,6 +211,18 @@ void EmitBarriers(VkCommandBuffer commands, const Dispatch& dispatch,
             push(buffer);
         }
     }
+    // An iterative op writes its ping-pong buffers too, and they are *not* among its outputs. Leaving
+    // them out of this loop meant the planner could hand a new dispatch a slot a previous iterative op
+    // had been writing, with no barrier between them: two erosion ops in series produced a field that
+    // depended on the section size, because the buffer sizes and therefore the planner reuse decisions
+    // do. Each op on its own was fine, which is why it took a chained case to find.
+    for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
+        const u32_t buffer = dispatch.scratchBuffers[k];
+        if (buffer != kInvalidBuffer
+            && (state[buffer].readSinceBarrier || state[buffer].writtenSinceBarrier)) {
+            push(buffer);
+        }
+    }
 
     if (count == 0) {
         return;
