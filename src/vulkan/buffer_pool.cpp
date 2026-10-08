@@ -223,6 +223,7 @@ Result<RingBuffer> RingBuffer::Create(Allocator& allocator, VkDeviceSize capacit
 
     const b8_t     readback = category == VramCategory::Readback;
     RingBuffer     ring;
+    ring.m_category = category;
     Result<Buffer> buffer = allocator.CreateBuffer(
         BufferDesc{.size         = capacity,
                    .usage        = static_cast<VkBufferUsageFlags>(
@@ -265,6 +266,7 @@ RingBuffer& RingBuffer::operator=(RingBuffer&& other) noexcept {
     this->~RingBuffer();
     m_allocator       = other.m_allocator;
     m_buffer          = other.m_buffer;
+    m_category        = other.m_category;
     m_head            = other.m_head;
     m_live            = other.m_live;
     m_chunks          = other.m_chunks;
@@ -307,6 +309,33 @@ Result<VkDeviceSize> RingBuffer::Reserve(VkDeviceSize size, VkDeviceSize alignme
     m_live += span;
     m_head = offset + size;
     return offset;
+}
+
+Status RingBuffer::EnsureCapacity(VkDeviceSize bytes) {
+    if (m_buffer.size >= bytes) {
+        return {};
+    }
+    if (m_live != 0 || m_chunkCount != 0) {
+        ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Vulkan,
+                    "the {} ring cannot grow while {} bytes are live in {} chunk(s)",
+                    ToString(m_category), m_live, m_chunkCount);
+    }
+    ENGINE_ASSERT_RETURN(Status{}, m_allocator != nullptr, "the ring has no allocator");
+
+    // Rounded up to a whole mebibyte, so a sequence of slightly larger sections does not reallocate on
+    // every one of them.
+    constexpr VkDeviceSize kGranularity = 1024ull * 1024;
+    const VkDeviceSize     capacity     = AlignUp(bytes, kGranularity);
+    const VkDeviceSize     previous     = m_buffer.size;
+
+    Result<RingBuffer> grown = Create(*m_allocator, capacity, m_category);
+    if (!grown) {
+        return std::unexpected(grown.error());
+    }
+    *this = std::move(*grown);
+    LOG_INFO("{} ring grown from {} KiB to {} KiB", ToString(m_category), previous / 1024,
+             m_buffer.size / 1024);
+    return {};
 }
 
 void RingBuffer::ReleaseOldest() noexcept {

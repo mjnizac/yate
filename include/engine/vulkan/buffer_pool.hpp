@@ -126,6 +126,19 @@ public:
     /// Releases the oldest outstanding chunk. Call once the GPU has finished with it.
     void ReleaseOldest() noexcept;
 
+    /// Makes the ring at least `bytes` large, reallocating if it is not. Nothing may be live.
+    ///
+    /// The capacity is chosen at init, before any script has run, so it cannot know how big a section's
+    /// outputs will be: that depends on the mapping, the section size *and* the halo the compiler
+    /// propagates. The 16 MiB default happened to fit a 1024-sample section with a height and a normal
+    /// map down to the byte, and the moment a script took the gradient of its own height the halo pushed
+    /// the readback 628 KiB over and the export failed with "ring buffer is full". Growing on demand
+    /// removes the limit instead of documenting it.
+    ///
+    /// The buffer and its mapping are replaced, so nothing may hold a pointer or an offset across this
+    /// call. Callers read `MappedAt` per use, which is why that is safe here.
+    [[nodiscard]] Status EnsureCapacity(VkDeviceSize bytes);
+
     [[nodiscard]] const Buffer& GetBuffer() const noexcept { return m_buffer; }
     [[nodiscard]] VkDeviceSize  Capacity() const noexcept { return m_buffer.size; }
     [[nodiscard]] VkDeviceSize  LiveBytes() const noexcept { return m_live; }
@@ -149,6 +162,8 @@ private:
 
     Allocator*                     m_allocator = nullptr;
     Buffer                         m_buffer;
+    /// Kept so the ring can recreate itself with the same host access pattern when it grows.
+    VramCategory m_category = VramCategory::Staging;
     VkDeviceSize                   m_head = 0;
     VkDeviceSize                   m_live = 0;
     std::array<Chunk, kMaxChunks>  m_chunks{};
