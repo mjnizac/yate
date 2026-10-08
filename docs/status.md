@@ -672,7 +672,7 @@ for half a second of mostly-missing terrain. The hitch is the better failure.
 
 ### The halo of a reused slot
 
-A chain of two ops that each carry a radius gave different numbers at section 512 than at 1024, and had
+A chain of two ops that each carry a radius gave different numbers depending on the section size, and had
 done since milestone 5. It was not synchronisation: a full `ALL_COMMANDS` barrier before every dispatch
 changed nothing, and the numbers were identical run to run. It was the stride the output was *read* with.
 
@@ -695,8 +695,9 @@ blur, over a thermal pass and over hydraulic erosion, which is the one producer 
 
 A second, smaller bug came out of the same investigation: the write-after-read scan in `EmitBarriers`
 looked at a dispatch's inputs and outputs but not its scratch buffers, so an iterative op's ping-pong
-slots could be reused without a barrier. It never produced a wrong number in practice, since the
-iteration loop barriers happened to cover it, but it was wrong for the first dispatch after a release.
+slots could be reused without a barrier. No check ever caught it producing a wrong number — the
+iteration loop's own barriers cover the common case — but it was unguarded for the first dispatch to
+inherit a released scratch slot, and the ordering a seam check depends on should not rest on that.
 
 ### zlib-ng, and why the default level moved to 2
 
