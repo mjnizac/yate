@@ -85,6 +85,14 @@ public:
     [[nodiscard]] usize_t          ImageCount() const noexcept { return m_images.size(); }
     [[nodiscard]] b8_t IsValid() const noexcept { return m_handle != VK_NULL_HANDLE; }
 
+    /// The acquired image itself, for a screenshot. Valid between `Acquire` and `Present`.
+    [[nodiscard]] VkImage CurrentImage() const noexcept {
+        return m_imageIndex < m_images.size() ? m_images[m_imageIndex] : VK_NULL_HANDLE;
+    }
+    [[nodiscard]] VkFormat Format() const noexcept { return m_format; }
+    /// Whether the surface let the images be created as a transfer source, which a screenshot needs.
+    [[nodiscard]] b8_t CanCapture() const noexcept { return m_canCapture; }
+
     /// Frames presented since creation, for the frame-pacing plots and for the smoke test.
     [[nodiscard]] u64_t FramesPresented() const noexcept { return m_framesPresented; }
 
@@ -114,6 +122,7 @@ private:
     VkExtent2D     m_extent{};
     VkFormat       m_format = VK_FORMAT_UNDEFINED;
     VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    b8_t             m_canCapture  = false;
 
     std::pmr::vector<VkImage>       m_images;
     /// One per swapchain image. See the note on `FrameSync`.

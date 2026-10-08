@@ -44,6 +44,22 @@ public:
     /// Seconds since the previous frame. Zero on the first one.
     [[nodiscard]] f64_t DeltaSeconds() const noexcept;
 
+    /// Writes the next presented frame to `path` as an 8-bit PNG, once.
+    ///
+    /// This is how the renderer gets checked without a human at the keyboard: everything else about a
+    /// frame can be asserted from the CPU side — tiles evaluated, draws recorded, nothing culled — and
+    /// none of it notices a depth test that rejects every fragment. The copy comes straight out of the
+    /// presented swapchain image, so what lands in the file is what the window showed.
+    ///
+    /// Returns false when the surface did not allow its images to be a transfer source, which is the one
+    /// case where no screenshot is possible.
+    [[nodiscard]] b8_t CaptureNextFrame(const char* path) noexcept;
+
+    /// Writes the *last* frame before `StopAfter` stops the application. Needs a nonzero `StopAfter`,
+    /// because otherwise there is no last frame to pick. Later than `CaptureNextFrame` on purpose: the
+    /// first frames of a viewer are a half-streamed ring, and a screenshot of those says nothing.
+    void ScreenshotOnLastFrame(const char* path) noexcept;
+
 #ifdef IS_ENGINE
     /// What a recorder is given. Engine-only, because it names Vulkan types.
     struct FrameContext {

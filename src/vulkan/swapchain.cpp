@@ -155,6 +155,17 @@ Status Swapchain::CreateSizeDependent(u32_t width, u32_t height) {
     m_format                               = surfaceFormat.format;
     m_extent                               = extent;
 
+    // `TRANSFER_SRC` only if the surface offers it, which is what makes a screenshot possible: the
+    // presented image is copied straight out of the swapchain. Every driver this engine targets offers
+    // it, but the specification only guarantees `COLOR_ATTACHMENT`, so a surface without it loses the
+    // screenshot and keeps the viewer.
+    const b8_t canCapture =
+        (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    m_canCapture = canCapture;
+    const VkImageUsageFlags usage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+        | (canCapture ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : VkImageUsageFlags{0});
+
     const VkSwapchainKHR previous = m_handle;
     const VkSwapchainCreateInfoKHR info{
         .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -166,7 +177,7 @@ Status Swapchain::CreateSizeDependent(u32_t width, u32_t height) {
         .imageColorSpace       = surfaceFormat.colorSpace,
         .imageExtent           = extent,
         .imageArrayLayers      = 1,
-        .imageUsage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageUsage            = usage,
         .imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0,
         .pQueueFamilyIndices   = nullptr,
@@ -426,6 +437,7 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     m_extent          = other.m_extent;
     m_format          = other.m_format;
     m_presentMode     = other.m_presentMode;
+    m_canCapture      = other.m_canCapture;
     m_images          = std::move(other.m_images);
     m_renderFinished  = std::move(other.m_renderFinished);
     m_views           = std::move(other.m_views);

@@ -7,13 +7,18 @@
 #include <engine/vulkan/swapchain.hpp>
 #include <engine/vulkan/window.hpp>
 
+#include <spng.h>
+
 #ifdef TRACY_ENABLE
 #    include <tracy/Tracy.hpp>
 #endif
 
 #include <array>
 #include <chrono>
+#include <cstdio>
+#include <memory_resource>
 #include <new>
+#include <vector>
 
 namespace engine {
 namespace {
@@ -36,7 +41,78 @@ struct WindowLayer::State {
     /// The window is shown only after the first present, so the user never sees an unpainted rectangle
     /// (spec section 6).
     b8_t shown = false;
+    /// Where the next frame is written, empty when no screenshot was asked for.
+    std::array<char, 512> capturePath{};
+    /// Where the last frame is written. Armed into `capturePath` when that frame comes round.
+    std::array<char, 512> screenshotPath{};
+    /// Host-visible destination for the copy, created on the first capture and kept for the next one.
+    vulkan::Buffer capture;
 };
+
+namespace {
+
+/// Writes a presented frame as an 8-bit RGB PNG.
+///
+/// The swapchain is `B8G8R8A8` on every driver worth targeting and `R8G8B8A8` on the rest, so the only
+/// per-format work is whether the first and third bytes are swapped. The alpha is dropped: it is 1
+/// everywhere, and carrying it would make the file larger for nothing.
+[[nodiscard]] b8_t WriteFramePng(const char* path, const u8_t* pixels, u32_t width, u32_t height,
+                                 u32_t rowPitch, b8_t swapRedAndBlue) {
+    std::FILE* file = nullptr;
+    if (::fopen_s(&file, path, "wb") != 0 || file == nullptr) {
+        LOG_ERROR("could not open {} for the screenshot", path);
+        return false;
+    }
+    spng_ctx* context = spng_ctx_new(SPNG_CTX_ENCODER);
+    if (context == nullptr) {
+        (void)std::fclose(file);
+        return false;
+    }
+    spng_ihdr header{};
+    header.width      = width;
+    header.height     = height;
+    header.bit_depth  = 8;
+    header.color_type = static_cast<u8_t>(SPNG_COLOR_TYPE_TRUECOLOR);
+
+    const auto fail = [&](int code, const char* call) {
+        LOG_ERROR("{} failed while writing {}: {}", call, path, spng_strerror(code));
+        spng_ctx_free(context);
+        (void)std::fclose(file);
+        return false;
+    };
+    if (const int code = spng_set_png_file(context, file); code != 0) {
+        return fail(code, "spng_set_png_file");
+    }
+    if (const int code = spng_set_ihdr(context, &header); code != 0) {
+        return fail(code, "spng_set_ihdr");
+    }
+    if (const int code = spng_encode_image(context, nullptr, 0, SPNG_FMT_PNG,
+                                           SPNG_ENCODE_PROGRESSIVE | SPNG_ENCODE_FINALIZE);
+        code != 0) {
+        return fail(code, "spng_encode_image");
+    }
+
+    std::pmr::vector<u8_t> row(static_cast<usize_t>(width) * 3, 0, &memory::General().Resource());
+    for (u32_t y = 0; y < height; ++y) {
+        const u8_t* source = pixels + static_cast<u64_t>(y) * rowPitch;
+        for (u32_t x = 0; x < width; ++x) {
+            const u8_t* texel = source + static_cast<u64_t>(x) * 4;
+            row[x * 3 + 0]    = swapRedAndBlue ? texel[2] : texel[0];
+            row[x * 3 + 1]    = texel[1];
+            row[x * 3 + 2]    = swapRedAndBlue ? texel[0] : texel[2];
+        }
+        const int code = spng_encode_row(context, row.data(), row.size());
+        if (code != 0 && code != SPNG_EOI) {
+            return fail(code, "spng_encode_row");
+        }
+    }
+    spng_ctx_free(context);
+    (void)std::fclose(file);
+    LOG_INFO("screenshot written to {} ({}x{})", path, width, height);
+    return true;
+}
+
+} // namespace
 
 WindowLayer::WindowLayer(Application& application) noexcept : Layer(application) {}
 
@@ -82,6 +158,9 @@ void WindowLayer::OnDetach() {
         LOG_WARN("could not wait for the device before detaching the window layer: {}",
                  idle.error().Format().data());
     }
+    if (m_state->capture.IsValid()) {
+        VulkanContext(App()).Memory().DestroyBuffer(m_state->capture);
+    }
 }
 
 u64_t WindowLayer::FramesPresented() const noexcept {
@@ -98,6 +177,43 @@ void WindowLayer::StopAfter(u64_t frames) noexcept {
 
 f64_t WindowLayer::DeltaSeconds() const noexcept {
     return m_state != nullptr ? m_state->deltaSeconds : 0.0;
+}
+
+void WindowLayer::ScreenshotOnLastFrame(const char* path) noexcept {
+    if (m_state != nullptr && path != nullptr) {
+        detail::CopyBounded(m_state->screenshotPath, std::string_view{path});
+    }
+}
+
+b8_t WindowLayer::CaptureNextFrame(const char* path) noexcept {
+    if (m_state == nullptr || path == nullptr || m_state->swapchain == nullptr) {
+        return false;
+    }
+    if (!m_state->swapchain->CanCapture()) {
+        LOG_WARN("the surface does not allow its images to be a transfer source, so no screenshot "
+                 "can be taken");
+        return false;
+    }
+    const VkExtent2D   extent = m_state->swapchain->Extent();
+    const VkDeviceSize bytes  = static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
+    if (m_state->capture.size < bytes) {
+        vulkan::Allocator& memory = VulkanContext(App()).Memory();
+        memory.DestroyBuffer(m_state->capture);
+        Result<vulkan::Buffer> buffer =
+            memory.CreateBuffer(vulkan::BufferDesc{.size         = bytes,
+                                                   .usage        = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                   .category     = vulkan::VramCategory::Readback,
+                                                   .hostVisible  = true,
+                                                   .randomAccess = true});
+        if (!buffer) {
+            LOG_ERROR("could not allocate the screenshot buffer: {}",
+                      buffer.error().Format().data());
+            return false;
+        }
+        m_state->capture = *buffer;
+    }
+    detail::CopyBounded(m_state->capturePath, std::string_view{path});
+    return true;
 }
 
 void WindowLayer::SetRecorder(Recorder recorder, void* user) noexcept {
@@ -157,6 +273,12 @@ void WindowLayer::OnUpdate() {
         return true;
     };
 
+    if (m_state->screenshotPath[0] != '\0' && m_state->stopAfter != 0
+        && swapchain.FramesPresented() + 1 >= m_state->stopAfter) {
+        (void)CaptureNextFrame(m_state->screenshotPath.data());
+        m_state->screenshotPath[0] = '\0';
+    }
+
     Result<vulkan::Swapchain::AcquireResult> acquired = swapchain.Acquire();
     if (!acquired) {
         LOG_ERROR("could not acquire a swapchain image: {}", acquired.error().Format().data());
@@ -210,6 +332,55 @@ void WindowLayer::OnUpdate() {
     }
     vkCmdEndRenderPass(frame.commands);
 
+    // A screenshot is recorded into the frame's own command buffer, after the pass: the image is in
+    // `PRESENT_SRC` by then, so it moves to `TRANSFER_SRC`, is copied out and moves back. Doing it here
+    // rather than on a second submission means the copy sees exactly the frame that gets presented.
+    const b8_t capturing = m_state->capturePath[0] != '\0' && m_state->capture.IsValid();
+    if (capturing) {
+        const VkExtent2D     extent = swapchain.Extent();
+        const VkImageMemoryBarrier toTransfer{
+            .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext               = nullptr,
+            .srcAccessMask       = 0,
+            .dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT,
+            .oldLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image               = swapchain.CurrentImage(),
+            .subresourceRange    = {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                                    .baseMipLevel   = 0,
+                                    .levelCount     = 1,
+                                    .baseArrayLayer = 0,
+                                    .layerCount     = 1}};
+        vkCmdPipelineBarrier(frame.commands, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &toTransfer);
+
+        const VkBufferImageCopy region{
+            .bufferOffset      = 0,
+            .bufferRowLength   = extent.width,
+            .bufferImageHeight = extent.height,
+            .imageSubresource  = {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                                  .mipLevel       = 0,
+                                  .baseArrayLayer = 0,
+                                  .layerCount     = 1},
+            .imageOffset       = {0, 0, 0},
+            .imageExtent       = {extent.width, extent.height, 1}};
+        vkCmdCopyImageToBuffer(frame.commands, swapchain.CurrentImage(),
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_state->capture.handle, 1,
+                               &region);
+
+        VkImageMemoryBarrier toPresent = toTransfer;
+        toPresent.srcAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
+        toPresent.dstAccessMask        = 0;
+        toPresent.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toPresent.newLayout            = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        vkCmdPipelineBarrier(frame.commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &toPresent);
+    }
+
     if (vkEndCommandBuffer(frame.commands) != VK_SUCCESS) {
         LOG_ERROR("could not end the frame command buffer");
         App().Stop();
@@ -221,6 +392,22 @@ void WindowLayer::OnUpdate() {
         LOG_ERROR("could not present: {}", presented.error().Format().data());
         App().Stop();
         return;
+    }
+
+    if (capturing) {
+        // A debug path, so a full device wait rather than another fence: the frame has to be on the
+        // host before the pixels can be read, and nothing else is waiting on this.
+        if (Status idle = VulkanContext(App()).WaitIdle(); !idle) {
+            LOG_ERROR("could not wait for the screenshot frame: {}", idle.error().Format().data());
+        } else {
+            const VkExtent2D extent = swapchain.Extent();
+            (void)WriteFramePng(m_state->capturePath.data(),
+                                static_cast<const u8_t*>(m_state->capture.mapped), extent.width,
+                                extent.height, extent.width * 4,
+                                swapchain.Format() == VK_FORMAT_B8G8R8A8_SRGB
+                                    || swapchain.Format() == VK_FORMAT_B8G8R8A8_UNORM);
+        }
+        m_state->capturePath[0] = '\0';
     }
 
     if (!m_state->shown) {

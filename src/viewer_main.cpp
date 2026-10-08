@@ -58,6 +58,8 @@ struct Options {
     log::Format           logFormat = log::Format::Text;
     /// Zero runs until the window is closed.
     u64_t frames = 0;
+    /// Where the last frame is written as a PNG. Empty means no screenshot.
+    std::string_view screenshot;
 };
 
 [[nodiscard]] Result<Options> ParseArguments(int argc, char** argv) {
@@ -106,6 +108,8 @@ struct Options {
             options.window.height = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
         } else if (argument == "--frames") {
             options.frames = std::strtoull(value.data(), nullptr, 10);
+        } else if (argument == "--screenshot") {
+            options.screenshot = value;
         } else if (argument == "--device") {
             options.deviceUuid = value;
         } else if (argument == "--log-format") {
@@ -177,7 +181,14 @@ int main(int argc, char** argv) {
     }
 
     WindowLayer& window = (*application)->PushLayer<WindowLayer>();
-    window.StopAfter(options->frames);
+    // A screenshot needs a last frame to be the last one, and it needs the ring to have streamed in,
+    // so asking for one without a frame count picks a count rather than refusing.
+    const u64_t frames =
+        !options->screenshot.empty() && options->frames == 0 ? 90 : options->frames;
+    window.StopAfter(frames);
+    if (!options->screenshot.empty()) {
+        window.ScreenshotOnLastFrame(options->screenshot.data());
+    }
 
     // The settings hold a pointer to the parameters, which live in `options` for the whole run. Bound
     // here rather than in the parser, because the parser returns its result by value and the address
