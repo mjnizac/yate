@@ -205,3 +205,18 @@
       `Terrain.Coords{ domain = 2 }.z` is an error about component 2 not existing rather than about the
       axis. The accessor could know that an `R2` value's second component is the z axis and accept `.z`
       for it, which is what every script actually means.
+
+## Found while building the sample terrains
+
+- [ ] **Hydraulic erosion leaves a one-sample ripple aligned with the grid.** Its transfers are pairwise
+      over four axis neighbours, so whatever the scheme cannot resolve lands on the axes as a fine
+      corduroy that is clearly visible in the viewer on any low-relief terrain. It is not rainfall
+      dependent: it is as strong at `rain = 0.1` as at `0.5`. A `Filters.Blur{ radius = 1 }` after the
+      op clears it for one unit of halo, which is what the sample terrains do, but that is a workaround
+      in every script rather than a fix in the kernel. Including the four diagonals with a 1/sqrt(2)
+      weight is the usual remedy and is the same change the thermal kernel's header already weighs.
+- [ ] **Thermal erosion terraces a smooth dome into concentric steps.** Correct behaviour — it flattens
+      any slope past the talus into facets — but on an analytic falloff it reads as an artefact rather
+      than as geology. Worth a note in the Lua reference under `Erosion.Thermal`, and worth considering
+      whether a small random perturbation of the talus per cell would break the symmetry without
+      costing determinism.
