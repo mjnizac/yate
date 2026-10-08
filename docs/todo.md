@@ -106,14 +106,20 @@
       names at all: they come from the op registry now, so `noise.gradient` and `carved.flow` resolve
       through one mechanism and a wrong name is told what the op actually offers. The channel mask does
       the rest — a script that only wants a height pays for no second buffer.
-- [ ] Erosion is the first op where the GPU is a real cost: 28 ms of a 40 ms total on a 2048 export with
-      24 hydraulic iterations and 12 thermal. That makes overlapping sections on the GPU worth measuring
-      again, which it was not when the GPU accounted for half a percent of an export. Revisit the "one
-      section in flight" decision from milestone 7 with an erosion-heavy script.
-- [ ] An iterative op reads and writes the same buffers every iteration, so its bandwidth is
-      `iterations * 2 * section bytes`. A tiled or shared-memory kernel would cut that for the thermal
-      case, where the stencil is four taps. Measure before building: at 24 iterations over a 512 section
-      the working set is 1 MiB, which may already sit in L2.
+- [x] **One section in flight stays, measured against an erosion-heavy script.** `basic.lua` with 24
+      hydraulic iterations and 12 thermal: at 2048 the GPU is 41 ms of a 441 ms total (9%) at section 512
+      and 33 of 518 (6%) at 1024; at 16384 it is 2.31 s of 50.0 s (5%). The encoder stall is 52% and 86%
+      of those totals. So the GPU share did rise from half a percent to single digits and it still is not
+      where the time goes — overlapping sections would hide work already hidden behind the wait for the
+      PNG encoder. Revisit if an output format arrives that encodes as fast as the GPU evaluates.
+- [x] **No shared-memory thermal kernel: the redundant taps never reach DRAM.** Measured at section
+      1024, fastest of three runs: 1.14 ms at 8 iterations, 1.75 at 16, 3.06 at 32. Both slopes agree at
+      0.077 and 0.082 ms per iteration, which against one read and one write of the padded state is
+      116 GB/s, 45% of the GTX 1070's 256 GB/s. That is what settles it: if each of the four taps were
+      reaching DRAM the real traffic would be two and a half times the model, so the card would have to be
+      running at 290 GB/s, which it cannot. The taps are cache-served already, and a tiling would remove
+      traffic that never leaves the chip while adding a barrier per iteration. The gap to peak is latency
+      and occupancy, which tiling does not address.
 
 ## Milestone 9 — follow-ups
 

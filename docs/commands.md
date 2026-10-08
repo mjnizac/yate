@@ -66,6 +66,23 @@ build/Debug/bin/terrain_export --script assets/scripts/basic.lua --min 0,0 --max
 
 `--log-format json` emits one JSON object per line, which is what tooling should parse.
 `--device <32 hex chars>` forces a physical device; the log lists every candidate with its UUID.
+`--png-level` and `--png-filter` trade encoding time against output size; the defaults are level 2 and
+the `up` filter, and `--png-level 1` is the setting for a job that wants throughput over size. Run
+`--help` for the rest.
+
+The seam and determinism acceptance check, which has to be run by hand because it takes about two and a
+half minutes and 300 MB:
+
+```bash
+for n in a b; do build/Release/bin/terrain_export --script assets/scripts/basic.lua --min 0,0 --max 16384,16384 --resolution 1.0 --section 512 --out out/acc512$n; done
+```
+
+```bash
+build/Release/bin/terrain_export --script assets/scripts/basic.lua --min 0,0 --max 16384,16384 --resolution 1.0 --section 1024 --out out/acc1024
+```
+
+The three `height.png` and the three `normals.png` must have identical SHA-256. `metadata.json` will not:
+it records the timings, the output paths and the section size.
 
 ## Test
 

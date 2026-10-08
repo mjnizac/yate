@@ -393,8 +393,8 @@ struct TileCache {
 
     const terrain::CompiledOutput& height  = built.compiled.outputs[built.heightOutput];
     const terrain::CompiledOutput& normals = built.compiled.outputs[built.normalsOutput];
-    built.heightHalo   = built.compiled.buffers[height.buffer].halo;
-    built.normalsHalo  = built.compiled.buffers[normals.buffer].halo;
+    built.heightHalo   = height.halo;
+    built.normalsHalo  = normals.halo;
     built.heightBytes  = terrain::ValueSize(height.mapping, extent, 0);
     built.normalsBytes = terrain::ValueSize(normals.mapping, extent, 0);
     built.valid        = true;

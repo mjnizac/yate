@@ -6,7 +6,7 @@
 | 2 | Memory system | **done**, accepted |
 | 3 | Vulkan context in Headless mode | **done**, accepted |
 | 4 | First export | **done**, accepted |
-| 5 | Graph and compiler, without Lua | **done**, pending acceptance |
+| 5 | Graph and compiler, without Lua | **done**, accepted |
 | 6 | Lua bindings | **done**, accepted |
 | 7 | Sections and streaming | **done**, accepted |
 | 8 | Iterative kernels | **done**, accepted |
@@ -14,7 +14,7 @@
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 9 of 9 in each:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 12 of 12 in each:
 
 ```
 test_allocators ......... Passed
@@ -37,9 +37,13 @@ suite doubles as a validation run.
 Everything GPU-side ran on a GeForce GTX 1070 reporting Vulkan 1.4.312, with a dedicated compute
 queue family and calibrated timestamps available.
 
-Still open: read the Tracy memory view and confirm every CPU and VRAM pool reports correct reserved
-and used values. CPU zones, GPU zones and allocation events all reach the profiler; the memory graphs
-are the part nobody has looked at.
+The pool invariants the Tracy memory view would have been read for are asserted by the suite instead:
+`test_allocators` sweeps every named CPU pool and `test_compute_roundtrip` all seven VRAM categories for
+their Tracy name, `reserved >= used`, `peak >= used` and a consistent allocation count. What is left for
+a human is a one-off look to confirm the pools appear in the profiler under those names.
+
+The 16k acceptance run is the one check the suite does not perform, because it takes two and a half
+minutes and writes 1.1 GB. It is described under milestone 5 and the command is in `docs/commands.md`.
 
 ## 1. Skeleton
 
@@ -216,8 +220,8 @@ left at libspng's defaults:
 | none | 1 | 72 ms | 1273 KiB |
 
 Terrain data is high-entropy noise, so searching every filter per row and running the slow zlib
-passes buys about 5% of size for 4.2x the time. `up` at level 1 is the default, overridable with
-`--png-level` and `--png-filter`. The dataset goldens did not have to change, because the runner
+passes buys about 5% of size for 4.2x the time. `up` is the default filter, overridable with `--png-level`
+and `--png-filter`; the default level is 2, for the reason in the zlib-ng section below. The dataset goldens did not have to change, because the runner
 compares decoded samples rather than file bytes: `basic_fbm` went from 382 ms to 66 ms with the same
 pixels.
 
@@ -284,9 +288,11 @@ exactly the one-LSB differences it exists to find. Every case is bit-identical: 
 blur radii 1, 3 and 8, a three-dispatch graph with a slope mask and a blend, `R3` noise and blur as one
 32³ brick against 4x4x4 bricks of 8, and the same graph evaluated twice.
 
-**The 16k acceptance run.** A 16384x16384 export with normals, run three times: twice with 512-sample
-sections and once with 1024. All six files come out with the same SHA-256, so 268 million samples agree
-across both the repeat and the section layout. It takes about 68 s and writes 1.1 GB of PNG.
+**The 16k acceptance run.** A 16384x16384 export of `basic.lua` with normals, run three times: twice
+with 512-sample sections and once with 1024. All three `height.png` and all three `normals.png` come out
+with the same SHA-256, so 268 million samples agree across both the repeat and the section layout. Only
+`metadata.json` differs, in its timings, its output paths and `section_size`. It takes about 50 s per run
+at section 512 and writes 1.1 GB of PNG.
 
 **Encoding moved off the main loop, because that is where the time is.** Measured first: on a
 4096x4096 export the GPU accounts for 21 ms and the readback for 76 ms of 3846 ms, so overlapping
@@ -663,3 +669,98 @@ between tiles that share the evaluator's buffers. Left alone, with the numbers w
 A level change refills the whole ring, so it costs those 47 ms: three frames at 60 Hz, on a deliberate
 zoom. The alternative is streaming the new level under the usual budget, which trades a three-frame hitch
 for half a second of mostly-missing terrain. The hitch is the better failure.
+
+### The halo of a reused slot
+
+A chain of two ops that each carry a radius gave different numbers at section 512 than at 1024, and had
+done since milestone 5. It was not synchronisation: a full `ALL_COMMANDS` barrier before every dispatch
+changed nothing, and the numbers were identical run to run. It was the stride the output was *read* with.
+
+`PlannedBuffer` carries a `mapping`, a `halo` and a `bytes`, and the planner fills them when it creates a
+slot. It then reuses that slot for any later value whose size class fits, and does not touch those three
+fields — only `sizeClass` is a property of the slot rather than of its first occupant. Reading an output
+back with `buffers[output.buffer].halo` therefore strided it by whatever halo belonged to some unrelated
+earlier value. Which slots get reused depends on the buffer sizes, which depend on the section size, so
+the wrong stride appeared and disappeared with exactly the parameter a seam check varies: one 128-sample
+section disagreed with 4x4 sections of 32 over 13800 of 16384 samples, deterministically.
+
+A single op never hits it, because nothing has been released yet for it to inherit. That is why every
+seam check passed: they were all one op on its own.
+
+`CompiledOutput` now carries the halo of the dispatch that wrote it, which is unambiguous, and the
+exporter, the viewer and the test helper take it from there. The three descriptive fields on
+`PlannedBuffer` say in a comment that they describe the slot's first occupant and nothing else.
+`CheckChainedOpSeams` covers eight chains — blur over blur at four radius pairs, and a thermal pass over a
+blur, over a thermal pass and over hydraulic erosion, which is the one producer with a second channel.
+
+A second, smaller bug came out of the same investigation: the write-after-read scan in `EmitBarriers`
+looked at a dispatch's inputs and outputs but not its scratch buffers, so an iterative op's ping-pong
+slots could be reused without a barrier. It never produced a wrong number in practice, since the
+iteration loop barriers happened to cover it, but it was wrong for the first dispatch after a release.
+
+### zlib-ng, and why the default level moved to 2
+
+Encoding is where an export spends its wall time, so the deflate implementation is worth more than the
+level knob. zlib-ng 2.2.2 in `ZLIB_COMPAT` mode is a drop-in: the `basic_fbm` case went from 82 ms of
+encoding at stock zlib's best setting to 37 ms at zlib-ng's, same pixels.
+
+It does change the level choice, because zlib-ng's level 1 compresses visibly worse. Measured on
+`basic.lua` at 2048 with both outputs, the whole export:
+
+| Level | Total | Encoder stall | Bytes |
+| --- | --- | --- | --- |
+| 1 | 310 ms | 179 ms | 21433 KiB |
+| **2** | **428 ms** | **277 ms** | **16741 KiB** |
+| 4 | 682 ms | 449 ms | 16494 KiB |
+| 6 | 1218 ms | 869 ms | 16187 KiB |
+
+Level 2 is the knee and the default: it is the last level where the size still pays for the time, costing
+38% more wall time than level 1 for 22% fewer bytes, where level 4 costs another 59% for 1.5%. A job that
+wants throughput over size asks for `--png-level 1` and knows what it is buying.
+
+The goldens did not move across any of this: the runner compares decoded samples, which is what makes a
+compressor swap a non-event.
+
+One wrinkle in the build: zlib-ng declares `zlibstatic` as an alias of `zlib`, and CMake refuses an alias
+of an alias, so `engine_dependencies.cmake` resolves `ALIASED_TARGET` before creating `ZLIB::ZLIB`.
+
+### The readback ring has to grow
+
+At section 1024 the 16 MiB readback ring fitted a halo-free export to the byte, and erosion's halo pushed
+it 628 KiB over, which failed the export outright. `RingBuffer::EnsureCapacity` reallocates the ring,
+rounded up to a MiB, when nothing in it is live; the exporter reserves twice one section's outputs up
+front, so a job either fails at startup or does not fail. The 1024 acceptance run above reports a 51 MiB
+readback pool, which is the growth happening.
+
+### Two decisions that stayed decisions
+
+**One section in flight stays.** Milestone 7 chose not to overlap sections because the GPU was half a
+percent of an export; milestone 8 made erosion expensive enough to ask again. Measured on `basic.lua`,
+24 hydraulic iterations and 12 thermal:
+
+| | Total | GPU | Readback | Encoder stall |
+| --- | --- | --- | --- | --- |
+| 2048, section 512 | 441 ms | 41 ms (9%) | 60 ms | 231 ms (52%) |
+| 2048, section 1024 | 518 ms | 33 ms (6%) | 51 ms | 219 ms (42%) |
+| 16384, section 512 | 50.0 s | 2.31 s (5%) | 3.32 s | 43.1 s (86%) |
+
+The GPU share went from half a percent to single digits, which is still not where the time goes. The
+exporter spends its wall time waiting for the PNG encoder, and overlapping sections would hide work that
+is already hidden behind that wait. Revisit if an output format arrives that encodes as fast as the GPU
+evaluates.
+
+**No shared-memory thermal kernel.** The question was whether a four-tap stencil re-reading its
+neighbours is wasting bandwidth. Measured at section 1024, taking the fastest of three runs:
+
+| Iterations | GPU |
+| --- | --- |
+| 8 | 1.14 ms |
+| 16 | 1.75 ms |
+| 32 | 3.06 ms |
+
+Both slopes agree: 0.077 and 0.082 ms per iteration, which against one read and one write of the padded
+state is 116 GB/s, or 45% of the GTX 1070's 256 GB/s. That figure is what settles it — if each of the
+four taps were reaching DRAM, the real traffic would be two and a half times the model and the card would
+have to be running at 290 GB/s, which it cannot. So the redundant taps are already being served by cache,
+and a shared-memory tiling would remove traffic that never leaves the chip while adding a barrier per
+iteration. The remaining gap to peak is latency and occupancy, which tiling does not address.

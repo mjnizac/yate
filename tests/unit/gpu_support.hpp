@@ -83,10 +83,12 @@ struct Field {
 
     const CompiledOutput& output     = compiled->outputs[0];
     const u8_t            components = output.mapping.components;
-    // Output buffers always have halo zero, because nothing reads them with a radius, so a section's
-    // rows are exactly `extent` wide.
-    const u64_t sectionBytes =
-        ValueSize(output.mapping, extent, compiled->buffers[output.buffer].halo);
+    // A requested output is still an ordinary value, so it carries whatever halo propagation gave it: a
+    // script whose height is also read by a gradient gets a padded buffer. Reading it with a stride of
+    // `extent.x` shears the image, which is how a real export bug stayed hidden here too.
+    const u32_t halo   = output.halo;
+    const u32_t padded = extent.x + 2 * halo;
+    const u64_t sectionBytes = ValueSize(output.mapping, extent, halo);
 
     Field field;
     field.Resize(width, depth, height, components);
@@ -136,8 +138,10 @@ struct Field {
                     !invalidated) {
                     return std::unexpected(invalidated.error());
                 }
-                const auto* samples =
+                const auto* chunk =
                     static_cast<const f32_t*>(context.Readback().MappedAt(*readback));
+                const auto* samples =
+                    chunk + (static_cast<u64_t>(halo) * padded + halo) * components;
 
                 // Copy only the part of the section that lies inside the region. An edge section
                 // computes a full extent and the overhang is discarded, which is the behaviour the
@@ -148,7 +152,7 @@ struct Field {
                 for (u32_t layer = 0; layer < layers; ++layer) {
                     for (u32_t row = 0; row < rows; ++row) {
                         const u64_t source =
-                            ((static_cast<u64_t>(layer) * extent.z + row) * extent.x) * components;
+                            ((static_cast<u64_t>(layer) * padded + row) * padded) * components;
                         const u64_t target =
                             (((static_cast<u64_t>(originY) + layer) * height + originZ + row)
                                  * width

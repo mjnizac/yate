@@ -310,6 +310,113 @@ void CheckHydraulicSeams(Context& context, KernelLibrary& kernels) {
     }
 }
 
+/// Two radius-carrying ops in series, neighbourhood and iterative.
+///
+/// The gap this fills: every other case here is one such op on its own, and one op on its own never
+/// shares a buffer slot with anything. Chained, the planner hands the second op a slot the first one
+/// had already finished with — and a reused slot keeps the `mapping`, `halo` and `bytes` of the value
+/// it was *created* for, so reading an output back with `PlannedBuffer::halo` strided it by a halo
+/// that belonged to some unrelated earlier value. Both the stride and which slots get reused depend on
+/// the section size, which is exactly what a seam check varies, so one 128-sample section disagreed with
+/// 4x4 sections of 32 over 13800 of 16384 samples, deterministically. `CompiledOutput::halo` now carries
+/// the halo of the dispatch that wrote the value.
+///
+/// The height is requested first so that it is what gets compared; the gradient variants give the
+/// chain a nonzero halo at its own output, which is what makes every radius below it stack.
+void CheckChainedOpSeams(Context& context, KernelLibrary& kernels) {
+    struct Variant {
+        const char* label;
+        u32_t       first;
+        u32_t       second;
+        b8_t        gradient;
+    };
+    const Variant blurs[] = {
+        {"blur(1) then blur(1)", 1, 1, false},
+        {"blur(3) then blur(3)", 3, 3, false},
+        {"blur(3) then blur(3), gradient on top", 3, 3, true},
+        {"blur(2) then blur(7), gradient on top", 2, 7, true},
+    };
+    for (const Variant& variant : blurs) {
+        Graph              graph;
+        Graph::NoiseParams noise;
+        noise.frequency = 0.02f;
+        noise.octaves   = 3;
+        noise.amplitude = 1.0f;
+        Result<Value> value = graph.AddNoise(noise, At(12));
+        REQUIRE_OK_VOID(value);
+
+        Result<Value> once = graph.AddBlur(*value, variant.first, At(18));
+        REQUIRE_OK_VOID(once);
+        Result<Value> twice = graph.AddBlur(*once, variant.second, At(19));
+        REQUIRE_OK_VOID(twice);
+
+        REQUIRE_OK_VOID(graph.RequestOutput("height", *twice, -1.0f, 1.0f));
+        if (variant.gradient) {
+            Result<Value> gradient = graph.AddGradient(*twice, At(15));
+            REQUIRE_OK_VOID(gradient);
+            REQUIRE_OK_VOID(graph.RequestOutput("gradient", *gradient, -1.0f, 1.0f));
+        }
+
+        CheckSeams(context, kernels, variant.label, graph,
+                   SectionExtent{.x = 128, .y = 1, .z = 128},
+                   SectionExtent{.x = 32, .y = 1, .z = 32});
+    }
+
+    // Iterative chains: a thermal pass over a blur, over another thermal pass, and over hydraulic
+    // erosion, which is the one producer with more than one channel.
+    struct Chain {
+        const char* label;
+        enum { Blur, Thermal, Hydraulic } producer;
+        u32_t iterations;
+    };
+    const Chain chains[] = {
+        {"blur(5) then thermal(5)", Chain::Blur, 5},
+        {"thermal(5) then thermal(1)", Chain::Thermal, 1},
+        {"thermal(5) then thermal(5)", Chain::Thermal, 5},
+        {"hydraulic(6) then thermal(5)", Chain::Hydraulic, 5},
+    };
+    for (const Chain& chain : chains) {
+        Graph              graph;
+        Graph::NoiseParams noise;
+        noise.frequency = 0.02f;
+        noise.octaves   = 3;
+        noise.amplitude = 1.0f;
+        Result<Value> value = graph.AddNoise(noise, At(12));
+        REQUIRE_OK_VOID(value);
+
+        Graph::ThermalParams thermal;
+        thermal.iterations = 5;
+        thermal.talus      = 0.01f;
+        thermal.strength   = 0.4f;
+
+        Result<Value> producer = value;
+        if (chain.producer == Chain::Blur) {
+            producer = graph.AddBlur(*value, 5, At(18));
+        } else if (chain.producer == Chain::Thermal) {
+            producer = graph.AddThermalErosion(*value, thermal, At(16));
+        } else {
+            Graph::HydraulicParams hydraulic;
+            hydraulic.iterations = 6;
+            producer             = graph.AddHydraulicErosion(*value, hydraulic, At(20));
+        }
+        REQUIRE_OK_VOID(producer);
+
+        Graph::ThermalParams consumer = thermal;
+        consumer.iterations           = chain.iterations;
+        Result<Value> settled         = graph.AddThermalErosion(*producer, consumer, At(17));
+        REQUIRE_OK_VOID(settled);
+
+        REQUIRE_OK_VOID(graph.RequestOutput("height", *settled, -1.0f, 1.0f));
+        Result<Value> gradient = graph.AddGradient(*settled, At(15));
+        REQUIRE_OK_VOID(gradient);
+        REQUIRE_OK_VOID(graph.RequestOutput("gradient", *gradient, -1.0f, 1.0f));
+
+        CheckSeams(context, kernels, chain.label, graph,
+                   SectionExtent{.x = 128, .y = 1, .z = 128},
+                   SectionExtent{.x = 32, .y = 1, .z = 32});
+    }
+}
+
 void CheckDeterminism(Context& context, KernelLibrary& kernels) {
     Graph blended;
     REQUIRE_OK_VOID(BuildBlendGraph(blended));
@@ -356,6 +463,7 @@ int main() {
         CheckThermalSeams(context, kernels);
         CheckThermalVolumeSeams(context, kernels);
         CheckHydraulicSeams(context, kernels);
+        CheckChainedOpSeams(context, kernels);
 
         test::Section("the same evaluation twice gives the same bytes");
         CheckDeterminism(context, kernels);

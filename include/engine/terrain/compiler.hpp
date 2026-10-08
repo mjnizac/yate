@@ -68,6 +68,10 @@ struct Dispatch {
 
 /// A physical buffer the evaluator acquires from the section pool before the first dispatch.
 struct PlannedBuffer {
+    /// `mapping`, `halo` and `bytes` describe the value the slot was *created* for. The planner
+    /// reuses a slot for any later value that fits, so they do not describe its current occupant:
+    /// only `sizeClass` is a property of the slot itself. To read a value out of a buffer, take its
+    /// halo from the dispatch that wrote it, or from `CompiledOutput::halo`.
     Mapping   mapping;
     u32_t     halo  = 0;
     u64_t     bytes = 0;
@@ -81,6 +85,9 @@ struct CompiledOutput {
     std::array<char, OutputRequest::kMaxName> name{};
     u32_t                                     buffer = kInvalidBuffer;
     Mapping                                   mapping;
+    /// Halo the producing dispatch wrote with, so the padded stride of the readback is
+    /// `extent + 2 * halo`. A value read with a radius keeps its halo even as a requested output.
+    u32_t                                     halo = 0;
     f32_t                                     rangeMin = 0.0f;
     f32_t                                     rangeMax = 1.0f;
 };

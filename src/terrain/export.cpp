@@ -246,6 +246,17 @@ struct OutputChannel {
     /// Samples clamped across every tile, in tiles mode. The per-tile writers are gone by the time the
     /// sidecar is written, so the count is accumulated as they are closed.
     u64_t tileClamped = 0;
+    /// Border the output's buffer carries, which is **not** always zero.
+    ///
+    /// A requested output is still an ordinary value: if some other op reads it with a radius, halo
+    /// propagation gives it that halo, and the buffer the evaluator hands back is padded. A script that
+    /// takes the gradient of its own height is the common case, and `assets/scripts/basic.lua` does
+    /// exactly that, so its height buffer carries the whole erosion chain's halo of 37 samples.
+    ///
+    /// Reading such a buffer with a row stride of `section` gives a sheared image. It was wrong here for
+    /// a while and nothing caught it: no dataset case had a haloed output, and the normals the same
+    /// script exports come from a buffer with no halo, so they looked right next to a broken heightmap.
+    u32_t halo = 0;
 };
 
 /// Writes one section as its own file.
@@ -458,7 +469,8 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         out.components = info.mapping.components;
         out.rangeMin   = info.rangeMin;
         out.rangeMax   = info.rangeMax;
-        out.bytes      = ValueSize(info.mapping, extent, compiled->buffers[info.buffer].halo);
+        out.halo       = info.halo;
+        out.bytes      = ValueSize(info.mapping, extent, out.halo);
 
         Result<OutputFormat> format = FormatFor(info.mapping);
         if (!format) {
@@ -504,6 +516,17 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             }
         }
         detail::CopyBounded(summary.files[summary.fileCount++], out.path.data());
+    }
+
+    // The readback ring has to hold every output of one section at once, which is only knowable now:
+    // it depends on the mapping, the section size *and* the halo the compiler propagated. Doubled,
+    // because the ring is FIFO and sized for more than one section in flight.
+    u64_t readbackPerSection = 0;
+    for (usize_t i = 0; i < outputCount; ++i) {
+        readbackPerSection += outputs[i].bytes;
+    }
+    if (Status reserved = context.Readback().EnsureCapacity(readbackPerSection * 2); !reserved) {
+        return std::unexpected(reserved.error());
     }
 
     std::pmr::vector<f64_t> gpuPerDispatch(compiled->stats.dispatchCount, 0.0,
@@ -593,12 +616,18 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                         !invalidated) {
                         return std::unexpected(invalidated.error());
                     }
-                    const auto* samples = static_cast<const f32_t*>(
+                    const auto* chunk = static_cast<const f32_t*>(
                         context.Readback().MappedAt(readbackOffsets[i]));
+                    // Past the border on both axes, and striding by the padded width.
+                    const u32_t padded  = section + 2 * outputs[i].halo;
+                    const auto* samples =
+                        chunk
+                        + (static_cast<u64_t>(outputs[i].halo) * padded + outputs[i].halo)
+                              * outputs[i].components;
 
                     if (job.tiles) {
                         const Clock::time_point writeStart = Clock::now();
-                        if (Status written = WriteTile(outputs[i], job, samples, section,
+                        if (Status written = WriteTile(outputs[i], job, samples, padded,
                                                       {tileColumns, layers, bandRows},
                                                       {tileX0, originY, bandZ0});
                             !written) {
@@ -609,13 +638,13 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                         const Clock::time_point writeStart = Clock::now();
                         if (Status written = outputs[i].raw.WriteBrick(
                                 {tileX0, originY, bandZ0}, {tileColumns, layers, bandRows},
-                                {section, section, section}, samples);
+                                {padded, padded, padded}, samples);
                             !written) {
                             return std::unexpected(written.error());
                         }
                         encodeMs += MillisecondsSince(writeStart);
                     } else {
-                        outputs[i].encoder.Filling().Absorb(samples, section, tileX0, bandRows,
+                        outputs[i].encoder.Filling().Absorb(samples, padded, tileX0, bandRows,
                                                             tileColumns);
                     }
                     context.Readback().ReleaseOldest();

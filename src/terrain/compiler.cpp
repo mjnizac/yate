@@ -620,6 +620,7 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
         output.name     = request.name;
         output.buffer   = work[node].buffers[request.value.channel];
         output.mapping  = request.value.mapping;
+        output.halo     = work[node].halo;
         output.rangeMin = request.rangeMin;
         output.rangeMax = request.rangeMax;
         if (output.buffer == kInvalidBuffer) {
