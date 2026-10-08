@@ -24,11 +24,11 @@ namespace {
 
 constexpr u16_t kMaxSample = 65535;
 
-/// PNG stores 16-bit samples big-endian, and libspng hands `SPNG_FMT_PNG` rows through untouched,
-/// so the swap is ours to do.
-constexpr u16_t ToBigEndian(u16_t value) noexcept {
-    return static_cast<u16_t>((value >> 8) | (value << 8));
-}
+// PNG stores 16-bit samples big-endian and libspng does that conversion itself, so a row is handed
+// over in host order. Swapping here as well put every 16-bit file the engine ever wrote out
+// byte-reversed: the low byte landed in the high one, which turns a smooth height field into a
+// sawtooth that reads as noise. Measured rather than assumed — a value of 0 over a declared range of
+// +-100000 must appear in the file as `80 00`, and with the swap it appeared as `00 80`.
 
 /// Maps `value` from [min, max] to [0, 65535], clamping. `clamped` counts the samples that fell
 /// outside, which is the signal that a declared range is wrong.
@@ -367,12 +367,12 @@ Status PngWriter::WriteRow(const f32_t* samples) {
                     c < m_sourceComponents
                         ? Quantize(samples[x * m_sourceComponents + c], -1.0f, 1.0f, m_clamped)
                         : 0;
-                m_row[x * 3 + c] = ToBigEndian(quantized);
+                m_row[x * 3 + c] = quantized;
             }
         }
     } else {
         for (u32_t x = 0; x < m_width; ++x) {
-            m_row[x] = ToBigEndian(Quantize(samples[x], m_rangeMin, m_rangeMax, m_clamped));
+            m_row[x] = Quantize(samples[x], m_rangeMin, m_rangeMax, m_clamped);
         }
     }
 
