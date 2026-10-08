@@ -330,9 +330,12 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
             // The input buffer carries `stateHalo` too, because halo propagation gave the producer this
             // node's halo plus its radius. That is why the same `inputHalos` works for every iteration:
             // the state and the input have the same shape, and only the output narrows at the end.
-            const VkDeviceAddress      output  = constants.outputs[0];
-            const vulkan::SectionSlot& outputSlot = resources.Slot(dispatch.outputBuffers[0]);
-            const VkDeviceAddress      source0 = constants.inputs[0];
+            // `outputs[0]` is zero when nothing asked for channel 0, which is legal: a script may want
+            // only hydraulic erosion's `flow`. The kernel guards its own write with the channel mask, so
+            // the last iteration simply writes nothing there. Resolving the slot for it would not be
+            // legal, because the planner never gave that channel one.
+            const VkDeviceAddress output  = constants.outputs[0];
+            const VkDeviceAddress source0 = constants.inputs[0];
 
             std::array<VkDeviceAddress, 2>             scratch{};
             std::array<const vulkan::SectionSlot*, 2>  scratchSlots{};
@@ -368,13 +371,11 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
                 vkCmdDispatch(commands, iterationGroups[0], iterationGroups[1], iterationGroups[2]);
             }
 
-            // Both the output and every scratch half were written, so a later dispatch reading any of
-            // them needs a barrier.
-            state[dispatch.outputBuffers[0]].writtenSinceBarrier = true;
+            // Every scratch half was written, so a later dispatch reading one needs a barrier. The
+            // output channels are marked by the loop below, which runs for every dispatch.
             for (u8_t k = 0; k < dispatch.scratchCount; ++k) {
                 state[dispatch.scratchBuffers[k]].writtenSinceBarrier = true;
             }
-            (void)outputSlot;
         }
         timers.End(commands, static_cast<u32_t>(i));
 
