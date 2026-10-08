@@ -183,9 +183,14 @@ void WindowLayer::OnUpdate() {
     }
 
     // Deep enough to be obviously not black, so an empty viewer still shows that presentation works.
+    //
+    // Depth clears to *zero*, not one: the projection is reversed, so near is 1 and far is 0, and the
+    // pipeline compares with `GREATER_OR_EQUAL`. Clearing to one leaves only the near plane able to pass
+    // the test, which draws every tile and discards every fragment — a viewer that presents the clear
+    // colour with the panels on top of it, which is exactly what it did.
     const std::array<VkClearValue, 2> clears{
         VkClearValue{.color = {{0.05f, 0.06f, 0.09f, 1.0f}}},
-        VkClearValue{.depthStencil = {.depth = 1.0f, .stencil = 0}}};
+        VkClearValue{.depthStencil = {.depth = 0.0f, .stencil = 0}}};
     const VkRenderPassBeginInfo passInfo{
         .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .pNext           = nullptr,

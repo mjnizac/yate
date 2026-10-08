@@ -144,3 +144,21 @@
 - [x] A level change refills the ring, which is 47 ms, or three frames at 60 Hz, on a deliberate zoom.
       Streaming the new level under the usual budget instead would trade that for half a second of
       mostly-missing terrain. The hitch is the better failure, so it stays.
+
+## Found during the milestone 9 visual review
+
+- [ ] **No check looks at a rendered pixel.** The reversed-Z depth clear was wrong since the viewer was
+      written, and every viewer check passed throughout: the ring was evaluated, the tiles cleared the
+      frustum, the draws were recorded. What was missing was the last step. The swapchain images are
+      created `COLOR_ATTACHMENT` only, so this needs `TRANSFER_SRC` on them and a copy to a host-visible
+      buffer; then a check that a frame of terrain is not uniformly the clear colour, and that the colour
+      changes when the camera moves, would close the class rather than this one instance. A
+      `--screenshot <file>` option on the viewer falls out of the same readback and is what makes the
+      thing debuggable by eye without a human at the keyboard.
+- [ ] **The startup framing ignores the level it is about to pick.** `Frame` is called with
+      `sectionSize * resolution * (ring + 1)`, which is the ring's radius at level 0. `IdealLevel` then
+      reads the resulting distance and picks a level, and at the defaults that is level 2, where a tile is
+      8 m per sample and the ring actually spans 3584 m rather than the 1024 m it was framed for. The
+      camera ends up inside a ring four times larger than intended. It is not wrong enough to hide
+      anything — the terrain fills the view from 2128 m out — but the number is a lie and the fix is to
+      frame, pick the level, then reframe on the radius that level implies.

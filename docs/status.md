@@ -765,3 +765,20 @@ four taps were reaching DRAM, the real traffic would be two and a half times the
 have to be running at 290 GB/s, which it cannot. So the redundant taps are already being served by cache,
 and a shared-memory tiling would remove traffic that never leaves the chip while adding a barrier per
 iteration. The remaining gap to peak is latency and occupancy, which tiling does not address.
+
+### The viewer drew every tile and showed none of them
+
+First time anyone opened the viewer on `basic.lua`, the window came up with the panels over an empty
+background. The draws were all there — `tilesDrawn` was the whole ring — and the GPU was doing the work.
+
+The projection is reversed: near is 1, far is 0, so a float depth buffer spends its precision where the
+geometry is close, and the pipeline compares with `GREATER_OR_EQUAL`. `camera.hpp` says in as many words
+that the pass clears depth to zero to match. The pass cleared it to 1.0. With that clear and that compare
+the only fragment that can pass is one sitting exactly on the near plane, so every tile was drawn and
+every fragment discarded. The panels survived because the UI pipeline has no depth test, which is what
+made it look like a viewer that had not loaded anything rather than one that had.
+
+Nothing in the suite could have caught it. `test_viewer` checks that the ring is evaluated, that the tiles
+pass frustum culling and that the draws are recorded, and all of that was true. No check looks at a
+pixel, because the swapchain images are created `COLOR_ATTACHMENT` only and there is no readback path to
+look through. That is the gap, and it is in `docs/todo.md` rather than fixed here.
