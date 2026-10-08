@@ -25,7 +25,7 @@ void PrintUsage() {
         "  --section <n>          section size in samples, a power of two (default 512)\n"
         "  --out <dir>            output directory (default out/)\n"
         "  --tiles                write one file per tile instead of one stitched image\n"
-        "  --png-level <0-9>      zlib level for PNG outputs (default 1)\n"
+        "  --png-level <0-9>      zlib level for PNG outputs (default 2)\n"
         "  --png-filter <f>       PNG row filter: none, up or all (default up)\n"
         "  --param key=value      script parameter, repeatable\n"
         "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"

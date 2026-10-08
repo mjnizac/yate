@@ -56,23 +56,49 @@ FetchContent_Declare(vma
 
 FetchContent_MakeAvailable(spdlog tracy mimalloc vma)
 
-# --- zlib ---------------------------------------------------------------------------------------
-# Only needed by libspng, whose CMake requires ZLIB unconditionally (its miniz option exists only
-# in the meson build). OVERRIDE_FIND_PACKAGE makes libspng's find_package(ZLIB) resolve here
-# instead of looking for a system install.
+# --- zlib-ng ------------------------------------------------------------------------------------
+# Only needed by libspng, whose CMake requires ZLIB unconditionally (its miniz option exists only in the
+# meson build). OVERRIDE_FIND_PACKAGE makes libspng's find_package(ZLIB) resolve here instead of looking
+# for a system install.
+#
+# zlib-ng rather than zlib, in `ZLIB_COMPAT` mode so it provides zlib's API and libspng neither knows nor
+# cares. The reason is measured: deflate is the single largest cost in an export. On a 2048x2048 export
+# with erosion, the GPU is 5.7% of the wall time and the main loop spends 66% of it blocked waiting for a
+# PNG encoder thread, so the compressor *is* the critical path and nothing else is close.
 
-set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZLIB_COMPAT ON CACHE BOOL "" FORCE)
+set(ZLIB_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(ZLIBNG_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_GTEST OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(zlib
-    GIT_REPOSITORY https://github.com/madler/zlib.git
-    GIT_TAG        v1.3.1
+    GIT_REPOSITORY https://github.com/zlib-ng/zlib-ng.git
+    GIT_TAG        2.2.2
     GIT_SHALLOW    TRUE
     OVERRIDE_FIND_PACKAGE
 )
 FetchContent_MakeAvailable(zlib)
 
-# zlib does not export a namespaced target, which is what libspng links against.
+# Neither zlib nor zlib-ng exports the namespaced target libspng links against. zlib-ng in compat mode
+# also provides `zlibstatic` as an alias of `zlib`, and CMake refuses an alias of an alias, so the real
+# target has to be resolved rather than guessed by name.
 if(NOT TARGET ZLIB::ZLIB)
-    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+    set(ENGINE_ZLIB_TARGET "")
+    foreach(candidate zlib zlibstatic)
+        if(TARGET ${candidate})
+            get_target_property(_aliased ${candidate} ALIASED_TARGET)
+            if(_aliased)
+                set(ENGINE_ZLIB_TARGET "${_aliased}")
+            else()
+                set(ENGINE_ZLIB_TARGET "${candidate}")
+            endif()
+            break()
+        endif()
+    endforeach()
+    if(NOT ENGINE_ZLIB_TARGET)
+        message(FATAL_ERROR "the fetched zlib exports no usable target")
+    endif()
+    add_library(ZLIB::ZLIB ALIAS ${ENGINE_ZLIB_TARGET})
 endif()
 
 # --- libspng ------------------------------------------------------------------------------------

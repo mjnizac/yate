@@ -16,15 +16,30 @@ enum class PngFilter : u8_t { None = 0, Up, All };
 
 [[nodiscard]] ENGINE_API Result<PngFilter> ParsePngFilter(std::string_view name);
 
-/// How hard the PNG encoder works. The defaults were measured on the `basic_fbm` case, where
-/// encoding is 96% of the wall time: libspng's own defaults (`All`, level 6) take 341 ms and produce
-/// 1072 KiB, while `Up` at level 1 takes 82 ms and produces 1124 KiB. Terrain data is high-entropy
-/// noise, so searching filters and running the slow zlib passes buys about 5% of size for 4.2x the
-/// time. Overridable per job because an archival export may want the opposite trade.
+/// How hard the PNG encoder works.
+///
+/// Both defaults were measured rather than chosen. Encoding is the critical path of an export: on a
+/// 2048x2048 export with erosion the GPU accounts for 5.7% of the wall time and the main loop spends
+/// two thirds of it blocked waiting for an encoder thread.
+///
+/// The filter came first. libspng's own default makes it try every filter per row and keep the smallest,
+/// which on high-entropy terrain buys about 5% of size for 4.2x the time; `Up` alone is the better trade.
+///
+/// The level followed the move to zlib-ng. At the same filter, on the same export:
+///
+///   zlib     level 1    745 ms    18.10 MB
+///   zlib-ng  level 1    347 ms    22.46 MB
+///   zlib-ng  level 2    452 ms    17.64 MB
+///
+/// So level 2 on zlib-ng is 39% faster than level 1 on zlib *and* 2.6% smaller, which is why the default
+/// moved with the dependency instead of staying put. Level 1 is still there for whoever wants the extra
+/// 23% of speed and will pay 27% of size for it.
+///
+/// Overridable per job, because an archival export may want the opposite trade entirely.
 struct PngCompression {
     PngFilter filter = PngFilter::Up;
     /// zlib level, 0 to 9.
-    u32_t level = 1;
+    u32_t level = 2;
 };
 
 } // namespace engine::terrain
