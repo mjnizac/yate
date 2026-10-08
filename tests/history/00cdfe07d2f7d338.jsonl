@@ -307,3 +307,12 @@
 {"case":"hydraulic_r2","commit":"de9cc90","total_ms":7.0689,"gpu_ms":2.2178}
 {"case":"ridged_r2","commit":"de9cc90","total_ms":6.7449,"gpu_ms":0.0435}
 {"case":"volume_r3","commit":"de9cc90","total_ms":20.3218,"gpu_ms":0.0963}
+{"case":"basic_fbm","commit":"e3351d4","total_ms":50.0445,"gpu_ms":0.1660}
+{"case":"blended_r2","commit":"e3351d4","total_ms":11.3500,"gpu_ms":0.1566}
+{"case":"blurred_r2","commit":"e3351d4","total_ms":5.8136,"gpu_ms":0.1077}
+{"case":"eroded_r2","commit":"e3351d4","total_ms":7.0116,"gpu_ms":0.4081}
+{"case":"gradient_r2","commit":"e3351d4","total_ms":14.9481,"gpu_ms":0.0779}
+{"case":"hydraulic_flow_r2","commit":"e3351d4","total_ms":12.4853,"gpu_ms":0.8132}
+{"case":"hydraulic_r2","commit":"e3351d4","total_ms":7.2071,"gpu_ms":2.1593}
+{"case":"ridged_r2","commit":"e3351d4","total_ms":5.5474,"gpu_ms":0.0443}
+{"case":"volume_r3","commit":"e3351d4","total_ms":22.4324,"gpu_ms":0.0915}

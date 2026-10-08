@@ -338,6 +338,11 @@ PngWriter& PngWriter::operator=(PngWriter&& other) noexcept {
     m_width       = other.m_width;
     m_height      = other.m_height;
     m_components  = other.m_components;
+    // Dropping this one wrote every vector output as its first component in red with green and blue
+    // forced to zero, because the default is 1 and every writer is moved into its band encoder before
+    // it writes a row. Normals, gradients and erosion flow were all affected for the project's whole
+    // life, and no test could see it: the dataset goldens are files this same path produced.
+    m_sourceComponents = other.m_sourceComponents;
     m_rowsWritten = other.m_rowsWritten;
     m_format      = other.m_format;
     m_rangeMin    = other.m_rangeMin;
