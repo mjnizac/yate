@@ -21,6 +21,7 @@
 #include <engine/memory/allocator.hpp>
 #include <engine/memory/general.hpp>
 #include <engine/terrain/graph.hpp>
+#include <engine/terrain/kernels.hpp>
 
 #include <sol/sol.hpp>
 
@@ -40,6 +41,7 @@ using terrain::CurveOp;
 using terrain::Domain;
 using terrain::Graph;
 using terrain::Mapping;
+using terrain::OpKind;
 using terrain::NoiseKind;
 using terrain::SourceLocation;
 using terrain::Value;
@@ -101,10 +103,19 @@ Value Unwrap(Result<Value> result) {
 /// still be alive, and an entry half-copied under a racing reader would hand out a dangling view. The
 /// lock is taken a handful of times per script and never on a hot path.
 [[nodiscard]] std::string_view InternChunkName(const char* name) {
-    static constexpr usize_t kMaxNames  = 16;
+    // Sixty-four, not sixteen. The table is never emptied, because a `SourceLocation` taken from it can
+    // outlive the state that produced it: the viewer keeps a compiled graph rendering while it compiles
+    // a new one, so the old graph's nodes still point here. That means the table fills with every
+    // *distinct* script a process loads, and at sixteen the Lua error tests ran it dry — scripts after
+    // the sixteenth reported their errors against `?` instead of their own file name, silently.
+    //
+    // Sixty-four distinct scripts in one process is past any real use, and if it is ever reached the
+    // warning below says so once rather than degrading in silence.
+    static constexpr usize_t kMaxNames  = 64;
     static constexpr usize_t kMaxLength = 128;
     static std::array<std::array<char, kMaxLength>, kMaxNames> names{};
     static usize_t                                            count = 0;
+    static b8_t                                               warned = false;
     static std::mutex                                         mutex;
 
     const std::string_view      incoming = name != nullptr ? std::string_view{name} : "?";
@@ -115,6 +126,12 @@ Value Unwrap(Result<Value> result) {
         }
     }
     if (count == kMaxNames) {
+        if (!warned) {
+            warned = true;
+            LOG_WARN("more than {} distinct scripts have been loaded; further errors will name their "
+                     "file as '?'",
+                     kMaxNames);
+        }
         return "?";
     }
     detail::CopyBounded(names[count], incoming);
@@ -384,23 +401,29 @@ void Bind(sol::state& state, Graph& graph) {
             const auto           wrap     = [&lua](Value value) {
                 return sol::make_object(lua.lua_state(), Handle{value});
             };
-            if (key == "value") {
-                return wrap(Unwrap(graph.Channel(self.value, 0)));
-            }
-            if (key == "gradient") {
-                Result<Value> gradient = graph.Channel(self.value, 1);
-                if (!gradient) {
-                    Fail(location, "this value has no .gradient channel");
+
+            // Channel names come from the op registry rather than from a list here. The bindings used to
+            // know `value` and `gradient` and nothing else, which meant an op whose second channel is
+            // not a gradient could not be named at all, and `.gradient` would have been accepted on
+            // something that produces water and sediment.
+            const OpKind kind = graph.NodeAt(self.value.node).kind;
+            if (const u8_t channel = terrain::ChannelIndexOf(kind, key);
+                channel < terrain::kMaxNodeChannels) {
+                Result<Value> selected = graph.Channel(self.value, channel);
+                if (!selected) {
+                    Fail(location, "{} has no '{}' channel here; it offers {}", ToString(kind), key,
+                         terrain::ChannelNamesOf(kind).data());
                 }
-                return wrap(*gradient);
+                return wrap(*selected);
             }
+
             for (u8_t component = 0; component < 4; ++component) {
                 if (key == std::string_view{"xyzw"}.substr(component, 1)) {
                     return wrap(Unwrap(graph.AddExtract(self.value, component, location)));
                 }
             }
-            Fail(location, "a graph value has no '{}'; it has .value, .gradient, .x, .y, .z and .w",
-                 key);
+            Fail(location, "a {} value has no '{}'; it offers {} and the components .x, .y, .z, .w",
+                 ToString(kind), key, terrain::ChannelNamesOf(kind).data());
         },
         sol::meta_function::to_string,
         [](const Handle& self) { return std::string{ToString(self.value.mapping)}; },

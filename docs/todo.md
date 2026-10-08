@@ -101,11 +101,11 @@
 
 ## Milestone 8 — follow-ups
 
-- [ ] Hydraulic erosion drops its water and sediment on the last iteration, but both are genuinely
-      useful for texturing: a wetness mask and a sediment mask are what a renderer wants to put rock
-      against silt. The node could expose them as a second channel, which the channel mask would then
-      keep from being written when nothing asks. It needs a third name in the Lua handle, since `.value`
-      and `.gradient` are taken, and naming is the part worth thinking about rather than the plumbing.
+- [x] **Hydraulic erosion exposes its water and sediment** as channel 1, named `flow`. The naming was
+      indeed the part worth thinking about, and the answer was that the Lua bindings should not hold the
+      names at all: they come from the op registry now, so `noise.gradient` and `carved.flow` resolve
+      through one mechanism and a wrong name is told what the op actually offers. The channel mask does
+      the rest — a script that only wants a height pays for no second buffer.
 - [ ] Erosion is the first op where the GPU is a real cost: 28 ms of a 40 ms total on a 2048 export with
       24 hydraulic iterations and 12 thermal. That makes overlapping sections on the GPU worth measuring
       again, which it was not when the GPU accounted for half a percent of an export. Revisit the "one
@@ -128,14 +128,13 @@
 - [x] **The scroll accumulator no longer assumes one window**, and more importantly no longer replaces
       the UI backend's own scroll callback: `Input::Attach` runs before the UI comes up, so the UI chains
       to it rather than the other way round.
-- [ ] A reload re-evaluates the whole ring, which is 49 tiles at the default radius. Most of a parameter
-      tweak changes every sample, so there is nothing to cache; what *is* worth measuring is whether
-      tiles can be evaluated on a second queue so the frame loop does not stall on them at all.
-- [ ] Streaming evaluates tiles synchronously, one submit and one wait each, so `--tiles-per-frame` is a
-      direct frame-time cost: about a millisecond per tile for the sample script. A second set of
-      evaluator buffers and a fence per tile would let it overlap the frame instead. Measure first: at
-      two tiles a frame it is under 5% of a 60 Hz budget.
-- [ ] A level change evicts the whole ring, so there is a visible pause when it happens. Keeping the old
-      level's tiles until the new ones arrive would hide it, at the cost of twice the resident memory
-      during the transition and of two levels being briefly on screen — which is exactly the thing the
-      single-level design exists to avoid. Worth deciding only if the pause turns out to be noticeable.
+- [x] **Streaming cost measured, and left alone.** A tile is 954 microseconds end to end: 326 of command
+      recording, about 200 of GPU work, and about 430 of submit, wait and two buffer copies. At two tiles
+      a frame that is 1.9 ms, or 11% of a 60 Hz budget, and only while the camera crosses a tile border.
+      Two thirds being overhead rather than GPU work does argue for batching a frame's tiles into one
+      submission, but it would save a few hundred microseconds on a path already under a tenth of a
+      frame, and it needs a barrier between tiles sharing the evaluator's buffers. The numbers are in
+      `docs/status.md`; revisit if a heavier script makes a tile cost materially more.
+- [x] A level change refills the ring, which is 47 ms, or three frames at 60 Hz, on a deliberate zoom.
+      Streaming the new level under the usual budget instead would trade that for half a second of
+      mostly-missing terrain. The hitch is the better failure, so it stays.

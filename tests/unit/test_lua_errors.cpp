@@ -98,6 +98,17 @@ void CheckFailure(const char* name, std::string_view source, u32_t line,
                         formatted.data());
         }
     }
+    // The message must name the script, not `?`. This is here because it was *not*: the table that keeps
+    // chunk names alive held sixteen entries, so every case after the sixteenth reported its errors
+    // against `?` and no check noticed.
+    if (line != 0) {
+        const b8_t named = message.find(name) != std::string_view::npos;
+        Expect(named, name, "the message names the script file");
+        if (!named) {
+            std::printf("     %s: expected the file name in: %s\n", name, formatted.data());
+        }
+    }
+
     for (const char* fragment : fragments) {
         const b8_t found = message.find(fragment) != std::string_view::npos;
         Expect(found, name, fragment);
@@ -265,7 +276,7 @@ return main
 end
 return main
 )",
-                 3, {"magnitude", ".value", ".gradient"});
+                 3, {"magnitude", "Noise", "value, gradient"});
 }
 
 // --- Script-level errors ------------------------------------------------------------------------

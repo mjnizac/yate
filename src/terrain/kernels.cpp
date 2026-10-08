@@ -46,6 +46,7 @@ constexpr OpInfo kOps[] = {
      .nodeClass      = NodeClass::Pointwise,
      .maxInputs      = 0,
      .maxChannels    = 2,
+     .channelNames   = {"value", "gradient"},
      .resolutionWord = 6,
      .hasReference   = false, // Has its own reference, `EvalNoise`, not the pointwise one.
      // Two axes: the base function and whether the octave sum is normalized.
@@ -142,7 +143,10 @@ constexpr OpInfo kOps[] = {
      .shader         = "ops/hydraulic_erosion.comp.spv",
      .nodeClass      = NodeClass::Iterative,
      .maxInputs      = 1,
-     .maxChannels    = 1,
+     // Channel 1 is the water and the sediment left at the end, which a renderer wants for putting rock
+     // against silt. Written only when something asks for it, through the channel mask.
+     .maxChannels    = 2,
+     .channelNames   = {"value", "flow"},
      .resolutionWord = kMaxNodeParams,
      .hasReference   = false,
      .specFieldCount = 0},
@@ -474,6 +478,39 @@ const OpInfo& OpInfoOf(OpKind kind) noexcept {
 b8_t CanFold(OpKind kind) noexcept { return OpInfoOf(kind).hasReference; }
 
 usize_t ResolutionParamWord(OpKind kind) noexcept { return OpInfoOf(kind).resolutionWord; }
+
+u8_t ChannelIndexOf(OpKind kind, std::string_view name) noexcept {
+    const OpInfo& info = OpInfoOf(kind);
+    for (u8_t channel = 0; channel < kMaxNodeChannels; ++channel) {
+        if (info.channelNames[channel] != nullptr
+            && name == std::string_view{info.channelNames[channel]}) {
+            return channel;
+        }
+    }
+    return static_cast<u8_t>(kMaxNodeChannels);
+}
+
+std::array<char, 64> ChannelNamesOf(OpKind kind) noexcept {
+    const OpInfo&        info = OpInfoOf(kind);
+    std::array<char, 64> list{};
+    usize_t              at = 0;
+    for (u8_t channel = 0; channel < kMaxNodeChannels; ++channel) {
+        if (info.channelNames[channel] == nullptr) {
+            continue;
+        }
+        const std::string_view name{info.channelNames[channel]};
+        if (at != 0 && at + 2 < list.size()) {
+            list[at++] = ',';
+            list[at++] = ' ';
+        }
+        for (const char letter : name) {
+            if (at + 1 < list.size()) {
+                list[at++] = letter;
+            }
+        }
+    }
+    return list;
+}
 
 b8_t EvalPointwise(const Graph::Node& node,
                    const std::array<std::array<f32_t, kMaxComponents>, kMaxNodeInputs>& inputs,

@@ -602,3 +602,64 @@ happens — none of that is in reach of a test, and it is the part that needs lo
   longer assumes one window, which was the other obstacle.
 - **Per-tile levels**, for the reason above: they would put a visible crack on screen in an engine whose
   one firm claim is that section borders are bit-identical.
+
+## After milestone 9
+
+Work that followed from the todo list rather than from a milestone.
+
+### Channel names belong to the op
+
+The Lua bindings used to know two channel names, `value` and `gradient`, written into the index
+metamethod. That was fine while the only multi-channel op was noise and wrong the moment there was
+another: an op whose second channel is water and sediment had no way to be named, and the bindings would
+have cheerfully accepted `.gradient` on it. Names now come from the op registry, which is where the rest
+of the engine already looks for what an op is, and the error lists what the op does offer rather than a
+fixed pair.
+
+### Hydraulic erosion exposes its water and sediment
+
+`Erosion.Hydraulic` has a second channel, `flow`, carrying the water and the sediment as they stood after
+the last iteration. The simulation already had both; it was discarding them. They are a wetness map and a
+sediment map, which is what a renderer wants for deciding where rock gives way to silt.
+
+It is the first second channel in the engine that is not a gradient, and the first on an *iterative* op,
+so it is also the first thing to exercise the channel mask that far: the kernel writes channel 1 only
+when a consumer asked for it, and only on the last iteration. `test_erosion` checks the mask is `0x3`
+with both outputs requested and `0x1` with one, that the planner gives channel 1 no buffer in the second
+case, and that the buffer count really is lower. The `hydraulic_flow_r2` dataset case decodes both files
+and reproduces them bit-exactly.
+
+### A silent limit in the error reporting
+
+Every `SourceLocation` points into a table of interned chunk names, which is never emptied because a
+compiled graph can outlive the state that produced it — the viewer keeps one rendering while it compiles
+the next. The table held sixteen entries, and `test_lua_errors` loads twenty-seven scripts: every case
+after the sixteenth reported its errors against `?` instead of its own file, and nothing noticed, because
+no check looked at the file name.
+
+The table is sixty-four entries now and warns once if it is ever exhausted, and the error tests check
+that every message names its script. That is seventeen new checks whose only job is to catch this class
+of thing.
+
+### Streaming, measured
+
+The todo asked for numbers before restructuring the viewer's evaluation. On the sample script at 128
+samples and level 2:
+
+| | |
+| --- | --- |
+| one tile, end to end | 954 microseconds |
+| of which command recording | 326 microseconds |
+| of which GPU work | about 200 microseconds |
+| the rest: submit, wait, two buffer copies | about 430 microseconds |
+| a full ring of 49 tiles | 47 milliseconds |
+
+So at the default two tiles per frame, streaming costs about 1.9 ms while the camera crosses a tile
+border, which is 11% of a 60 Hz budget and only while moving. Two thirds of a tile's cost is *not* GPU
+work, which does suggest batching the frame's tiles into one submission would help — but it would save a
+few hundred microseconds on a path that is already under a tenth of a frame, and it needs a barrier
+between tiles that share the evaluator's buffers. Left alone, with the numbers written down.
+
+A level change refills the whole ring, so it costs those 47 ms: three frames at 60 Hz, on a deliberate
+zoom. The alternative is streaming the new level under the usual budget, which trades a three-frame hitch
+for half a second of mostly-missing terrain. The hitch is the better failure.

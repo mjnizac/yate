@@ -5,7 +5,7 @@
 // pick what it reads and what it writes:
 //
 //   first iteration  reads an `Rn -> R1` height and seeds the state from it
-//   last iteration   writes an `Rn -> R1` height, dropping the water and sediment
+//   last iteration   writes an `Rn -> R1` height, and the water and sediment to channel 1 when asked
 //   in between       reads and writes the three-component state
 //
 // The state is (height, water, sediment). One kernel rather than one per phase, because the phases of
@@ -154,9 +154,17 @@ void main() {
     // `out` is a GLSL keyword.
     uint at = SampleIndex(local);
     if (last) {
-        // Dropping the water and the sediment is deliberate: what the graph asked for is a height, and
-        // anything still suspended belongs to the simulation rather than to the terrain.
-        target.values[at] = next.height;
+        // The terrain is channel 0. The water and the sediment are channel 1, and only written when a
+        // consumer asked for them: a script that only wants a height should not pay for a second buffer
+        // or the bandwidth to fill it, which is exactly what the channel mask is for.
+        if (WantsChannel(0)) {
+            target.values[at] = next.height;
+        }
+        if (WantsChannel(1)) {
+            FloatBuffer flow = FloatBuffer(pc.outputs[1]);
+            flow.values[at * 2u]      = next.water;
+            flow.values[at * 2u + 1u] = next.sediment;
+        }
     } else {
         target.values[at * 3u]      = next.height;
         target.values[at * 3u + 1u] = next.water;

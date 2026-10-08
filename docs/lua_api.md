@@ -44,13 +44,27 @@ A handle is one channel of one node. It carries the mapping, nothing else.
 
 | Access | Produces |
 | --- | --- |
-| `h.value` | channel 0 |
-| `h.gradient` | channel 1, the analytic gradient, where the node has one |
+| `h.value` | channel 0, which every op has |
+| `h.<channel>` | a named second channel, where the op has one |
 | `h.x`, `h.y`, `h.z`, `h.w` | one component, `Rn -> R1` |
 | `a + b`, `a - b`, `a * b`, `a / b`, `-a` | pointwise arithmetic; either side may be a number |
 
-A channel no consumer asks for is never computed: the kernel receives a channel mask in its push
-constants.
+Channel names belong to the op, not to the handle:
+
+| Op | Channel 1 | Mapping |
+| --- | --- | --- |
+| `Noises.fBm`, `Ridged`, `Billow` | `gradient`, the analytic gradient | `Rn -> Rn` |
+| `Erosion.Hydraulic` | `flow`, the water on `x` and the sediment on `y` | `Rn -> R2` |
+
+A wrong name is an error that names the op and lists what it does offer:
+
+```
+terrain.lua:7: [script] a Noise value has no 'magnitude'; it offers value, gradient and the components
+.x, .y, .z, .w
+```
+
+A channel no consumer asks for is never computed and is never given a buffer: the kernel receives a
+channel mask in its push constants and skips writing what nothing wants.
 
 ## Ops
 
@@ -133,10 +147,23 @@ and an output adds its radius, and an iterative op contributes one per iteration
 | `Erosion.Thermal` | `input`, `iterations` (16), `talus` (0.02), `strength` (0.25, in (0, 0.5]) |
 | `Erosion.Hydraulic` | `input`, `iterations` (32), `rain` (0.02), `evaporation` (0.05), `capacity` (4.0), `erosion_rate` (0.3), `deposition` (0.3), `flow_rate` (0.15, in (0, 0.25]) |
 
-Both take an `Rn -> R1` height and produce one. Thermal erosion slides material downhill wherever the
-slope passes the talus angle. Hydraulic erosion rains, routes water, carries sediment and evaporates;
-the water and sediment live only between iterations, in a buffer the compiler allocates and the rest of
-the graph never sees.
+Both take an `Rn -> R1` height. Thermal erosion slides material downhill wherever the slope passes the
+talus angle. Hydraulic erosion rains, routes water, carries sediment and evaporates.
+
+Hydraulic erosion has a second channel, `flow`, holding the water and the sediment as they stood after
+the last iteration — a wetness map and a sediment map, which is what a renderer wants for putting rock
+against silt:
+
+```lua
+local carved = Erosion.Hydraulic{ input = base.value, iterations = 32 }
+return {
+  height = { value = carved, range = { -200, 1800 } },
+  wet    = { value = carved.flow },   -- water on x, sediment on y
+}
+```
+
+Asking for it costs a second section buffer and the bandwidth to fill it, so a script that only wants a
+height pays for neither.
 
 The upper bounds are stability conditions, not style limits, and the error says which one was broken: a
 thermal `strength` above one half lets a cell overshoot its neighbour and oscillate instead of settling,

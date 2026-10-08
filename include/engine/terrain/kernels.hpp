@@ -43,6 +43,14 @@ struct OpInfo {
     NodeClass   nodeClass = NodeClass::Pointwise;
     u8_t        maxInputs   = 0;
     u8_t        maxChannels = 1;
+    /// Name of each channel, as a script selects it: `noise.gradient`, `carved.flow`.
+    ///
+    /// In the registry rather than hardcoded in the Lua bindings, which used to know only `value` and
+    /// `gradient`. An op whose second channel is not a gradient had no way to be named, and the
+    /// alternative — a third hardcoded name — would have had the bindings quietly accept `.gradient` on
+    /// something that produces water and sediment. Channel 0 is `value` for every op by convention, and
+    /// saying so here costs one string and makes the error message able to list what an op does offer.
+    std::array<const char*, kMaxNodeChannels> channelNames{"value", nullptr};
     /// Parameter word the sample spacing is written into, or `kMaxNodeParams` when the op does not
     /// need world positions.
     usize_t resolutionWord = kMaxNodeParams;
@@ -58,6 +66,12 @@ struct OpInfo {
 [[nodiscard]] b8_t CanFold(OpKind kind) noexcept;
 
 [[nodiscard]] usize_t ResolutionParamWord(OpKind kind) noexcept;
+
+/// Channel index `name` selects on `kind`, or `kMaxNodeChannels` when the op has no such channel.
+[[nodiscard]] u8_t ChannelIndexOf(OpKind kind, std::string_view name) noexcept;
+
+/// Comma-separated list of the channel names `kind` offers, for an error message.
+[[nodiscard]] std::array<char, 64> ChannelNamesOf(OpKind kind) noexcept;
 
 /// CPU reference evaluation of one sample of a pointwise op.
 ///

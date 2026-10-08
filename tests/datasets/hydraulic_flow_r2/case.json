@@ -1,0 +1,22 @@
+{
+  "description": "Hydraulic erosion exporting both of its channels: the eroded height and the water and sediment left at the end. Covers the channel mask on an iterative op, which no other case reaches.",
+  "seed": 1717,
+  "resolution": 1.0,
+  "section": 128,
+  "bounds": {
+    "min_x": 512.0,
+    "min_z": -256.0,
+    "max_x": 768.0,
+    "max_z": 0.0
+  },
+  "outputs": [
+    "height.png",
+    "flow.png"
+  ],
+  "tolerance": 0,
+  "performance": {
+    "passes": 3,
+    "warn_slower": 0.1,
+    "fail_slower": 0.25
+  }
+}

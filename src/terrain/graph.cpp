@@ -523,8 +523,11 @@ Result<Value> Graph::AddHydraulicErosion(Value input, const HydraulicParams& par
     node.radius       = params.iterations;
     node.inputCount   = 1;
     node.inputs[0]    = input;
-    node.channelCount = 1;
+    node.channelCount = 2;
     node.channels[0]  = input.mapping;
+    // Water and sediment as they stood after the last iteration. Two components rather than three,
+    // because the height is channel 0 and repeating it would be a second copy to keep in step.
+    node.channels[1] = Mapping{input.mapping.domain, 2};
     // Height, water and sediment, carried between iterations and invisible to the rest of the graph.
     node.stateMapping = Mapping{input.mapping.domain, 3};
     std::memcpy(&node.params[0], &params.rain, sizeof(f32_t));

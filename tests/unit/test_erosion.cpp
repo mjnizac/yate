@@ -282,6 +282,64 @@ void CheckHydraulicBufferPlan(Context& context, KernelLibrary& kernels) {
         
 }
 
+void CheckHydraulicFlowChannel(Context& context, KernelLibrary& kernels) {
+    // Channel 1 of hydraulic erosion is the water and the sediment left when the simulation stops. It is
+    // the first second channel in the engine that is not a gradient, and the first on an iterative op, so
+    // what is under test is the channel mask reaching that far: a channel nobody asks for must not be
+    // written, and must not be given a buffer either.
+    Graph         graph;
+    Result<Value> noise = graph.AddNoise(Graph::NoiseParams{}, At(30));
+    REQUIRE_OK_VOID(noise);
+    Graph::HydraulicParams params;
+    params.iterations = 16;
+    Result<Value> carved = graph.AddHydraulicErosion(*noise, params, At(31));
+    REQUIRE_OK_VOID(carved);
+    Result<Value> flow = graph.Channel(*carved, 1);
+    REQUIRE_OK_VOID(flow);
+
+    CHECK_EQ(flow->mapping.components, u8_t{2});
+    CHECK_EQ(static_cast<u32_t>(flow->mapping.domain), static_cast<u32_t>(Domain::R2));
+
+    REQUIRE_OK_VOID(graph.RequestOutput("height", *carved, -1.0f, 1.0f));
+    REQUIRE_OK_VOID(graph.RequestOutput("flow", *flow, 0.0f, 1.0f));
+
+    const SectionExtent extent{.x = kExtent, .y = 1, .z = kExtent};
+    Result<CompiledGraph> both =
+        Compile(graph, CompileOptions{.extent = extent, .resolution = 1.0f});
+    REQUIRE_OK_VOID(both);
+    const Dispatch& withFlow = both->dispatches[1];
+    CHECK_EQ(withFlow.channelMask, u8_t{0x3});
+    CHECK(withFlow.outputBuffers[0] != kInvalidBuffer);
+    CHECK(withFlow.outputBuffers[1] != kInvalidBuffer);
+
+    // The same graph with only the height requested: the mask drops channel 1 and the planner gives it
+    // no buffer, which is the saving the mask exists for.
+    Graph         heightOnly;
+    Result<Value> plain = heightOnly.AddNoise(Graph::NoiseParams{}, At(32));
+    REQUIRE_OK_VOID(plain);
+    Result<Value> justCarved = heightOnly.AddHydraulicErosion(*plain, params, At(33));
+    REQUIRE_OK_VOID(justCarved);
+    REQUIRE_OK_VOID(heightOnly.RequestOutput("height", *justCarved, -1.0f, 1.0f));
+
+    Result<CompiledGraph> one =
+        Compile(heightOnly, CompileOptions{.extent = extent, .resolution = 1.0f});
+    REQUIRE_OK_VOID(one);
+    const Dispatch& withoutFlow = one->dispatches[1];
+    CHECK_EQ(withoutFlow.channelMask, u8_t{0x1});
+    CHECK_EQ(withoutFlow.outputBuffers[1], kInvalidBuffer);
+    CHECK(one->stats.bufferCount < both->stats.bufferCount);
+
+    // And the values themselves: water is a depth, so it cannot be negative, and if every sample came
+    // back zero the channel would be write-only decoration.
+    Result<Field> field =
+        Evaluate(context, kernels, graph, extent, kExtent, 1, kExtent, 1.0f, kOrigin, kSeed);
+    REQUIRE_OK_VOID(field);
+    // `Evaluate` reads output 0, the height. The flow needs its own read, which the helper does not do,
+    // so what is checked here is that evaluating a two-output graph works at all; the values are checked
+    // by the dataset case, which decodes both files.
+    CHECK(!field->samples.empty());
+}
+
 void CheckHydraulicBuilderRefusals(Context& context, KernelLibrary& kernels) {
     (void)context;
     (void)kernels;
@@ -446,6 +504,9 @@ int main() {
         // can leave the steepest single step as steep as it was. What must not happen is a blow-up, so
         // the bound is on the magnitude rather than on the slope.
         CHECK(Magnitude(*carved) < Magnitude(*bare) * 4.0);
+
+        test::Section("hydraulic erosion exposes its water and sediment");
+        CheckHydraulicFlowChannel(context, kernels);
 
         test::Section("hydraulic erosion refuses an unstable configuration");
         CheckHydraulicBuilderRefusals(context, kernels);
