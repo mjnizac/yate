@@ -33,6 +33,14 @@ layout(constant_id = 4) const uint kImmediateOperand = 0;
 #define ARITH_DIVIDE   3u
 #define ARITH_MINIMUM  4u
 #define ARITH_MAXIMUM  5u
+#define ARITH_SMOOTH_MINIMUM 6u
+#define ARITH_SMOOTH_MAXIMUM 7u
+
+// Polynomial smooth minimum: `min(a, b)` with the corner rounded over a width `k`.
+float SmoothMinimum(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
 
 float Apply(float a, float b) {
     switch (kArithOp) {
@@ -43,6 +51,8 @@ float Apply(float a, float b) {
         // everything downstream.
         case ARITH_DIVIDE: return b == 0.0 ? 0.0 : a / b;
         case ARITH_MINIMUM: return min(a, b);
+        case ARITH_SMOOTH_MINIMUM: return SmoothMinimum(a, b, ParamFloat(4));
+        case ARITH_SMOOTH_MAXIMUM: return -SmoothMinimum(-a, -b, ParamFloat(4));
         default: return max(a, b);
     }
 }

@@ -4,6 +4,8 @@
 #include <engine/terrain/kernels.hpp>
 #include <engine/log.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace engine::terrain {
@@ -23,6 +25,8 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::Gradient: return "Gradient";
         case OpKind::ThermalErosion: return "ThermalErosion";
         case OpKind::HydraulicErosion: return "HydraulicErosion";
+        case OpKind::Transform: return "Transform";
+        case OpKind::Shape: return "Shape";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -215,12 +219,19 @@ Result<Value> Graph::AddNormals(Value gradient, f32_t verticalScale, SourceLocat
     return Append(node, location);
 }
 
-Result<Value> Graph::AddArith(ArithOp op, Value a, Value b, SourceLocation location) {
+Result<Value> Graph::AddArith(ArithOp op, Value a, Value b, SourceLocation location,
+                              f32_t smooth) {
     if (Status checked = CheckValue(a, "the first operand", location); !checked) {
         return std::unexpected(checked.error());
     }
     if (Status checked = CheckValue(b, "the second operand", location); !checked) {
         return std::unexpected(checked.error());
+    }
+    const b8_t isSmooth = op == ArithOp::SmoothMinimum || op == ArithOp::SmoothMaximum;
+    if (isSmooth && !(smooth > 0.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a smooth minimum or maximum needs a blend width greater than zero, got {}", smooth));
     }
 
     Mapping result{};
@@ -244,6 +255,9 @@ Result<Value> Graph::AddArith(ArithOp op, Value a, Value b, SourceLocation locat
     node.params[0]    = a.mapping.components;
     node.params[1]    = b.mapping.components;
     node.params[2]    = result.components;
+    if (isSmooth) {
+        PackFloat(node.params, kArithSmoothWord, smooth);
+    }
     return Append(node, location);
 }
 
@@ -251,6 +265,25 @@ Result<Value> Graph::AddCurve(CurveOp op, Value input, f32_t a, f32_t b,
                               SourceLocation location) {
     if (Status checked = CheckValue(input, "Curve input", location); !checked) {
         return std::unexpected(checked.error());
+    }
+    if (const b8_t profile = op == CurveOp::ProfileLinear || op == CurveOp::ProfileSmooth
+                             || op == CurveOp::ProfileDome || op == CurveOp::ProfileGaussian;
+        profile && !(a > 0.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a profile needs a width greater than zero, got {}", a));
+    }
+    if (op == CurveOp::ProfilePlateau && !(a >= 0.0f && b >= 0.0f && a + b > 0.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a plateau needs a non-negative edge and falloff that are not both zero, got {} and {}",
+            a, b));
+    }
+    if (op == CurveOp::Terrace && !(a > 0.0f && b >= 0.0f && b <= 1.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a terrace needs a step greater than zero and a sharpness in [0, 1], got {} and {}", a,
+            b));
     }
     if (op == CurveOp::Remap && a == b) {
         return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
@@ -339,6 +372,143 @@ Result<Value> Graph::AddSlopeMask(Value gradient, f32_t minSlope, f32_t maxSlope
     node.channels[0]  = Mapping{Domain::R2, 1};
     PackFloat(node.params, 0, minSlope);
     PackFloat(node.params, 1, maxSlope);
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddTransform(Value position, const std::array<f32_t, 6>& matrix,
+                                  SourceLocation location) {
+    if (Status checked = CheckValue(position, "Transform input", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    const Mapping wanted{Domain::R2, 2};
+    if (!(position.mapping == wanted)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Transform expects an {} position field, got {}; shapes live in the (x, z) plane",
+            ToString(wanted), ToString(position.mapping)));
+    }
+    for (const f32_t entry : matrix) {
+        if (!std::isfinite(entry)) {
+            return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument,
+                                                  ErrorStage::Validation, location.file,
+                                                  location.line,
+                                                  "Transform has a non-finite entry"));
+        }
+    }
+
+    Node node;
+    node.kind         = OpKind::Transform;
+    node.nodeClass    = NodeClass::Pointwise;
+    node.inputCount   = 1;
+    node.inputs[0]    = position;
+    node.channelCount = 1;
+    node.channels[0]  = wanted;
+    for (usize_t i = 0; i < matrix.size(); ++i) {
+        PackFloat(node.params, i, matrix[i]);
+    }
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddShape(ShapeKind kind, Value position, Value accumulator,
+                              const ShapeParams& params, SourceLocation location) {
+    const b8_t resolves = kind == ShapeKind::ResolvePolygon || kind == ShapeKind::ResolvePolyline;
+    const b8_t chained  = kind == ShapeKind::SegmentsNext;
+    const b8_t segments = kind == ShapeKind::SegmentsFirst || chained;
+    const Mapping wanted{Domain::R2, 2};
+
+    if (!resolves) {
+        if (Status checked = CheckValue(position, "Shape position", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(position.mapping == wanted)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "a shape expects an {} position field, got {}; shapes live in the (x, z) plane",
+                ToString(wanted), ToString(position.mapping)));
+        }
+    }
+    if (resolves || chained) {
+        if (Status checked = CheckValue(accumulator, "the segment chain", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(accumulator.mapping == wanted)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "the segment chain must be {}, got {}", ToString(wanted),
+                ToString(accumulator.mapping)));
+        }
+    }
+    for (const f32_t entry : params.values) {
+        if (!std::isfinite(entry)) {
+            return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument,
+                                                  ErrorStage::Validation, location.file,
+                                                  location.line,
+                                                  "a shape has a non-finite parameter"));
+        }
+    }
+
+    const auto reject = [&](const char* what) -> Result<Value> {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
+                                              location.file, location.line, "{}", what));
+    };
+    switch (kind) {
+        case ShapeKind::Circle:
+            if (!(params.values[0] >= 0.0f)) {
+                return reject("a circle needs a radius of at least zero");
+            }
+            break;
+        case ShapeKind::Ellipse:
+            if (!(params.values[0] > 0.0f && params.values[1] > 0.0f)) {
+                return reject("an ellipse needs both radii greater than zero");
+            }
+            break;
+        case ShapeKind::Box:
+            if (!(params.values[0] > 0.0f && params.values[1] > 0.0f)) {
+                return reject("a box needs a size greater than zero on both axes");
+            }
+            if (!(params.values[2] >= 0.0f
+                  && params.values[2] <= std::min(params.values[0], params.values[1]))) {
+                return reject("a box's rounding must be between zero and its smaller half-size");
+            }
+            break;
+        case ShapeKind::BoxChebyshev:
+            if (!(params.values[0] > 0.0f && params.values[1] > 0.0f)) {
+                return reject("a box needs a size greater than zero on both axes");
+            }
+            break;
+        case ShapeKind::SegmentsFirst:
+        case ShapeKind::SegmentsNext:
+            if (params.segments < 1 || params.segments > 2) {
+                return reject("a segment node holds one or two segments");
+            }
+            break;
+        case ShapeKind::ResolvePolygon:
+        case ShapeKind::ResolvePolyline:
+            break;
+    }
+
+    Node node;
+    node.kind       = OpKind::Shape;
+    node.nodeClass  = NodeClass::Pointwise;
+    // Two variant fields: which shape, and how many segments this node folds in. The count is not
+    // a parameter word because the compiler writes words 8 and 9 of every node with the iteration
+    // count and index, and a pointwise op's tenth word would be zeroed.
+    node.variant    = PackVariant(static_cast<u32_t>(kind), params.segments);
+    node.channelCount = 1;
+    node.channels[0]  = segments ? wanted : Mapping{Domain::R2, 1};
+    if (resolves) {
+        node.inputCount = 1;
+        node.inputs[0]  = accumulator;
+    } else {
+        node.inputCount = chained ? 2 : 1;
+        node.inputs[0]  = position;
+        if (chained) {
+            node.inputs[1] = accumulator;
+        }
+    }
+    for (usize_t i = 0; i < params.values.size(); ++i) {
+        PackFloat(node.params, i, params.values[i]);
+    }
     return Append(node, location);
 }
 

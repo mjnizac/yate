@@ -76,6 +76,10 @@ enum class OpKind : u16_t {
     /// Hydraulic erosion: rain, flow, sediment transport and evaporation. Iterative, one cell of
     /// influence per iteration, carrying water and sediment between them.
     HydraulicErosion,
+    /// Affine map of a position field: translation, rotation and scale in the (x, z) plane.
+    Transform,
+    /// Signed distance to a shape, from a position field. Pointwise.
+    Shape,
     Count,
 };
 
@@ -95,7 +99,22 @@ enum class NodeClass : u8_t {
 [[nodiscard]] ENGINE_API const char* ToString(NodeClass nodeClass) noexcept;
 
 /// Operation an `Arith` node performs. The value is the kernel's specialization constant.
-enum class ArithOp : u32_t { Add = 0, Subtract, Multiply, Divide, Minimum, Maximum };
+enum class ArithOp : u32_t {
+    Add = 0,
+    Subtract,
+    Multiply,
+    Divide,
+    Minimum,
+    Maximum,
+    /// Polynomial smooth minimum and maximum. The blend width `k`, in the units of the operands, is
+    /// parameter word `kArithSmoothWord`.
+    SmoothMinimum,
+    SmoothMaximum,
+};
+
+/// Word of `Node::params` that carries the width of a smooth minimum or maximum, as float bits.
+/// Words 0 to 2 are component counts and word 3 is the folded immediate.
+inline constexpr usize_t kArithSmoothWord = 4;
 
 /// Which operand of an `Arith` node the compiler folded into the kernel as an immediate.
 ///
@@ -107,7 +126,48 @@ enum class ArithImmediate : u32_t { None = 0, Left, Right };
 inline constexpr usize_t kArithImmediateWord = 3;
 
 /// Curve a `Curve` node applies.
-enum class CurveOp : u32_t { Clamp = 0, Remap, Power, Smoothstep };
+///
+/// The profiles take a *signed distance* in metres, negative inside, and return a factor in `[0, 1]`
+/// that is 0 on the outside and 1 deep inside; multiply it by a height to get a landform. `Terrace`
+/// takes a height in metres.
+enum class CurveOp : u32_t {
+    Clamp = 0,
+    Remap,
+    Power,
+    Smoothstep,
+    /// `a` is the width in metres over which the factor rises from 0 at the edge to 1.
+    ProfileLinear,
+    ProfileSmooth,
+    /// Rises with infinite slope at the edge and flattens to the centre, like a dome. `a` is the width.
+    ProfileDome,
+    /// 1 inside and falling as a Gaussian outside. `a` is the standard deviation in metres.
+    ProfileGaussian,
+    /// 1 from `a` metres inside the edge, falling to 0 `b` metres outside it.
+    ProfilePlateau,
+    /// Snaps a height to steps of `a` metres. `b` in `[0, 1]` is how hard the riser is.
+    Terrace,
+};
+
+/// Which shape a `Shape` node evaluates.
+///
+/// Every shape is in its own local space, centred on the origin and unrotated: a `Transform` on the
+/// position field places it. The segment kinds build polygons and polylines out of a chain, because a
+/// kernel has ten parameter words and no buffers: each node folds up to two segments into an
+/// accumulator holding the distance so far in `x` and the parity of the crossings in `y`.
+enum class ShapeKind : u32_t {
+    Circle = 0,
+    Ellipse,
+    Box,
+    /// Box in the Chebyshev metric: the distance of a square pyramid's faces.
+    BoxChebyshev,
+    SegmentsFirst,
+    SegmentsNext,
+    ResolvePolygon,
+    ResolvePolyline,
+};
+
+/// Most segments one polygon or polyline may have. Two fit in a node, so this is 64 dispatches.
+inline constexpr u32_t kMaxShapeSegments = 128;
 
 /// Noise kind a `Noise` node evaluates.
 enum class NoiseKind : u32_t { Simplex = 0, Ridged, Billow };
@@ -237,7 +297,9 @@ public:
                                            SourceLocation location);
 
     /// Both operands must share a domain. An `Rn -> R1` operand broadcasts over `Rn -> Rm`.
-    [[nodiscard]] Result<Value> AddArith(ArithOp op, Value a, Value b, SourceLocation location);
+    /// `smooth` is the blend width of a smooth minimum or maximum, and must be positive for those.
+    [[nodiscard]] Result<Value> AddArith(ArithOp op, Value a, Value b, SourceLocation location,
+                                         f32_t smooth = 0.0f);
 
     /// Pointwise curve over any mapping. `a` and `b` are the curve's parameters: the bounds for
     /// `Clamp` and `Smoothstep`, the output range for `Remap`, and the exponent in `a` for `Power`.
@@ -251,6 +313,31 @@ public:
     /// above `maxSlope`.
     [[nodiscard]] Result<Value> AddSlopeMask(Value gradient, f32_t minSlope, f32_t maxSlope,
                                              SourceLocation location);
+
+    /// Maps a position field through an affine transform: `x' = m[0] x + m[1] z + m[4]` and
+    /// `z' = m[2] x + m[3] z + m[5]`. `position` must be `R2 -> R2`.
+    ///
+    /// The matrix maps *world to local*: it is applied to the positions a shape is evaluated at, so
+    /// moving a shape one way means moving the positions the other way. The Lua bindings build it
+    /// from placement parameters.
+    [[nodiscard]] Result<Value> AddTransform(Value position, const std::array<f32_t, 6>& matrix,
+                                             SourceLocation location);
+
+    struct ShapeParams {
+        /// Up to two segments of four floats each, or the primitive's own parameters.
+        std::array<f32_t, 8> values{};
+        /// Segments in a segment node, 1 or 2. Carried in the variant, not in a parameter word.
+        u32_t segments = 1;
+    };
+
+    /// Signed distance, in metres and negative inside, to a shape evaluated at `position`.
+    ///
+    /// `position` is `R2 -> R2`. For `SegmentsNext` `accumulator` is the previous node of the chain, an
+    /// `R2 -> R2` value; for `ResolvePolygon` and `ResolvePolyline` the position is not read and
+    /// `accumulator` is the finished chain, and the result is `R2 -> R1`. Segment nodes produce the
+    /// `R2 -> R2` accumulator.
+    [[nodiscard]] Result<Value> AddShape(ShapeKind kind, Value position, Value accumulator,
+                                         const ShapeParams& params, SourceLocation location);
 
     /// Extracts one component of `input`, producing `Rn -> R1`.
     [[nodiscard]] Result<Value> AddExtract(Value input, u8_t component, SourceLocation location);

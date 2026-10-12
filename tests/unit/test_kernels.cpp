@@ -547,6 +547,122 @@ int main() {
             (void)CheckBlur(context, Domain::R3, 2, 1, 1, "Blur R3 r2 h1");
         }
 
+        test::Section("Transform");
+        {
+            // A rotation with a scale and a translation, so a transposed matrix or a swapped
+            // translation shows up: the two off-diagonal entries differ in sign.
+            Result<Value> node = graph.AddTransform(
+                *vector2, {0.8f, -0.6f, 0.6f, 0.8f, 3.0f, -2.0f}, At(100));
+            REQUIRE_OK(node);
+            (void)checker.Check(node->node, "Transform");
+
+            Result<Value> scaled =
+                graph.AddTransform(*vector2, {0.25f, 0.0f, 0.0f, 4.0f, -0.5f, 0.125f}, At(101));
+            REQUIRE_OK(scaled);
+            (void)checker.Check(scaled->node, "Transform non-uniform");
+        }
+
+        test::Section("Shape");
+        {
+            const Value none{};
+            Graph::ShapeParams circle;
+            circle.values = {0.6f};
+            Result<Value> c = graph.AddShape(ShapeKind::Circle, *vector2, none, circle, At(110));
+            REQUIRE_OK(c);
+            (void)checker.Check(c->node, "Shape Circle");
+
+            Graph::ShapeParams ellipse;
+            ellipse.values = {0.8f, 0.4f};
+            Result<Value> e = graph.AddShape(ShapeKind::Ellipse, *vector2, none, ellipse, At(111));
+            REQUIRE_OK(e);
+            (void)checker.Check(e->node, "Shape Ellipse");
+
+            Graph::ShapeParams box;
+            box.values = {0.7f, 0.5f, 0.2f};
+            Result<Value> b = graph.AddShape(ShapeKind::Box, *vector2, none, box, At(112));
+            REQUIRE_OK(b);
+            (void)checker.Check(b->node, "Shape Box rounded");
+
+            Graph::ShapeParams cheb;
+            cheb.values = {0.5f, 0.7f};
+            Result<Value> k =
+                graph.AddShape(ShapeKind::BoxChebyshev, *vector2, none, cheb, At(113));
+            REQUIRE_OK(k);
+            (void)checker.Check(k->node, "Shape BoxChebyshev");
+
+            // Segment nodes, one and two per node, first and chained. The vertices straddle z = 0
+            // so the crossing rule is exercised by the random positions.
+            Graph::ShapeParams one;
+            one.values   = {-0.7f, -0.5f, 0.6f, 0.4f};
+            one.segments = 1;
+            Result<Value> first =
+                graph.AddShape(ShapeKind::SegmentsFirst, *vector2, none, one, At(114));
+            REQUIRE_OK(first);
+            (void)checker.Check(first->node, "Shape Segments first x1");
+
+            Graph::ShapeParams two;
+            two.values   = {-0.7f, -0.5f, 0.6f, 0.4f, 0.6f, 0.4f, -0.2f, 0.9f};
+            two.segments = 2;
+            Result<Value> pair =
+                graph.AddShape(ShapeKind::SegmentsFirst, *vector2, none, two, At(115));
+            REQUIRE_OK(pair);
+            (void)checker.Check(pair->node, "Shape Segments first x2");
+
+            Result<Value> next =
+                graph.AddShape(ShapeKind::SegmentsNext, *vector2, *vector2, two, At(116));
+            REQUIRE_OK(next);
+            (void)checker.Check(next->node, "Shape Segments next x2");
+
+            Result<Value> polygon = graph.AddShape(ShapeKind::ResolvePolygon, none, *vector2,
+                                                   Graph::ShapeParams{}, At(117));
+            REQUIRE_OK(polygon);
+            (void)checker.Check(polygon->node, "Shape Resolve polygon");
+
+            Result<Value> polyline = graph.AddShape(ShapeKind::ResolvePolyline, none, *vector2,
+                                                    Graph::ShapeParams{}, At(118));
+            REQUIRE_OK(polyline);
+            (void)checker.Check(polyline->node, "Shape Resolve polyline");
+        }
+
+        test::Section("Curve profiles and terraces");
+        {
+            struct Case {
+                const char* label;
+                CurveOp     op;
+                f32_t       a;
+                f32_t       b;
+            };
+            const Case cases[] = {
+                {"Profile linear", CurveOp::ProfileLinear, 0.5f, 0.0f},
+                {"Profile smooth", CurveOp::ProfileSmooth, 0.5f, 0.0f},
+                {"Profile dome", CurveOp::ProfileDome, 0.5f, 0.0f},
+                {"Profile gaussian", CurveOp::ProfileGaussian, 0.4f, 0.0f},
+                {"Profile plateau", CurveOp::ProfilePlateau, 0.2f, 0.3f},
+                {"Profile plateau, sharp", CurveOp::ProfilePlateau, 0.0f, 0.05f},
+                {"Terrace soft", CurveOp::Terrace, 0.25f, 0.6f},
+                {"Terrace hard", CurveOp::Terrace, 0.25f, 1.0f},
+            };
+            for (usize_t i = 0; i < ArrayCount(cases); ++i) {
+                Result<Value> node = graph.AddCurve(cases[i].op, *scalar, cases[i].a, cases[i].b,
+                                                    At(static_cast<u32_t>(130 + i)));
+                REQUIRE_OK(node);
+                (void)checker.Check(node->node, cases[i].label);
+            }
+        }
+
+        test::Section("Smooth minimum and maximum");
+        {
+            Result<Value> smoothMin =
+                graph.AddArith(ArithOp::SmoothMinimum, *scalar, *scalar, At(150), 0.3f);
+            REQUIRE_OK(smoothMin);
+            (void)checker.Check(smoothMin->node, "Arith SmoothMinimum");
+
+            Result<Value> smoothMax =
+                graph.AddArith(ArithOp::SmoothMaximum, *scalar, *scalar, At(151), 0.3f);
+            REQUIRE_OK(smoothMax);
+            (void)checker.Check(smoothMax->node, "Arith SmoothMaximum");
+        }
+
         test::Section("R3 pointwise");
         {
             // The same ops over a volume, so the R3 workgroup shape and sample layout are exercised.

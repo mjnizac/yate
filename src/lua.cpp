@@ -259,6 +259,55 @@ public:
         return handle->value;
     }
 
+    /// A pair `{ x, z }`. With `broadcast` a bare number stands for both, so `scale = 2` works.
+    [[nodiscard]] std::array<f64_t, 2> Pair(const char* key, std::array<f64_t, 2> fallback,
+                                            b8_t broadcast = false) {
+        Accept(key);
+        if (!m_table[key].valid()) {
+            return fallback;
+        }
+        if (broadcast) {
+            if (const sol::optional<f64_t> number = m_table[key]; number.has_value()) {
+                return {*number, *number};
+            }
+        }
+        const sol::optional<sol::table> table = m_table[key];
+        if (!table.has_value()) {
+            WrongType(key, broadcast ? "a number or a pair { x, z }" : "a pair { x, z }");
+        }
+        return ReadPair(*table, key);
+    }
+
+    /// Most points a list may hold: a closed polygon of `kMaxShapeSegments` segments.
+    static constexpr usize_t kMaxPoints = terrain::kMaxShapeSegments + 1;
+
+    /// A list of `{ x, z }` points, written into `out`. Returns how many there were.
+    [[nodiscard]] usize_t Points(const char* key, std::array<std::array<f64_t, 2>, kMaxPoints>& out) {
+        Accept(key);
+        if (!m_table[key].valid()) {
+            Fail(m_location, "{} needs a list of points as '{}'", m_op, key);
+        }
+        const sol::optional<sol::table> list = m_table[key];
+        if (!list.has_value()) {
+            WrongType(key, "a list of { x, z } points");
+        }
+        usize_t count = 0;
+        for (usize_t i = 1;; ++i) {
+            const sol::object entry = (*list)[i];
+            if (!entry.valid() || entry.get_type() == sol::type::lua_nil) {
+                break;
+            }
+            if (count == out.size()) {
+                Fail(m_location, "{} takes at most {} points in '{}'", m_op, out.size(), key);
+            }
+            if (entry.get_type() != sol::type::table) {
+                Fail(m_location, "{} expects point {} of '{}' to be a pair {{ x, z }}", m_op, i, key);
+            }
+            out[count++] = ReadPair(entry.as<sol::table>(), key);
+        }
+        return count;
+    }
+
     [[nodiscard]] SourceLocation Location() const noexcept { return m_location; }
 
     /// Reports any key the op does not accept, listing the ones it does.
@@ -299,6 +348,18 @@ private:
             list += m_accepted[i];
         }
         return list;
+    }
+
+    [[nodiscard]] std::array<f64_t, 2> ReadPair(const sol::table& table, const char* key) {
+        const sol::optional<f64_t> first  = table[1];
+        const sol::optional<f64_t> second = table[2];
+        if (!first.has_value() || !second.has_value() || table[3].valid()) {
+            Fail(m_location, "{} expects '{}' to be a pair of numbers {{ x, z }}", m_op, key);
+        }
+        if (!std::isfinite(*first) || !std::isfinite(*second)) {
+            Fail(m_location, "{} expects '{}' to hold finite numbers", m_op, key);
+        }
+        return {*first, *second};
     }
 
     /// A key that is present but of the wrong type. Worth its own message: the script did mean to
@@ -372,6 +433,50 @@ private:
     }
     ENGINE_FAIL(ErrorCode::ScriptError, ErrorStage::Script,
                 "unknown noise kind '{}'; expected simplex, ridged or billow", name);
+}
+
+/// The position field a shape is evaluated at: the one the script passed as `position`, or the
+/// world position in metres. Passing `Coords + noise` is how a shape is warped.
+[[nodiscard]] Value PositionOrCoords(Args& args, Graph& graph, SourceLocation location) {
+    if (args.Has("position")) {
+        return args.Input("position");
+    }
+    return Unwrap(graph.AddCoords(Domain::R2, location));
+}
+
+/// The matrix of a `Transform` node, from where the script wants the shape.
+///
+/// The shape sits at `at` after being scaled and rotated about `pivot` (a point of its own local
+/// space), and rotating by a positive angle turns +x towards +z. The kernel wants the inverse of
+/// that, world to local: `local = S^-1 R^-1 (world - at) + pivot`. Worked out in double and rounded
+/// once, so a rotation and its inverse do not accumulate float error.
+[[nodiscard]] std::array<f32_t, 6> PlacementToLocal(std::array<f64_t, 2> at, f64_t degrees,
+                                                    std::array<f64_t, 2> scale,
+                                                    std::array<f64_t, 2> pivot,
+                                                    SourceLocation       location) {
+    if (!std::isfinite(degrees)) {
+        Fail(location, "Terrain.Transform expects a finite rotation, got {}", degrees);
+    }
+    if (scale[0] == 0.0 || scale[1] == 0.0) {
+        Fail(location,
+             "Terrain.Transform expects a scale other than zero on both axes, got {} and {}; a "
+             "zero scale has no inverse",
+             scale[0], scale[1]);
+    }
+    constexpr f64_t kPi     = 3.14159265358979323846;
+    const f64_t     radians = degrees * kPi / 180.0;
+    const f64_t     c       = std::cos(radians);
+    const f64_t     s       = std::sin(radians);
+    const f64_t     m00     = c / scale[0];
+    const f64_t     m01     = s / scale[0];
+    const f64_t     m10     = -s / scale[1];
+    const f64_t     m11     = c / scale[1];
+    return {static_cast<f32_t>(m00),
+            static_cast<f32_t>(m01),
+            static_cast<f32_t>(m10),
+            static_cast<f32_t>(m11),
+            static_cast<f32_t>(pivot[0] - (m00 * at[0] + m01 * at[1])),
+            static_cast<f32_t>(pivot[1] - (m10 * at[0] + m11 * at[1]))};
 }
 
 [[nodiscard]] Domain ParseDomain(Args& args) {
@@ -559,6 +664,22 @@ void Bind(sol::state& state, Graph& graph) {
                                             location))};
     });
 
+    // Places a position field. `at`, `rotation`, `scale` and `pivot` describe where the *shape* ends up,
+    // and the node is built from the inverse, because the kernel maps world positions to the shape's
+    // local space: a shape moved right is the same shape evaluated at positions moved left.
+    terrain.set_function("Transform", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Terrain.Transform", location);
+        const Value          position = PositionOrCoords(args, graph, location);
+        const auto           at       = args.Pair("at", {0.0, 0.0});
+        const f64_t          degrees  = args.Number("rotation", 0.0);
+        const auto           scale    = args.Pair("scale", {1.0, 1.0}, true);
+        const auto           pivot    = args.Pair("pivot", {0.0, 0.0});
+        args.Finish();
+        return Handle{Unwrap(graph.AddTransform(
+            position, PlacementToLocal(at, degrees, scale, pivot, location), location))};
+    });
+
     // --- Masks ----------------------------------------------------------------------------------
 
     sol::table masks = state.create_named_table("Masks");
@@ -602,6 +723,29 @@ void Bind(sol::state& state, Graph& graph) {
     });
     combine.set_function("Max", [pair](sol::this_state lua, sol::table table) {
         return pair(lua, std::move(table), "Combine.Max", ArithOp::Maximum);
+    });
+
+    // The rounded versions. `k` is the width of the blend in the units of the operands: where the two
+    // differ by more than `k` the result is exactly Min or Max, and inside it the corner is rounded,
+    // by up to a quarter of `k`. Both are symmetric in `a` and `b`.
+    const auto smoothPair = [&graph](sol::this_state lua, sol::table table, const char* op,
+                                     ArithOp kind) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), op, location);
+        const Value          a = args.Input("a");
+        const Value          b = args.Input("b");
+        const f32_t          k = args.Float("k", 1.0);
+        args.Finish();
+        if (!(k > 0.0f)) {
+            Fail(location, "{} expects k greater than zero, got {}", op, static_cast<f64_t>(k));
+        }
+        return Handle{Unwrap(graph.AddArith(kind, a, b, location, k))};
+    };
+    combine.set_function("SmoothMin", [smoothPair](sol::this_state lua, sol::table table) {
+        return smoothPair(lua, std::move(table), "Combine.SmoothMin", ArithOp::SmoothMinimum);
+    });
+    combine.set_function("SmoothMax", [smoothPair](sol::this_state lua, sol::table table) {
+        return smoothPair(lua, std::move(table), "Combine.SmoothMax", ArithOp::SmoothMaximum);
     });
 
     // --- Curves ---------------------------------------------------------------------------------
@@ -649,6 +793,93 @@ void Bind(sol::state& state, Graph& graph) {
         }
         return Handle{
             Unwrap(graph.AddCurve(CurveOp::Smoothstep, input, minimum, maximum, location))};
+    });
+
+    // A profile turns a signed distance into a factor in [0, 1], 0 outside and 1 inside; multiplied by a
+    // height it is a landform. The shape sets where the edge is and the profile sets how the ground
+    // leaves it, which is why the two are separate.
+    curves.set_function("Profile", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Curves.Profile", location);
+        const Value          input = args.Input("input");
+        const std::string    kind  = args.Text("kind", "smooth");
+        const b8_t           hasWidth   = args.Has("width");
+        const b8_t           hasSigma   = args.Has("sigma");
+        const b8_t           hasEdge    = args.Has("edge");
+        const b8_t           hasFalloff = args.Has("falloff");
+        const f32_t          width      = args.Float("width", 1.0);
+        const f32_t          sigma      = args.Float("sigma", 1.0);
+        const f32_t          edge       = args.Float("edge", 0.0);
+        const f32_t          falloff    = args.Float("falloff", 1.0);
+        args.Finish();
+
+        CurveOp op = CurveOp::ProfileSmooth;
+        if (kind == "linear") {
+            op = CurveOp::ProfileLinear;
+        } else if (kind == "smooth") {
+            op = CurveOp::ProfileSmooth;
+        } else if (kind == "dome") {
+            op = CurveOp::ProfileDome;
+        } else if (kind == "gaussian") {
+            op = CurveOp::ProfileGaussian;
+        } else if (kind == "plateau") {
+            op = CurveOp::ProfilePlateau;
+        } else {
+            Fail(location,
+                 "Curves.Profile does not know the kind '{}'; expected linear, smooth, dome, "
+                 "gaussian or plateau",
+                 kind);
+        }
+
+        // The keys that mean something depend on the kind, and one that does not would be read by
+        // nothing: say so rather than let `sigma` on a linear profile be silently ignored.
+        const b8_t needsWidth = op == CurveOp::ProfileLinear || op == CurveOp::ProfileSmooth
+                                || op == CurveOp::ProfileDome;
+        const b8_t needsSigma   = op == CurveOp::ProfileGaussian;
+        const b8_t needsPlateau = op == CurveOp::ProfilePlateau;
+        if (hasWidth && !needsWidth) {
+            Fail(location, "Curves.Profile kind '{}' does not take 'width'", kind);
+        }
+        if (hasSigma && !needsSigma) {
+            Fail(location, "Curves.Profile kind '{}' does not take 'sigma'; it is for gaussian", kind);
+        }
+        if ((hasEdge || hasFalloff) && !needsPlateau) {
+            Fail(location, "Curves.Profile kind '{}' does not take 'edge' or 'falloff'; they are for "
+                           "plateau",
+                 kind);
+        }
+        if (needsWidth && !hasWidth) {
+            Fail(location, "Curves.Profile kind '{}' needs 'width', in metres", kind);
+        }
+        if (needsSigma && !hasSigma) {
+            Fail(location, "Curves.Profile kind 'gaussian' needs 'sigma', in metres");
+        }
+        if (needsPlateau && !hasFalloff) {
+            Fail(location, "Curves.Profile kind 'plateau' needs 'falloff', in metres");
+        }
+
+        const f32_t a = needsWidth ? width : (needsSigma ? sigma : edge);
+        const f32_t b = needsPlateau ? falloff : 0.0f;
+        return Handle{Unwrap(graph.AddCurve(op, input, a, b, location))};
+    });
+
+    // Terraces take a height in metres, not a distance.
+    curves.set_function("Terrace", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Curves.Terrace", location);
+        const Value          input     = args.Input("input");
+        const f32_t          step      = args.Float("step", 10.0);
+        const f32_t          sharpness = args.Float("sharpness", 0.5);
+        args.Finish();
+        if (!(step > 0.0f)) {
+            Fail(location, "Curves.Terrace expects step greater than zero, got {}",
+                 static_cast<f64_t>(step));
+        }
+        if (!(sharpness >= 0.0f && sharpness <= 1.0f)) {
+            Fail(location, "Curves.Terrace expects sharpness in [0, 1], got {}",
+                 static_cast<f64_t>(sharpness));
+        }
+        return Handle{Unwrap(graph.AddCurve(CurveOp::Terrace, input, step, sharpness, location))};
     });
 
     // --- Filters --------------------------------------------------------------------------------
@@ -700,6 +931,110 @@ void Bind(sol::state& state, Graph& graph) {
         args.Finish();
 
         return Handle{Unwrap(graph.AddHydraulicErosion(input, params, location))};
+    });
+
+    // --- Geometry -------------------------------------------------------------------------------
+    //
+    // Signed distances, in metres and negative inside, in the shape's own local space: centred on the
+    // origin and unrotated. `position` is the field they are evaluated at and defaults to the world
+    // position; `Terrain.Transform` is what places one, and `Coords + noise` is what warps one. The
+    // prelude's `Shapes.*` does the placing, so these are the building blocks rather than the API most
+    // scripts reach for.
+
+    sol::table geometry = state.create_named_table("Geometry");
+
+    const auto primitive = [&graph](const char* name, terrain::ShapeKind kind) {
+        return [&graph, name, kind](sol::this_state lua, sol::table table) {
+            const SourceLocation location = CallerLocation(lua);
+            Args                 args(std::move(table), name, location);
+            const Value          position = PositionOrCoords(args, graph, location);
+            Graph::ShapeParams   params;
+            switch (kind) {
+                case terrain::ShapeKind::Circle:
+                    params.values[0] = args.Float("radius", 1.0);
+                    break;
+                case terrain::ShapeKind::Ellipse: {
+                    const auto radii = args.Pair("radii", {1.0, 1.0});
+                    params.values[0] = static_cast<f32_t>(radii[0]);
+                    params.values[1] = static_cast<f32_t>(radii[1]);
+                    break;
+                }
+                case terrain::ShapeKind::Box:
+                case terrain::ShapeKind::BoxChebyshev: {
+                    // The full size on each axis, which is what a person means by "a 400 by 200 box".
+                    const auto size  = args.Pair("size", {1.0, 1.0});
+                    params.values[0] = static_cast<f32_t>(size[0] * 0.5);
+                    params.values[1] = static_cast<f32_t>(size[1] * 0.5);
+                    if (kind == terrain::ShapeKind::Box) {
+                        params.values[2] = args.Float("rounding", 0.0);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            args.Finish();
+            return Handle{
+                Unwrap(graph.AddShape(kind, position, Value{}, params, location))};
+        };
+    };
+    geometry.set_function("Circle", primitive("Geometry.Circle", terrain::ShapeKind::Circle));
+    geometry.set_function("Ellipse", primitive("Geometry.Ellipse", terrain::ShapeKind::Ellipse));
+    geometry.set_function("Box", primitive("Geometry.Box", terrain::ShapeKind::Box));
+    geometry.set_function("BoxChebyshev",
+                          primitive("Geometry.BoxChebyshev", terrain::ShapeKind::BoxChebyshev));
+
+    // A polygon or a polyline from a list of points. The chain is built here, in C++, so the parity
+    // rule and the segment limit live in one place and a script cannot build a chain that is half of
+    // one.
+    geometry.set_function("Segments", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Geometry.Segments", location);
+        const Value          position = PositionOrCoords(args, graph, location);
+        std::array<std::array<f64_t, 2>, Args::kMaxPoints> points{};
+        const usize_t        count  = args.Points("points", points);
+        const b8_t           closed = args.Boolean("closed", true);
+        args.Finish();
+
+        if (closed && count < 3) {
+            Fail(location, "Geometry.Segments needs at least 3 points for a closed polygon, got {}",
+                 count);
+        }
+        if (!closed && count < 2) {
+            Fail(location, "Geometry.Segments needs at least 2 points for a polyline, got {}", count);
+        }
+        const usize_t segments = closed ? count : count - 1;
+        if (segments > terrain::kMaxShapeSegments) {
+            Fail(location,
+                 "Geometry.Segments takes at most {} segments, got {}; each is a pass over every "
+                 "sample, so a long outline is better described with fewer points",
+                 terrain::kMaxShapeSegments, segments);
+        }
+
+        const auto segmentAt = [&](usize_t i, Graph::ShapeParams& params, usize_t slot) {
+            const auto& a = points[i];
+            const auto& b = points[(i + 1) % count];
+            params.values[slot * 4 + 0] = static_cast<f32_t>(a[0]);
+            params.values[slot * 4 + 1] = static_cast<f32_t>(a[1]);
+            params.values[slot * 4 + 2] = static_cast<f32_t>(b[0]);
+            params.values[slot * 4 + 3] = static_cast<f32_t>(b[1]);
+        };
+
+        Value chain{};
+        for (usize_t i = 0; i < segments; i += 2) {
+            Graph::ShapeParams params;
+            params.segments = static_cast<u32_t>(std::min<usize_t>(2, segments - i));
+            segmentAt(i, params, 0);
+            if (params.segments == 2) {
+                segmentAt(i + 1, params, 1);
+            }
+            chain = Unwrap(graph.AddShape(i == 0 ? terrain::ShapeKind::SegmentsFirst
+                                                 : terrain::ShapeKind::SegmentsNext,
+                                          position, chain, params, location));
+        }
+        return Handle{Unwrap(graph.AddShape(closed ? terrain::ShapeKind::ResolvePolygon
+                                                   : terrain::ShapeKind::ResolvePolyline,
+                                            Value{}, chain, Graph::ShapeParams{}, location))};
     });
 
     // --- Vec ------------------------------------------------------------------------------------

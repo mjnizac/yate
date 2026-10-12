@@ -18,6 +18,16 @@ layout(constant_id = 3) const uint kCurveOp = 0;
 #define CURVE_REMAP      1u
 #define CURVE_POWER      2u
 #define CURVE_SMOOTHSTEP 3u
+#define CURVE_PROFILE_LINEAR   4u
+#define CURVE_PROFILE_SMOOTH   5u
+#define CURVE_PROFILE_DOME     6u
+#define CURVE_PROFILE_GAUSSIAN 7u
+#define CURVE_PROFILE_PLATEAU  8u
+#define CURVE_TERRACE          9u
+
+// 0 on and outside the edge of a shape, 1 at `width` metres inside it. `distance_` is signed and
+// negative inside.
+float Rise(float distance_, float width) { return clamp(-distance_ / width, 0.0, 1.0); }
 
 float Apply(float v, float a, float b) {
     switch (kCurveOp) {
@@ -26,6 +36,31 @@ float Apply(float v, float a, float b) {
         case CURVE_REMAP: return a + (b - a) * (v * 0.5 + 0.5);
         // The sign is preserved so a signed field stays signed under an even exponent.
         case CURVE_POWER: return sign(v) * pow(abs(v), max(a, 0.0001));
+        case CURVE_PROFILE_LINEAR: return Rise(v, a);
+        case CURVE_PROFILE_SMOOTH: {
+            float u = Rise(v, a);
+            return u * u * (3.0 - 2.0 * u);
+        }
+        case CURVE_PROFILE_DOME: {
+            float w = 1.0 - Rise(v, a);
+            return sqrt(max(1.0 - w * w, 0.0));
+        }
+        case CURVE_PROFILE_GAUSSIAN: {
+            float t = max(v, 0.0) / a;
+            return exp(-0.5 * t * t);
+        }
+        // `smoothstep` is undefined when its edges are equal, which `a + b > 0` rules out here.
+        case CURVE_PROFILE_PLATEAU: return 1.0 - smoothstep(-a, b, v);
+        case CURVE_TERRACE: {
+            float t     = v / a;
+            float whole = floor(t);
+            float f     = t - whole;
+            float s     = 1.0 - b;
+            // A hard riser has equal edges, which `smoothstep` leaves undefined: take the step.
+            float r = s < 1e-4 ? (f >= 0.5 ? 1.0 : 0.0)
+                               : smoothstep(0.5 - 0.5 * s, 0.5 + 0.5 * s, f);
+            return a * (whole + r);
+        }
         default: return smoothstep(a, b, v);
     }
 }

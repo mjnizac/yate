@@ -157,6 +157,27 @@ constexpr OpInfo kOps[] = {
      .resolutionWord = 6,
      .hasReference   = false,
      .specFieldCount = 0},
+    {.kind           = OpKind::Transform,
+     .name           = "Transform",
+     .shader         = "ops/transform.comp.spv",
+     .nodeClass      = NodeClass::Pointwise,
+     .maxInputs      = 1,
+     .maxChannels    = 1,
+     // The position arrives as an input, already in metres, so the op needs no spacing.
+     .resolutionWord = kMaxNodeParams,
+     .hasReference   = true,
+     .specFieldCount = 0},
+    {.kind           = OpKind::Shape,
+     .name           = "Shape",
+     .shader         = "ops/shape.comp.spv",
+     .nodeClass      = NodeClass::Pointwise,
+     // Position and, for a chained segment, the accumulator so far.
+     .maxInputs      = 2,
+     .maxChannels    = 1,
+     .resolutionWord = kMaxNodeParams,
+     .hasReference   = true,
+     // Field 0 is the shape, field 1 is how many segments a segment node folds in.
+     .specFieldCount = 2},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -184,8 +205,17 @@ static_assert(RegistryIsOrdered(), "kOps entries must be in OpKind order");
 
 // --- CPU reference: pointwise ops ----------------------------------------------------------------
 
-[[nodiscard]] f32_t ApplyArith(ArithOp op, f32_t a, f32_t b) {
+/// Polynomial smooth minimum: `min(a, b)` with the corner rounded over a width of `k`.
+[[nodiscard]] f32_t SmoothMinimum(f32_t a, f32_t b, f32_t k) {
+    f32_t h = 0.5f + 0.5f * (b - a) / k;
+    h       = h < 0.0f ? 0.0f : (h > 1.0f ? 1.0f : h);
+    return (b + (a - b) * h) - k * h * (1.0f - h);
+}
+
+[[nodiscard]] f32_t ApplyArith(ArithOp op, f32_t a, f32_t b, f32_t smooth) {
     switch (op) {
+        case ArithOp::SmoothMinimum: return SmoothMinimum(a, b, smooth);
+        case ArithOp::SmoothMaximum: return -SmoothMinimum(-a, -b, smooth);
         case ArithOp::Add: return a + b;
         case ArithOp::Subtract: return a - b;
         case ArithOp::Multiply: return a * b;
@@ -205,6 +235,13 @@ static_assert(RegistryIsOrdered(), "kOps entries must be in OpKind order");
     return t * t * (3.0f - 2.0f * t);
 }
 
+/// 0 on and outside the edge of a shape, 1 at `width` metres inside it. `distance` is signed and
+/// negative inside.
+[[nodiscard]] f32_t Rise(f32_t distance, f32_t width) {
+    const f32_t u = -distance / width;
+    return u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+}
+
 [[nodiscard]] f32_t ApplyCurve(CurveOp op, f32_t value, f32_t a, f32_t b) {
     switch (op) {
         case CurveOp::Clamp: return value < a ? a : (value > b ? b : value);
@@ -215,6 +252,30 @@ static_assert(RegistryIsOrdered(), "kOps entries must be in OpKind order");
             return value < 0.0f ? -magnitude : (value > 0.0f ? magnitude : 0.0f);
         }
         case CurveOp::Smoothstep: return Smoothstep(a, b, value);
+        case CurveOp::ProfileLinear: return Rise(value, a);
+        case CurveOp::ProfileSmooth: {
+            const f32_t u = Rise(value, a);
+            return u * u * (3.0f - 2.0f * u);
+        }
+        case CurveOp::ProfileDome: {
+            const f32_t w = 1.0f - Rise(value, a);
+            const f32_t s = 1.0f - w * w;
+            return std::sqrt(s > 0.0f ? s : 0.0f);
+        }
+        case CurveOp::ProfileGaussian: {
+            const f32_t t = (value > 0.0f ? value : 0.0f) / a;
+            return std::exp(-0.5f * t * t);
+        }
+        case CurveOp::ProfilePlateau: return 1.0f - Smoothstep(-a, b, value);
+        case CurveOp::Terrace: {
+            const f32_t t     = value / a;
+            const f32_t whole = std::floor(t);
+            const f32_t f     = t - whole;
+            const f32_t s     = 1.0f - b;
+            const f32_t r     = s < 1e-4f ? (f >= 0.5f ? 1.0f : 0.0f)
+                                          : Smoothstep(0.5f - 0.5f * s, 0.5f + 0.5f * s, f);
+            return a * (whole + r);
+        }
     }
     return value;
 }
@@ -519,6 +580,105 @@ std::array<char, 64> ChannelNamesOf(OpKind kind) noexcept {
     return list;
 }
 
+namespace {
+
+/// What an accumulator holds before the first segment: no distance yet, an even number of crossings.
+constexpr f32_t kNoDistance = 1.0e30f;
+
+[[nodiscard]] f32_t SegmentDistance(f32_t px, f32_t pz, f32_t ax, f32_t az, f32_t bx, f32_t bz) {
+    const f32_t pax           = px - ax;
+    const f32_t paz           = pz - az;
+    const f32_t bax           = bx - ax;
+    const f32_t baz           = bz - az;
+    const f32_t lengthSquared = bax * bax + baz * baz;
+    f32_t       h = lengthSquared > 0.0f ? (pax * bax + paz * baz) / lengthSquared : 0.0f;
+    h             = h < 0.0f ? 0.0f : (h > 1.0f ? 1.0f : h);
+    const f32_t dx = pax - bax * h;
+    const f32_t dz = paz - baz * h;
+    return std::sqrt(dx * dx + dz * dz);
+}
+
+/// Whether a ray from `p` towards +x crosses the segment, with the half-open rule on z that makes a
+/// vertex shared by two segments count exactly once. The same expression is in `shape.comp.glsl`.
+[[nodiscard]] b8_t SegmentCrosses(f32_t px, f32_t pz, f32_t ax, f32_t az, f32_t bx, f32_t bz) {
+    if ((az > pz) == (bz > pz)) {
+        return false;
+    }
+    const f32_t xAt = ax + (pz - az) * (bx - ax) / (bz - az);
+    return px < xAt;
+}
+
+void EvalShape(const Graph::Node&                                                   node,
+               const std::array<std::array<f32_t, kMaxComponents>, kMaxNodeInputs>& inputs,
+               std::array<f32_t, kMaxComponents>&                                   out) {
+    const auto  kind     = static_cast<ShapeKind>(node.variant & kVariantFieldMask);
+    const u32_t segments = (node.variant >> kVariantFieldBits) & kVariantFieldMask;
+    const auto  value    = [&](usize_t word) { return UnpackFloat(node.params, word); };
+
+    if (kind == ShapeKind::ResolvePolygon || kind == ShapeKind::ResolvePolyline) {
+        const f32_t distance = inputs[0][0];
+        out[0] = kind == ShapeKind::ResolvePolygon && inputs[0][1] > 0.5f ? -distance : distance;
+        return;
+    }
+
+    const f32_t px = inputs[0][0];
+    const f32_t pz = inputs[0][1];
+    switch (kind) {
+        case ShapeKind::Circle:
+            out[0] = std::sqrt(px * px + pz * pz) - value(0);
+            return;
+        case ShapeKind::Ellipse: {
+            const f32_t rx = value(0);
+            const f32_t rz = value(1);
+            const f32_t k0 = std::sqrt((px / rx) * (px / rx) + (pz / rz) * (pz / rz));
+            const f32_t qx = px / (rx * rx);
+            const f32_t qz = pz / (rz * rz);
+            const f32_t k1 = std::sqrt(qx * qx + qz * qz);
+            out[0]         = k1 > 0.0f ? k0 * (k0 - 1.0f) / k1 : -std::min(rx, rz);
+            return;
+        }
+        case ShapeKind::Box: {
+            const f32_t rounding = value(2);
+            const f32_t qx       = std::fabs(px) - (value(0) - rounding);
+            const f32_t qz       = std::fabs(pz) - (value(1) - rounding);
+            const f32_t mx       = qx > 0.0f ? qx : 0.0f;
+            const f32_t mz       = qz > 0.0f ? qz : 0.0f;
+            const f32_t inside   = std::max(qx, qz);
+            out[0] = std::sqrt(mx * mx + mz * mz) + (inside < 0.0f ? inside : 0.0f) - rounding;
+            return;
+        }
+        case ShapeKind::BoxChebyshev:
+            out[0] = std::max(std::fabs(px) - value(0), std::fabs(pz) - value(1));
+            return;
+        case ShapeKind::SegmentsFirst:
+        case ShapeKind::SegmentsNext: {
+            f32_t distance = kNoDistance;
+            f32_t parity   = 0.0f;
+            if (kind == ShapeKind::SegmentsNext) {
+                distance = inputs[1][0];
+                parity   = inputs[1][1];
+            }
+            for (u32_t s = 0; s < segments; ++s) {
+                const usize_t at = s * 4;
+                const f32_t   d =
+                    SegmentDistance(px, pz, value(at), value(at + 1), value(at + 2), value(at + 3));
+                distance = d < distance ? d : distance;
+                if (SegmentCrosses(px, pz, value(at), value(at + 1), value(at + 2), value(at + 3))) {
+                    parity = 1.0f - parity;
+                }
+            }
+            out[0] = distance;
+            out[1] = parity;
+            return;
+        }
+        case ShapeKind::ResolvePolygon:
+        case ShapeKind::ResolvePolyline:
+            return;
+    }
+}
+
+} // namespace
+
 b8_t EvalPointwise(const Graph::Node& node,
                    const std::array<std::array<f32_t, kMaxComponents>, kMaxNodeInputs>& inputs,
                    const std::array<u8_t, kMaxNodeInputs>& inputComponents,
@@ -534,14 +694,29 @@ b8_t EvalPointwise(const Graph::Node& node,
             return true;
 
         case OpKind::Arith: {
-            const auto op = static_cast<ArithOp>(node.variant);
+            const auto  op     = static_cast<ArithOp>(node.variant & kVariantFieldMask);
+            const f32_t smooth = UnpackFloat(node.params, kArithSmoothWord);
             for (u8_t c = 0; c < outComponents; ++c) {
                 const f32_t a = inputs[0][inputComponents[0] == 1 ? 0 : c];
                 const f32_t b = inputs[1][inputComponents[1] == 1 ? 0 : c];
-                out[c]        = ApplyArith(op, a, b);
+                out[c]        = ApplyArith(op, a, b, smooth);
             }
             return true;
         }
+
+        case OpKind::Transform: {
+            const f32_t x = inputs[0][0];
+            const f32_t z = inputs[0][1];
+            out[0] = UnpackFloat(node.params, 0) * x + UnpackFloat(node.params, 1) * z
+                     + UnpackFloat(node.params, 4);
+            out[1] = UnpackFloat(node.params, 2) * x + UnpackFloat(node.params, 3) * z
+                     + UnpackFloat(node.params, 5);
+            return true;
+        }
+
+        case OpKind::Shape:
+            EvalShape(node, inputs, out);
+            return true;
 
         case OpKind::Curve: {
             const auto  op = static_cast<CurveOp>(node.variant);
