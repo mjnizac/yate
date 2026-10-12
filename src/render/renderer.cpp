@@ -718,10 +718,17 @@ void ViewerLayer::OnAttach() {
 
     // The camera is framed and the level chosen *before* the script runs, because the script is given
     // the level's sample spacing and `IdealLevel` needs only the camera, not the graph.
-    const f32_t ringRadius = static_cast<f32_t>(m_state->settings.sectionSize)
-                             * static_cast<f32_t>(m_state->settings.resolution)
-                             * static_cast<f32_t>(m_state->settings.ringRadius + 1);
-    m_state->camera.Frame(Vec3{0.0f, 0.0f, 0.0f}, ringRadius);
+    //
+    // `startRadius` is the radius of the ring *at level 0*, and it is used as a distance heuristic, not
+    // as a claim about the ring that ends up on screen: the level this picks is usually above 0, where
+    // the ring is several times larger than what the camera frames. That is by design. `IdealLevel`
+    // wants a tile about half the viewing distance across, so the ring is always bigger than the view,
+    // and there is no self-consistent "frame the whole ring" to converge to. Trying it anyway raises
+    // the level by two on every pass until it hits `maxLevel`.
+    const f32_t startRadius = static_cast<f32_t>(m_state->settings.sectionSize)
+                              * static_cast<f32_t>(m_state->settings.resolution)
+                              * static_cast<f32_t>(m_state->settings.ringRadius + 1);
+    m_state->camera.Frame(Vec3{0.0f, 0.0f, 0.0f}, startRadius);
     m_state->level = IdealLevel(m_state->camera.ViewDistance(0.0f), m_state->settings.sectionSize,
                                 m_state->settings.resolution, m_state->settings.maxLevel);
 

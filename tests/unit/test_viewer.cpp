@@ -25,11 +25,89 @@
 
 #include <array>
 #include <cstdio>
+#include <array>
+#include <cmath>
+#include <fstream>
+#include <iterator>
 #include <string>
+#include <vector>
+
+#include <spng.h>
 
 using namespace engine;
 
 namespace {
+
+// --- Looking at the frame -----------------------------------------------------------------------
+//
+// Everything above asserts the step *before* a pixel: tiles evaluated, tiles past the frustum, draws
+// recorded. Four defects reached a person's eyes with all of that green -- a depth clear against the
+// wrong convention that discarded every fragment, a one-interval gap along every tile border, a
+// hardcoded resolution -- because nothing here ever read a pixel. This reads some.
+
+struct Frame {
+    u32_t             width  = 0;
+    u32_t             height = 0;
+    std::vector<u8_t> rgb;
+};
+
+/// Decodes the 8-bit RGB PNG `CaptureNextFrame` writes.
+[[nodiscard]] Frame DecodeFrame(const std::string& path) {
+    Frame         frame;
+    std::ifstream stream(path, std::ios::binary);
+    const std::vector<char> file((std::istreambuf_iterator<char>(stream)),
+                                 std::istreambuf_iterator<char>());
+    if (file.empty()) {
+        return frame;
+    }
+    spng_ctx* context = spng_ctx_new(0);
+    spng_set_png_buffer(context, file.data(), file.size());
+    spng_ihdr header{};
+    usize_t   size = 0;
+    if (spng_get_ihdr(context, &header) == 0
+        && spng_decoded_image_size(context, SPNG_FMT_RGB8, &size) == 0) {
+        frame.rgb.resize(size);
+        if (spng_decode_image(context, frame.rgb.data(), size, SPNG_FMT_RGB8, 0) == 0) {
+            frame.width  = header.width;
+            frame.height = header.height;
+        } else {
+            frame.rgb.clear();
+        }
+    }
+    spng_ctx_free(context);
+    return frame;
+}
+
+/// The window's clear colour as it lands in an sRGB framebuffer: (0.05, 0.06, 0.09) linear.
+constexpr std::array<int, 3> kClearSrgb{63, 69, 85};
+
+/// Fraction of pixels that are not the clear colour, i.e. have terrain on them.
+[[nodiscard]] f64_t CoveredFraction(const Frame& frame) {
+    usize_t covered = 0;
+    const usize_t count = static_cast<usize_t>(frame.width) * frame.height;
+    for (usize_t i = 0; i < count; ++i) {
+        int worst = 0;
+        for (usize_t c = 0; c < 3; ++c) {
+            const int diff = std::abs(static_cast<int>(frame.rgb[i * 3 + c]) - kClearSrgb[c]);
+            worst          = diff > worst ? diff : worst;
+        }
+        covered += worst > 6 ? 1 : 0;
+    }
+    return count == 0 ? 0.0 : static_cast<f64_t>(covered) / static_cast<f64_t>(count);
+}
+
+/// Mean absolute difference per channel between two frames of the same size, in 8-bit codes.
+[[nodiscard]] f64_t MeanDifference(const Frame& a, const Frame& b) {
+    if (a.rgb.size() != b.rgb.size() || a.rgb.empty()) {
+        return 0.0;
+    }
+    f64_t total = 0.0;
+    for (usize_t i = 0; i < a.rgb.size(); ++i) {
+        total += std::abs(static_cast<int>(a.rgb[i]) - static_cast<int>(b.rgb[i]));
+    }
+    return total / static_cast<f64_t>(a.rgb.size());
+}
+
 
 /// Matches `SKIP_RETURN_CODE` in tests/CMakeLists.txt.
 constexpr int kSkip = 77;
@@ -199,6 +277,36 @@ int main() {
             std::printf("     %u of %u tile(s) drawn\n", viewer.TilesDrawn(), viewer.TileCount());
             CHECK(viewer.TilesDrawn() > 0);
             CHECK(viewer.TilesDrawn() <= viewer.TileCount());
+
+            test::Section("the frame has terrain on it, and it moves with the camera");
+            const std::string shotA = std::string(kDirectory) + "/frame_a.png";
+            const std::string shotB = std::string(kDirectory) + "/frame_b.png";
+
+            CHECK(window.CaptureNextFrame(shotA.c_str()));
+            window.StopAfter(window.FramesPresented() + 2);
+            (*application)->Run();
+            const Frame frameA = DecodeFrame(shotA);
+            CHECK(frameA.width > 0);
+            if (frameA.width > 0) {
+                const f64_t covered = CoveredFraction(frameA);
+                std::printf("     %.1f%% of the frame is not the clear colour\n", covered * 100.0);
+                // A viewer that draws every tile and rejects every fragment presents the clear colour
+                // everywhere except under the UI panels. Measured in this window, with the depth clear
+                // against the wrong convention: 41.9% (all of it panel). With terrain: 77.1%. The
+                // threshold sits between them, and the movement check below is the second witness.
+                CHECK(covered > 0.60);
+            }
+
+            // Move the camera sideways and up: the picture has to change, or it is not following it.
+            viewer.MoveCameraTo(900.0f, 1500.0f, 900.0f);
+            CHECK(window.CaptureNextFrame(shotB.c_str()));
+            window.StopAfter(window.FramesPresented() + 3);
+            (*application)->Run();
+            const Frame frameB = DecodeFrame(shotB);
+            CHECK_EQ(frameB.width, frameA.width);
+            const f64_t moved = MeanDifference(frameA, frameB);
+            std::printf("     mean per-channel change after moving the camera: %.2f codes\n", moved);
+            CHECK(moved > 1.0);
 
             test::Section("a reload picks up a changed script");
             CHECK(WriteFile(scriptPath, kHeightOnlyScript));

@@ -695,7 +695,7 @@ local function main(params)
         talus = math.tan(math.rad(35.0)), strength = 0.3,
     }
 
-    local low, high = sea - amplitude * 1.5, sea + amplitude * 2.0
+    local low, high = sea - amplitude * 1.1, sea + amplitude * 1.1
     local height    = Curves.Clamp{ input = settled, min = low, max = high }
 
     return {
