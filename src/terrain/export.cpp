@@ -1,4 +1,5 @@
 #include <engine/terrain/export.hpp>
+#include <engine/terrain/sha256.hpp>
 
 #include <engine/lua.hpp>
 
@@ -35,6 +36,11 @@ namespace engine::terrain {
 // --- Params -------------------------------------------------------------------------------------
 
 b8_t Params::Set(std::string_view key, std::string_view value) {
+    // A key cut off at 31 characters would silently match, or overwrite, a different parameter, and a
+    // value cut off at 63 would be a different value. Both are refused instead.
+    if (key.size() >= kMaxKey || value.size() >= kMaxValue) {
+        return false;
+    }
     for (usize_t i = 0; i < m_count; ++i) {
         if (std::string_view{m_entries[i].key.data()} == key) {
             detail::CopyBounded(m_entries[i].value, value);
@@ -135,6 +141,83 @@ struct Grid {
     u32_t sectionsY   = 1;
     u32_t sectionsZ   = 0;
 };
+
+/// SHA-256 over the compiled shaders the job ran, in `OpKind` order, each preceded by its name so
+/// that two shaders swapping contents cannot give the same digest.
+[[nodiscard]] Result<std::array<char, 65>> HashShadersUsed(const CompiledGraph& compiled) {
+    std::array<b8_t, static_cast<usize_t>(OpKind::Count)> used{};
+    for (const Dispatch& dispatch : compiled.dispatches) {
+        used[static_cast<usize_t>(dispatch.kind)] = true;
+    }
+
+    Sha256 hash;
+    for (usize_t kind = 0; kind < used.size(); ++kind) {
+        if (!used[kind]) {
+            continue;
+        }
+        const char* shader = OpInfoOf(static_cast<OpKind>(kind)).shader;
+        hash.Update(std::string_view{shader});
+        hash.Update("\n", 1);
+
+        std::array<char, 512> path{};
+        const std::string_view root = platform::ExecutableDirectory();
+        std::snprintf(path.data(), path.size(), "%.*sshaders/%s", static_cast<int>(root.size()),
+                      root.data(), shader);
+        std::FILE* file = std::fopen(path.data(), "rb");
+        if (file == nullptr) {
+            ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export,
+                        "could not open the shader {} to record its hash", path.data());
+        }
+        std::array<u8_t, 16384> chunk{};
+        usize_t                 read = 0;
+        while ((read = std::fread(chunk.data(), 1, chunk.size(), file)) > 0) {
+            hash.Update(chunk.data(), read);
+        }
+        std::fclose(file);
+    }
+    return hash.Final();
+}
+
+/// SHA-256 over `key=value` lines of the resolved parameters, sorted by key.
+[[nodiscard]] std::array<char, 65> HashParams(const Params& params) {
+    std::array<usize_t, Params::kMaxEntries> order{};
+    const usize_t count = params.Count();
+    for (usize_t i = 0; i < count; ++i) {
+        order[i] = i;
+    }
+    // Insertion sort: at most a few dozen entries, and it needs no allocation.
+    for (usize_t i = 1; i < count; ++i) {
+        for (usize_t j = i; j > 0 && params.KeyAt(order[j]) < params.KeyAt(order[j - 1]); --j) {
+            std::swap(order[j], order[j - 1]);
+        }
+    }
+    Sha256 hash;
+    for (usize_t i = 0; i < count; ++i) {
+        hash.Update(params.KeyAt(order[i]));
+        hash.Update("=", 1);
+        hash.Update(params.ValueAt(order[i]));
+        hash.Update("\n", 1);
+    }
+    return hash.Final();
+}
+
+/// The longest file name an export can produce under `directory`: `<directory>/<name>_<x>_<y>_<z>.raw`
+/// with the widest coordinates a `u32_t` grid has. Checked once up front so no `snprintf` below can
+/// cut a path short and open a different file than the one that was meant.
+[[nodiscard]] Status CheckPaths(const ExportJob& job) {
+    constexpr usize_t kTail = 1 + OutputRequest::kMaxName + 3 * 11 + 1 + 3;
+    if (job.outputDirectory.size() + kTail >= 256) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the output directory is {} characters; with a file name it must stay under 256, "
+                    "so at most {}",
+                    job.outputDirectory.size(), 255 - kTail);
+    }
+    if (job.script.size() >= 256) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the script path is {} characters; the limit is 255", job.script.size());
+    }
+    return {};
+}
 
 [[nodiscard]] Result<Grid> MakeGrid(const ExportJob& job, Domain domain) {
     if (!(job.resolution > 0.0) || !std::isfinite(job.resolution)) {
@@ -390,6 +473,9 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     }
     const Domain domain = *resolvedDomain;
 
+    if (Status paths = CheckPaths(job); !paths) {
+        return std::unexpected(paths.error());
+    }
     Result<Grid> grid = MakeGrid(job, domain);
     if (!grid) {
         return std::unexpected(grid.error());
@@ -727,7 +813,21 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     }
 
     detail::CopyBounded(metadata.scriptPath, job.script);
-    metadata.scriptHash         = HashFile(job.script);
+    {
+        // Each of these is a statement about what produced the output, so a failure to compute one is
+        // an error, not an empty field.
+        Result<std::array<char, 65>> scriptHash = HashFile(job.script);
+        if (!scriptHash) {
+            return std::unexpected(scriptHash.error());
+        }
+        metadata.scriptHash = *scriptHash;
+        Result<std::array<char, 65>> shaderHash = HashShadersUsed(*compiled);
+        if (!shaderHash) {
+            return std::unexpected(shaderHash.error());
+        }
+        metadata.shaderHash = *shaderHash;
+        metadata.paramsHash = HashParams(job.params);
+    }
     metadata.seed               = job.seed;
     metadata.minX               = job.minX;
     metadata.minZ               = job.minZ;

@@ -276,8 +276,15 @@ struct ExportMetadata {
     };
 
     std::array<char, kMaxPath> scriptPath{};
-    /// 64-bit FNV-1a of the script contents, as 16 hex characters.
-    std::array<char, 17> scriptHash{};
+    /// SHA-256 of the script file, as 64 hex digits.
+    std::array<char, 65> scriptHash{};
+    /// SHA-256 over the compiled shaders this job actually ran, in a fixed order. Without it "what
+    /// produced this file" is only answerable by assuming the shaders follow the engine commit, which
+    /// stops being true the day a shader is generated or a build is patched.
+    std::array<char, 65> shaderHash{};
+    /// SHA-256 over the resolved `--param` set, sorted by key so the order they were typed in is not
+    /// part of the identity.
+    std::array<char, 65> paramsHash{};
 
     u64_t seed       = 0;
     f64_t minX       = 0.0;
@@ -316,8 +323,9 @@ struct ExportMetadata {
 /// performance regression tests compare.
 [[nodiscard]] Status WriteMetadata(std::string_view path, const ExportMetadata& metadata);
 
-/// 64-bit FNV-1a of a file's contents, as 16 hex characters. Empty on a read failure.
-[[nodiscard]] std::array<char, 17> HashFile(std::string_view path);
+/// SHA-256 of a file's contents, as 64 hex digits. A file that cannot be read is an error: this used
+/// to return sixteen zeros, so an unreadable script produced a valid-looking hash and no message.
+[[nodiscard]] Result<std::array<char, 65>> HashFile(std::string_view path);
 
 } // namespace engine::terrain
 

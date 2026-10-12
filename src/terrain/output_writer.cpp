@@ -1,4 +1,5 @@
 #include <engine/terrain/output_writer.hpp>
+#include <engine/terrain/sha256.hpp>
 
 #include <engine/assert.hpp>
 #include <engine/engine.hpp>
@@ -229,7 +230,10 @@ Result<PngWriter> PngWriter::Create(std::string_view path, u32_t width, u32_t he
     }
 
     std::array<char, 512> nullTerminated{};
-    detail::CopyBounded(nullTerminated, path);
+    if (!detail::CopyChecked(nullTerminated, path)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the path {} is {} characters; the limit is 511", path, path.size());
+    }
 
     std::FILE* file = std::fopen(nullTerminated.data(), "wb");
     if (file == nullptr) {
@@ -421,7 +425,10 @@ Result<RawVolumeWriter> RawVolumeWriter::Create(std::string_view path, u32_t wid
     }
 
     std::array<char, 512> nullTerminated{};
-    detail::CopyBounded(nullTerminated, path);
+    if (!detail::CopyChecked(nullTerminated, path)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the path {} is {} characters; the limit is 511", path, path.size());
+    }
     std::FILE* file = std::fopen(nullTerminated.data(), "wb");
     if (file == nullptr) {
         ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not open {} for writing", path);
@@ -732,32 +739,37 @@ b8_t ExportMetadata::AddOutput(std::string_view name, std::string_view file, Map
     return true;
 }
 
-std::array<char, 17> HashFile(std::string_view path) {
-    std::array<char, 17>  text{};
+Result<std::array<char, 65>> HashFile(std::string_view path) {
     std::array<char, 512> nullTerminated{};
-    detail::CopyBounded(nullTerminated, path);
+    if (!detail::CopyChecked(nullTerminated, path)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the path of a file to hash is {} characters; the limit is 511", path.size());
+    }
 
     std::FILE* file = std::fopen(nullTerminated.data(), "rb");
     if (file == nullptr) {
-        return text;
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not open {} to hash it", path);
     }
-    u64_t                   hash = 0xCBF29CE484222325ull;
+    Sha256                  hash;
     std::array<u8_t, 65536> chunk{};
     usize_t                 read = 0;
     while ((read = std::fread(chunk.data(), 1, chunk.size(), file)) > 0) {
-        for (usize_t i = 0; i < read; ++i) {
-            hash ^= chunk[i];
-            hash *= 0x100000001B3ull;
-        }
+        hash.Update(chunk.data(), read);
     }
+    const b8_t failed = std::ferror(file) != 0;
     std::fclose(file);
-    std::snprintf(text.data(), text.size(), "%016llx", static_cast<unsigned long long>(hash));
-    return text;
+    if (failed) {
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "reading {} to hash it failed", path);
+    }
+    return hash.Final();
 }
 
 Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
     std::array<char, 512> nullTerminated{};
-    detail::CopyBounded(nullTerminated, path);
+    if (!detail::CopyChecked(nullTerminated, path)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the path {} is {} characters; the limit is 511", path, path.size());
+    }
     std::FILE* file = std::fopen(nullTerminated.data(), "wb");
     if (file == nullptr) {
         ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not open {} for writing", path);
@@ -770,6 +782,8 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
     json.Key("engine_commit", CommitHash());
     json.Key("script", std::string_view{metadata.scriptPath.data()});
     json.Key("script_hash", std::string_view{metadata.scriptHash.data()});
+    json.Key("shader_hash", std::string_view{metadata.shaderHash.data()});
+    json.Key("params_hash", std::string_view{metadata.paramsHash.data()});
     json.Key("seed", metadata.seed);
     json.Key("resolution", metadata.resolution);
     json.Key("section_size", metadata.sectionSize);

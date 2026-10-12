@@ -18,6 +18,7 @@
 #include <engine/memory/allocator.hpp>
 #include <engine/platform.hpp>
 #include <engine/terrain/output_writer.hpp>
+#include <engine/terrain/sha256.hpp>
 
 #include <spng.h>
 
@@ -185,6 +186,37 @@ void TestVectorThroughTheBandEncoder() {
     }
 }
 
+[[nodiscard]] std::string HashOf(std::string_view text) {
+    Sha256 hash;
+    hash.Update(text);
+    return std::string(hash.Final().data());
+}
+
+void TestSha256AndHashFile() {
+    test::Section("the recorded hash is SHA-256, and an unreadable file is an error");
+
+    // FIPS 180-4 test vectors, including the 56-byte message whose padding spills into a second block.
+    CHECK(HashOf("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(HashOf("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(HashOf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+          == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+
+    // Fed in two pieces it must equal the same bytes fed at once: a boundary bug shows up here.
+    Sha256 split;
+    split.Update(std::string_view{"abcdbcdecdefdefgefghfghighijhijkijkl"});
+    split.Update(std::string_view{"jklmklmnlmnomnopnopq"});
+    CHECK(std::string(split.Final().data())
+          == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+
+    // The failure that used to be silent: sixteen zeros and no message.
+    const Result<std::array<char, 65>> missing = HashFile("out/test_output_files/no_such_file.lua");
+    CHECK(!missing.has_value());
+    if (!missing.has_value()) {
+        CHECK(std::string_view{missing.error().Format().data()}.find("could not open")
+              != std::string_view::npos);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -196,6 +228,7 @@ int main() {
     TestGrayscaleBytes();
     TestClampingIsCountedAndSaturates();
     TestVectorThroughTheBandEncoder();
+    TestSha256AndHashFile();
 
     memory::Shutdown();
     log::Shutdown();
