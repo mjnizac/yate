@@ -172,6 +172,28 @@ struct Spread {
     return out;
 }
 
+/// `MeanDifferenceClear` restricted to the rows from `top` to `bottom`, as fractions of the height.
+[[nodiscard]] f64_t MeanDifferenceBand(const Frame& a, const Frame& b, f64_t top, f64_t bottom) {
+    if (a.rgb.size() != b.rgb.size() || a.rgb.empty()) {
+        return 0.0;
+    }
+    const u32_t first = static_cast<u32_t>(static_cast<f64_t>(a.width) * kClearOfPanelsX);
+    const u32_t from  = static_cast<u32_t>(static_cast<f64_t>(a.height) * top);
+    const u32_t to    = static_cast<u32_t>(static_cast<f64_t>(a.height) * bottom);
+    f64_t       total = 0.0;
+    usize_t     count = 0;
+    for (u32_t y = from; y < to; ++y) {
+        for (u32_t x = first; x < a.width; ++x) {
+            for (usize_t c = 0; c < 3; ++c) {
+                const usize_t i = (static_cast<usize_t>(y) * a.width + x) * 3 + c;
+                total += std::abs(static_cast<int>(a.rgb[i]) - static_cast<int>(b.rgb[i]));
+                ++count;
+            }
+        }
+    }
+    return count == 0 ? 0.0 : total / static_cast<f64_t>(count);
+}
+
 /// Matches `SKIP_RETURN_CODE` in tests/CMakeLists.txt.
 constexpr int kSkip = 77;
 
@@ -546,6 +568,44 @@ int main() {
                 // Tinted all over rather than a colour from nowhere: still terrain, still covering the frame.
                 CHECK(CoveredFraction(under) > 0.5);
                 CHECK(MeanDifferenceClear(dry, under) > 8.0);
+
+                test::Section("nearer terrain hides farther terrain");
+                // A crater: a floor 50 m under the water with a steep wall round it, seen from inside.
+                // Behind the wall, further away, is more floor, and that floor is under water, so it is
+                // tinted. Looking at the wall the frame must show the wall. A depth test that lets the
+                // farther fragment win paints the far floor over it, which is what "the mountains go
+                // transparent when you tilt the view" was.
+                const std::string crater =
+                    "local function main()\n"
+                    "    local c = Terrain.Coords{}\n"
+                    "    local r2 = c.x * c.x + c.z * c.z\n"
+                    "    local wall = Curves.Smoothstep{ input = r2, min = 19600, max = 22500 }\n"
+                    "               - Curves.Smoothstep{ input = r2, min = 25600, max = 32400 }\n"
+                    "    return { height = { value = wall * 350.0 - 50.0, range = { -100, 400 } } }\n"
+                    "end\nreturn main\n";
+                CHECK(WriteFile(scriptPath, crater));
+                viewer.RequestReload();
+                window.StopAfter(window.FramesPresented() + 2);
+                (*application)->Run();
+                viewer.WaitForReload();
+                CHECK(viewer.LastError().empty());
+                water.enabled = true;
+                water.level   = 0.0f;
+                viewer.SetWater(water);
+                viewer.SetFlyMode(true);
+                viewer.MoveCameraTo(0.0f, 120.0f, 0.0f);
+                window.StopAfter(window.FramesPresented() + 40);
+                (*application)->Run();
+
+                const Frame wallWet = shoot("depth_crater_wet");
+                water.enabled       = false;
+                viewer.SetWater(water);
+                const Frame wallDry = shoot("depth_crater_dry");
+                // The wall is above the water, so it is the same frame with the water on and off. Far
+                // floor painted over it differs between the two by the whole tint.
+                const f64_t differs = MeanDifferenceBand(wallWet, wallDry, 0.08, 0.45);
+                std::printf("     water on against off over the wall: %.2f codes\n", differs);
+                CHECK(differs < 2.0);
             }
         }
 

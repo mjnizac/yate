@@ -476,9 +476,13 @@ void GraphicsPipeline::BindRaw(VkCommandBuffer commands, VkExtent2D extent, cons
                               .y        = 0.0f,
                               .width    = static_cast<f32_t>(extent.width),
                               .height   = static_cast<f32_t>(extent.height),
-                              // Reversed depth, so the viewport range is reversed too.
-                              .minDepth = 1.0f,
-                              .maxDepth = 0.0f};
+                              // The full range, in the usual order. The projection is the one that
+                              // is reversed (near maps to 1, far to 0), and reversing the viewport on
+                              // top of it undoes it: the stored depth is then larger the *farther*
+                              // away a fragment is, `GREATER_OR_EQUAL` keeps the farther one, and
+                              // nearer terrain is painted over by what is behind it.
+                              .minDepth = 0.0f,
+                              .maxDepth = 1.0f};
     vkCmdSetViewport(commands, 0, 1, &viewport);
     const VkRect2D scissor{.offset = {0, 0}, .extent = extent};
     vkCmdSetScissor(commands, 0, 1, &scissor);

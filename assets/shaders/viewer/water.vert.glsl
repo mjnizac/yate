@@ -34,6 +34,7 @@ void main() {
     vWorldPosition = world;
 
     vec4 clip = pc.viewProjection * vec4(world, 1.0);
-    // The cleared depth. The viewport maps clip depth `z / w` to `1 - z / w`, so a stored 0 is `z = w`.
-    gl_Position = vec4(clip.xy, clip.w, clip.w);
+    // The cleared depth. The projection is reversed (near is 1, far is 0) and the viewport is the
+    // identity on depth, so the stored value is `z / w` and a stored 0 is `z = 0`.
+    gl_Position = vec4(clip.xy, 0.0, clip.w);
 }

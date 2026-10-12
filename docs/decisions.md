@@ -943,3 +943,28 @@ pieces runs at 1.7 GiB/s.** With that, 13.0 s against 23.3 s.
 
 The seek in the volume writer also truncated its offset through `long`, which is 32 bits on Windows, so
 a volume past 2 GiB wrote later rows over earlier ones. It is a 64-bit seek now.
+
+## Depth was reversed twice
+
+Found while looking at a report that "mountains and water go transparent when the view is tilted".
+
+`Perspective` is a reversed-Z projection: near maps to 1 and far to 0. The pipeline also compares with
+`GREATER_OR_EQUAL` against a buffer cleared to 0, which is the right pairing for that. But `Bind` set the
+viewport to `minDepth = 1, maxDepth = 0`, and the viewport transform is `z_f = z_ndc * (max - min) + min`,
+so the stored depth became `1 - z_ndc`: near 0, far 1. Reversed twice is not reversed, and
+`GREATER_OR_EQUAL` then kept the *farther* fragment. From above it is invisible, because a heightfield
+seen from above has one surface per pixel. Tilt towards the horizon and a ridge in front of lower
+terrain is painted over by that terrain, which is "transparent". The water made it obvious because the
+terrain behind a ridge is the part that is under water and tinted.
+
+It had been there since the viewer was written. The earlier depth test, which fails when the buffer is
+cleared against the wrong convention, passed throughout: it checks that something is drawn and that
+the frame moves, not that near beats far.
+
+The fix is the viewport in its usual order, `0` to `1`, leaving the reversal where it belongs, in the
+projection. The open-sea quad, which has to sit at the cleared depth, is emitted at `z = 0` for the same
+reason.
+
+`test_viewer` now has the case that was missing: a crater seen from inside, with the floor behind the
+wall under water and tinted. The wall is above the level, so the frame must be the same with the water
+on and off over the wall. Old viewport: 13.56 codes of difference. Fixed: 0.00.
