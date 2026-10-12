@@ -449,6 +449,58 @@ private:
                 "unknown noise kind '{}'; expected simplex, ridged or billow", name);
 }
 
+// --- Erosion and the sample spacing ---------------------------------------------------------------
+//
+// One iteration of either erosion moves material between neighbouring cells, so a count of iterations
+// is a distance in cells and, because the scheme is explicit, an amount of diffusion that grows with
+// the *cells* it is spread over. Run unchanged at 4 m and at 8 m the same script erodes by different
+// amounts: measured on a 2 km region, 8 m against 16 m differed by 1.5 m on average for thermal erosion
+// and 10.8 m for hydraulic erosion alone, and a viewer that changes level as the camera moves showed it
+// as terrain that re-eroded on every zoom.
+//
+// The counts a script writes are therefore *at a reference spacing*, and the engine runs the count that
+// gives the same amount of erosion at the spacing in use:
+//
+//   * iterations scale as (reference / spacing)^2. An explicit diffusion step is a fixed fraction of the
+//     height difference to the neighbours, and diffusing the same physical length takes four times the
+//     iterations at half the cell size. Thermal erosion: 4 m against 8 m went from 0.79 m to 0.05 m of
+//     difference.
+//   * hydraulic erosion's per-iteration rates (rain, evaporation, erosion, deposition) scale as
+//     (spacing / reference), so the totals over the run are those of the reference. Counting iterations
+//     alone made hydraulic erosion worse; with both, 4 m, 8 m and 16 m on one terrain came within
+//     3.8, 4.1 and 5.1 m of each other, against 6.7, 10.8 and 16.0 m.
+//
+// It is an approximation, and says so in the log. A finer spacing than the reference needs more
+// iterations than the halo can carry beyond `kScaledIterationCap`, and a coarser one runs out of
+// iterations at one.
+constexpr f64_t kErosionReferenceSpacing = 2.0;
+constexpr u32_t kScaledIterationCap      = 96;
+
+struct ErosionScale {
+    u32_t iterations = 1;
+    f64_t rate       = 1.0;
+};
+
+[[nodiscard]] ErosionScale ScaleErosion(u32_t written, f64_t spacing, const char* op) {
+    const f64_t k = spacing > 0.0 ? spacing / kErosionReferenceSpacing : 1.0;
+    if (k == 1.0) {
+        return {written, 1.0};
+    }
+    f64_t wanted = static_cast<f64_t>(written) / (k * k);
+    // Never cut a script's own count below what it wrote on the way up, and never ask the halo for more
+    // than the cap unless the script already did.
+    const f64_t cap = static_cast<f64_t>(std::max(written, kScaledIterationCap));
+    const b8_t  limited = wanted > cap;
+    wanted = std::min(wanted, cap);
+    const u32_t run = static_cast<u32_t>(std::max(1.0, std::floor(wanted + 0.5)));
+    LOG_INFO("{} at {:.4g} m: {} iteration(s) written for {:.4g} m run as {}{}", op, spacing, written,
+             kErosionReferenceSpacing, run,
+             limited ? ", the most the halo is allowed to carry; the result is less eroded than the "
+                       "reference"
+                     : "");
+    return {run, k};
+}
+
 /// The position field a shape is evaluated at: the one the script passed as `position`, or the
 /// world position in metres. Passing `Coords + noise` is how a shape is warped.
 [[nodiscard]] Value PositionOrCoords(Args& args, Graph& graph, SourceLocation location) {
@@ -508,7 +560,7 @@ namespace {
 ///
 /// The bindings capture the graph, which is what keeps `Handle` free of a back pointer and keeps the
 /// whole API in one place: adding an op is one lambda here plus one builder on `Graph`.
-void Bind(sol::state& state, Graph& graph) {
+void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     // --- Handles --------------------------------------------------------------------------------
     //
     // `.value` and `.gradient` select a channel; `.x`, `.y`, `.z` and `.w` extract a component.
@@ -915,7 +967,7 @@ void Bind(sol::state& state, Graph& graph) {
     // when a script asks for more than the interface can carry.
 
     sol::table erosion = state.create_named_table("Erosion");
-    erosion.set_function("Thermal", [&graph](sol::this_state lua, sol::table table) {
+    erosion.set_function("Thermal", [&graph, spacing](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Erosion.Thermal", location);
         const Value          input = args.Input("input");
@@ -925,11 +977,12 @@ void Bind(sol::state& state, Graph& graph) {
         params.talus      = args.Float("talus", 0.7);
         params.strength   = args.Float("strength", 0.25);
         args.Finish();
+        params.iterations = ScaleErosion(params.iterations, spacing, "Erosion.Thermal").iterations;
 
         return Handle{Unwrap(graph.AddThermalErosion(input, params, location))};
     });
 
-    erosion.set_function("Hydraulic", [&graph](sol::this_state lua, sol::table table) {
+    erosion.set_function("Hydraulic", [&graph, spacing](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Erosion.Hydraulic", location);
         const Value          input = args.Input("input");
@@ -943,6 +996,25 @@ void Bind(sol::state& state, Graph& graph) {
         params.deposition  = args.Float("deposition", 0.3);
         params.flowRate    = args.Float("flow_rate", 0.15);
         args.Finish();
+
+        // Validated as written, so a bad value is reported as the script wrote it and not as whatever
+        // scaling turned it into. The same bounds `Graph::AddHydraulicErosion` enforces.
+        const auto within = [&](const char* key, f32_t value, f32_t low, f32_t high) {
+            if (!(value >= low) || !(value <= high)) {
+                Fail(location, "Erosion.Hydraulic expects {} in [{}, {}], got {}", key,
+                     static_cast<f64_t>(low), static_cast<f64_t>(high), static_cast<f64_t>(value));
+            }
+        };
+        within("rain", params.rain, 0.0f, 1e6f);
+        within("evaporation", params.evaporation, 0.0f, 0.999f);
+        within("erosion_rate", params.erosionRate, 0.0f, 1.0f);
+        within("deposition", params.deposition, 0.0f, 1.0f);
+        const ErosionScale scale = ScaleErosion(params.iterations, spacing, "Erosion.Hydraulic");
+        params.iterations        = scale.iterations;
+        params.rain              = static_cast<f32_t>(params.rain * scale.rate);
+        params.evaporation       = static_cast<f32_t>(std::min(params.evaporation * scale.rate, 0.999));
+        params.erosionRate       = static_cast<f32_t>(std::min(params.erosionRate * scale.rate, 1.0));
+        params.deposition        = static_cast<f32_t>(std::min(params.deposition * scale.rate, 1.0));
 
         return Handle{Unwrap(graph.AddHydraulicErosion(input, params, location))};
     });
@@ -1387,7 +1459,7 @@ Status RunScript(Graph& graph, std::string_view path, const ScriptEnvironment& e
         lua_sethook(state.lua_state(), BudgetHook, LUA_MASKCOUNT, kHookStride);
     }
 
-    Bind(state, graph);
+    Bind(state, graph, environment.resolution);
 
     // Before the script, after the bindings it composes and the sandbox it runs inside.
     if (Status prelude = LoadPrelude(state); !prelude) {

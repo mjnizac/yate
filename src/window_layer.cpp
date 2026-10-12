@@ -58,8 +58,10 @@ namespace {
 /// everywhere, and carrying it would make the file larger for nothing.
 [[nodiscard]] b8_t WriteFramePng(const char* path, const u8_t* pixels, u32_t width, u32_t height,
                                  u32_t rowPitch, b8_t swapRedAndBlue) {
-    std::FILE* file = nullptr;
-    if (::fopen_s(&file, path, "wb") != 0 || file == nullptr) {
+    // `fopen`, not `fopen_s`: the latter is the MSVC library's alone, and `_CRT_SECURE_NO_WARNINGS` is
+    // already defined for exactly this kind of binary file I/O.
+    std::FILE* file = std::fopen(path, "wb");
+    if (file == nullptr) {
         LOG_ERROR("could not open {} for the screenshot", path);
         return false;
     }

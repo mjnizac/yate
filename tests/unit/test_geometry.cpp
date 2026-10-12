@@ -1085,10 +1085,12 @@ void TestTerrainIndicators() {
     const Terrain terrains[] = {
         // The land is a disc of about 1100 m radius (where the cone crosses 0 m) in a 4096 m window:
         // 23% of it, so 77% under the sea.
-        {"volcanic_island", -150.0, 760.0, 2.5, 0.77},
-        // 66 degrees at the 99th percentile at 16 m spacing: the ridged detail has a 240 m wavelength
-        // and four octaves, so the finest is about 30 m, two samples. Steep, and measured.
-        {"mountain_range", -300.0, 1785.0, 4.0, 0.0},
+        {"volcanic_island", -150.0, 760.0, 4.5, 0.77},
+        // 73 degrees at the 99th percentile at 16 m spacing, and 80 at the worst sample. The ridged detail
+        // has a 240 m wavelength and four octaves, so its finest is about 30 m, two samples; and erosion
+        // at 16 m is one iteration now (iterations are scaled to the spacing), so nothing relaxes it.
+        // Steep, and measured, and it is what a 16 m preview of that terrain honestly is.
+        {"mountain_range", -300.0, 1785.0, 6.0, 0.0},
         {"canyon", 0.0, 640.0, 12.0, 0.0},
         {"mesas", -120.0, 660.0, 12.0, 0.0},
         {"coast", -110.0, 255.0, 4.5, 0.4},

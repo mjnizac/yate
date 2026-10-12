@@ -96,8 +96,8 @@ its own section. That border is the halo, and it is the main thing that decides 
 | --- | --- |
 | `Filters.Blur` | `radius` |
 | `Terrain.Gradient` | 1 |
-| `Erosion.Thermal` | `iterations` |
-| `Erosion.Hydraulic` | `iterations` |
+| `Erosion.Thermal` | `iterations`, scaled to the spacing (see §9) |
+| `Erosion.Hydraulic` | `iterations`, scaled to the spacing |
 
 Radii **add** along a chain. A graph ending in `Hydraulic{iterations=24} → Thermal{iterations=12} →
 Gradient` has a halo of 37 at the noise, so a 512-sample section evaluates 586² samples instead of 512²,
@@ -539,10 +539,23 @@ Both are iterative, and both charge their iteration count as halo. Both take an 
 > made the same value a steeper slope at a finer spacing. Measured on a thermal-only graph at 8 m and
 > 16 m over the same world positions, the difference went from 8.0 m on average to 0.02 m.)
 >
-> What is **not** resolution-independent is the iteration count: one iteration moves material one *cell*,
-> so 24 iterations reach 192 m at 8 m and 384 m at 16 m. Hydraulic erosion on top of the above still
-> differs by about 5 m on average between 8 m and 16 m for the sample script. That is inherent to a
-> per-cell simulation; the way to compare two resolutions is to scale `iterations` with the spacing.
+> **Iterations are written for 2 m and scaled to the spacing in use.** One iteration moves material one
+> *cell*, so run unchanged a script eroded by different amounts at different spacings, and a viewer that
+> changes level as the camera moves showed terrain that re-eroded on every zoom. The engine now runs the
+> count that gives the same amount of erosion where the cells are a different size:
+>
+> * iterations are multiplied by `(2 m / spacing)^2`: 24 written is 96 at 1 m, 24 at 2 m, 6 at 4 m, 2 at 8 m
+>   and 1 from 16 m. A finer spacing than 2 m is capped at 96 (or at what the script wrote, if more),
+>   because the count is also the halo;
+> * for hydraulic erosion the per-iteration `rain`, `evaporation`, `erosion_rate` and `deposition` are
+>   multiplied by `spacing / 2 m` (capped at their limits), so the totals over the run match.
+>
+> The log says what ran: `Erosion.Hydraulic at 8 m: 24 iteration(s) written for 2 m run as 2`. Measured on
+> one 2 km terrain, the same world position at 4, 8 and 16 m differed by 0.06 to 0.24 m on average for
+> thermal erosion (0.8 to 2.2 m before) and by 3.4 to 6.4 m for hydraulic (6.7 to 16.0 m before). It is an
+> approximation: hydraulic erosion carves channels at the scale of the cell, so a coarser grid cannot show
+> the same ones. What it does mean is that a preview at 8 m shows little erosion, because at that spacing
+> there is little to show: zoom in and the level, and the erosion, follow.
 
 ### `Erosion.Thermal`
 
@@ -620,6 +633,7 @@ scheme stops being stable.
 
 The capacities are per unit slope now, so they are roughly four to eight times what they were when the
 term was a drop per cell and these were tuned at 4–8 m. A given value means the same at any spacing.
+Iteration counts are for 2 m and scaled (§9).
 
 #### The `flow` channel
 

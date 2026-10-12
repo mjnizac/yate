@@ -1101,3 +1101,52 @@ terrain, and nothing before this would have said so.
 to hold the whole image to compress it is the memory behaviour this pipeline exists to avoid. Filtering
 and quantising are still on the producer thread; making them parallel is the next lever and was not
 needed to take the encoder off the critical path at 4k.
+
+## Erosion scaled to the sample spacing
+
+The last open correctness item: a script eroded by different amounts at different spacings, because an
+iteration moves material one cell. Two things made it matter beyond a comparison table. The viewer
+changes spacing as the camera moves, so a terrain re-eroded on every zoom; and the amount of erosion at
+the default 8 m view was not the amount at a 1 m export.
+
+**Measured before building anything**, on one 2 km terrain (fBm, 6 octaves, 260 m), the same world
+position exported at 4, 8 and 16 m, mean absolute difference on the 16 m lattice:
+
+| iterations scaled by | thermal 4 v 8 / 8 v 16 | hydraulic 4 v 8 / 8 v 16 |
+| --- | --- | --- |
+| nothing (what was) | 0.79 / 1.55 m | 3.07 / 2.35 m |
+| (ref / s)^1 | 0.66 / 0.92 | 4.66 / 6.48 (worse) |
+| (ref / s)^2 | **0.05 / 0.22** | 10.6 / 8.5 (much worse) |
+
+Thermal erosion is explicit diffusion, and diffusing the same physical length takes four times the
+iterations at half the cell: the exponent two is the continuum limit, and the data sit on it. Hydraulic
+erosion did not follow, because it also accumulates rain and evaporation *per iteration*, so fewer
+iterations meant less water. Scaling those per-iteration rates by the spacing as well (so the totals
+over the run are unchanged) fixed it:
+
+| hydraulic, N = 48 at 4 m | 4 v 8 | 8 v 16 | 4 v 16 |
+| --- | --- | --- | --- |
+| nothing | 6.7 | 10.8 | 16.0 |
+| iterations / k^2, rates x k | **3.8** | **4.1** | **5.1** |
+| iterations / k, rates unscaled | 4.7 | 6.5 | 4.5 |
+
+Other configurations (24 and 96 iterations, flow rate 0.1 and 0.2) improved 1.5 to 5 times in seven of
+eight; one, 96 iterations at flow rate 0.2, got worse at 4 v 8 (12.1 against 7.9). It is an
+approximation and the documentation says so.
+
+**What was built.** In the bindings, in C++ because the iteration count is also the halo and the log line
+belongs to the engine: counts a script writes are for a 2 m reference. Iterations become
+`written / (spacing / 2)^2`, at least 1; below 2 m they are capped at 96, or at what the script wrote if
+that was more, because the count is the halo and a chain of erosions adds. Hydraulic rates are
+multiplied by `spacing / 2` and capped at their limits. The effective count is in the log.
+
+**Why 2 m.** It is the viewer's finest level and the finest spacing most exports use, so a script means
+what it says there and the cap is rarely met. A coarser reference makes every export finer than it hit the
+cap and look less eroded than the preview. A finer one makes the preview show almost nothing.
+
+**What it cost.** The default 8 m view now shows little erosion, where it showed 24 iterations at 8 m
+before (which was more than a 1 m export showed, so it was a flattering preview, not a faithful one). At
+1 m a script runs four times its iterations: `basic.lua` is 96 and 48 instead of 24 and 12, and its GPU
+time 450 ms instead of ~170 on a 2 km export. Three dataset goldens (the ones that erode at 1 m) were
+regenerated. Coarse levels are spikier because there is nothing left to relax the finest noise octaves
+(todo).

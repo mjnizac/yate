@@ -81,8 +81,8 @@ Measured in the session that closed milestone 11, on the GTX 1070, unless the ro
 | 8192 square, same | 5.4 to 14 s now, 19 to 23 s before; the spread is the HDD taking writes, not the encoder (deflate is 3.4 s of wall time at 4 threads) |
 | 16384 square, `basic.lua` | outputs byte-identical across section sizes 512 and 1024; 70 s at 512, 123 s at 1024 on a drive already busy |
 | Viewer | 0.7 to 0.9 ms a frame at 1280x720, 37 to 49 tiles on screen |
-| Resolution independence, thermal only | 8 m against 16 m differs by 0.02 m on average |
-| Resolution independence, `basic.lua` | 8 m against 16 m differs by 5.45 m on average and 44.3 m at worst |
+| Resolution independence, thermal erosion | 4, 8 and 16 m differ by 0.06 to 0.24 m on average (0.8 to 2.2 m before iterations were scaled) |
+| Resolution independence, hydraulic erosion | 3.4 to 6.4 m on average (6.7 to 16.0 m before); channels at the scale of the cell cannot match across spacings |
 | Peak VRAM per section | 1.8 MiB at section 512 for `basic.lua` (earlier measurement) |
 | Noise far from the origin | worst derivative error 4.9% (`R2`) and 19.8% (`R3`) at 5·10⁵ m (earlier measurement) |
 
@@ -93,9 +93,9 @@ hidden behind the wait for deflate.
 
 Open, with the measurements, in `docs/todo.md`:
 
-* **Erosion iterations are per cell**, so the amount of erosion still depends on the sample spacing
-  (the numbers above). The slope units are fixed; the iteration count and so the propagation distance are
-  not.
+* **Hydraulic erosion is only approximately resolution independent.** Iterations and rates are scaled to
+  the spacing (reference 2 m) and the amount of erosion agrees within a few metres, but the channels it
+  carves are at the scale of the cell and differ. Finer than 2 m the count is capped at 96.
 * **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
   it. Adding diagonal neighbours was tried and measured worse.
 * **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not

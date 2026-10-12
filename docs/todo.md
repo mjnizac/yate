@@ -5,15 +5,11 @@ full history is in the git log.
 
 ## Correctness
 
-- [ ] **Erosion iterations are per cell, so the *amount* of erosion still depends on the sample
-      spacing.** The slope units are fixed (`talus` and the hydraulic capacity are rise over run, and a
-      thermal-only graph agrees between 8 m and 16 m to 0.02 m on average). What is left is that one
-      iteration moves material one *cell*: 24 iterations reach 192 m at 8 m and 384 m at 16 m. On
-      `basic.lua`, with hydraulic erosion on top, 8 m against 16 m over the same world positions still
-      differs by 5.45 m on average and 44.3 m at worst (it was 8.0 and 94.7 before the units were
-      fixed). The standard's answer is to take the propagation distance in metres and derive the
-      iteration count from the spacing; it changes what `iterations` means, so it is a decision, not a
-      patch.
+- [ ] **Coarse levels are spiky.** With iterations scaled to the spacing, a 16 m preview runs one
+      erosion iteration and shows the noise's finest octaves, which are about two samples wide, as
+      point-sampled spikes (99th percentile slope 1.6 against 1.2 before on the volcano). The honest fix
+      is to limit a noise's octaves to what the spacing resolves, which would make noise values differ
+      between spacings where they are bit-identical today; not done.
 
 - [ ] **Hydraulic erosion leaves a high-frequency ripple.** A `Filters.Blur{ radius = 1 }` after the op
       clears it, and every sample terrain does that. Adding the four diagonal neighbours (weight

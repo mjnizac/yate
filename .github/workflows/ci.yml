@@ -62,6 +62,17 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      # The test executables link the Vulkan loader even when they never open a device, and a runner
+      # restored from the SDK cache has the SDK but not the runtime installed in System32: every suite
+      # then failed with 0xc0000135 (a DLL not found) before running a line. The loader is in the SDK,
+      # so it goes beside the executables, which the Windows loader searches first.
+      - name: Put the Vulkan loader beside the test executables
+        shell: pwsh
+        run: |
+          $dll = Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"
+          if (-not (Test-Path $dll)) { throw "no vulkan-1.dll in the SDK at $dll" }
+          Get-ChildItem build -Recurse -Filter "*.exe" | ForEach-Object { Copy-Item $dll $_.DirectoryName -Force }
+
       # On failure the end of the output is also published as an annotation. A job's log needs admin
       # rights to download, an annotation does not, and the first thing anyone needs is which suite broke.
       - name: Tests that need no device
@@ -89,9 +100,12 @@ jobs:
           - { compiler: gcc, cc: gcc-14, cxx: g++-14, sanitizer: none, flags: "" }
           - { compiler: gcc, cc: gcc-14, cxx: g++-14, sanitizer: asan-ubsan,
               flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
-          - { compiler: clang, cc: clang-18, cxx: clang++-18, sanitizer: none, flags: "" }
+          # clang with libstdc++ 13 does not offer std::expected (libstdc++ asks for a __cpp_concepts
+          # clang 18 does not report), so clang builds against libc++, which does.
+          - { compiler: clang, cc: clang-18, cxx: clang++-18, sanitizer: none,
+              flags: "-stdlib=libc++" }
           - { compiler: clang, cc: clang-18, cxx: clang++-18, sanitizer: asan-ubsan,
-              flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
+              flags: "-stdlib=libc++ -fsanitize=address,undefined -fno-omit-frame-pointer" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -100,7 +114,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake gcc-14 g++-14 clang-18 \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev libvulkan-dev glslang-tools spirv-tools
+            libwayland-dev libxkbcommon-dev libvulkan-dev glslang-tools spirv-tools \
+            libgl-dev libc++-18-dev libc++abi-18-dev
 
       - uses: jakoch/install-vulkan-sdk-action@d17de7e2f5e50efb5d2123efed18497d3c58c533 # v1
         with:
@@ -124,7 +139,7 @@ jobs:
           cmake --build build -- -k 0 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            msg=$(grep -E "error:|Error |FAILED:|undefined reference|fatal" build.log | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
+            msg=$(grep -E "error:|undefined reference|fatal error" build.log | sort -u | head -60 | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=build failed::${msg}"
           fi
           exit $code
