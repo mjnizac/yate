@@ -36,7 +36,11 @@ void main() {
         return;
     }
 
-    uint index = SampleIndex(local);
+    uint index   = SampleIndex(local);
+    // Read through `InputIndex`, not `index`: an input is allocated with *its* halo, which is the widest
+    // any of its consumers needs, so it can be wider than this node's own and then its rows are
+    // longer. `index` is the position in this node's own padded layout and is only right for outputs.
+    uint inIndex = InputIndex(0u, local);
     uint count = max(ParamUint(2), 1u);
     float a = ParamFloat(0);
     float b = ParamFloat(1);
@@ -45,6 +49,6 @@ void main() {
     FloatBuffer target = FloatBuffer(pc.outputs[0]);
 
     for (uint c = 0u; c < count; ++c) {
-        target.values[index * count + c] = Apply(source.values[index * count + c], a, b);
+        target.values[index * count + c] = Apply(source.values[inIndex * count + c], a, b);
     }
 }

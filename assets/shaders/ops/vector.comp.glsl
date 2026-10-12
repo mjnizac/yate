@@ -27,18 +27,22 @@ void main() {
     }
 
     uint index = SampleIndex(local);
+    // Read through `InputIndex`, not `index`: an input is allocated with *its* halo, which is the widest
+    // any of its consumers needs, so it can be wider than this node's own and then its rows are
+    // longer. `index` is the position in this node's own padded layout and is only right for outputs.
 
     if (kVectorOp == VECTOR_EXTRACT) {
         uint component = ParamUint(0);
         uint count = max(ParamUint(1), 1u);
         FloatBuffer source = FloatBuffer(pc.inputs[0]);
-        StoreScalar(0u, index, source.values[index * count + component]);
+        StoreScalar(0u, index, source.values[InputIndex(0u, local) * count + component]);
         return;
     }
 
     uint count = clamp(ParamUint(0), 2u, 4u);
     FloatBuffer target = FloatBuffer(pc.outputs[0]);
     for (uint c = 0u; c < count; ++c) {
-        target.values[index * count + c] = FloatBuffer(pc.inputs[c]).values[index];
+        target.values[index * count + c] =
+            FloatBuffer(pc.inputs[c]).values[InputIndex(c, local)];
     }
 }

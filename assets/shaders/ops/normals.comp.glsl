@@ -24,13 +24,16 @@ void main() {
     }
 
     uint index = SampleIndex(local);
+    // Read through `InputIndex`, not `index`: an input is allocated with *its* halo, which is the widest
+    // any of its consumers needs, so it can be wider than this node's own and then its rows are
+    // longer. `index` is the position in this node's own padded layout and is only right for outputs.
 
     float verticalScale = ParamFloat(0);
     if (verticalScale == 0.0) {
         verticalScale = 1.0;
     }
 
-    vec2 slope  = LoadVec2(0u, index) * verticalScale;
+    vec2 slope  = LoadVec2(0u, InputIndex(0u, local)) * verticalScale;
     vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
     StoreVec3(0u, index, normal);

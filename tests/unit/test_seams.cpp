@@ -417,6 +417,118 @@ void CheckChainedOpSeams(Context& context, KernelLibrary& kernels) {
     }
 }
 
+/// A value read by a pointwise op and also by something that needs a wider border.
+///
+/// A value is allocated with the widest halo any consumer needs, so it can have a larger halo than the
+/// pointwise op reading it, and then its rows are longer than that op's own. The pointwise kernels
+/// indexed their inputs with their own layout, which is only right when the halos agree: with a blur
+/// hanging off the same noise, 99.99% of the samples of `noise * 2 + 1` came out wrong, and nothing
+/// else in the suite had a pointwise consumer with a narrower halo than its producer. The check is that
+/// adding a branch elsewhere in the graph does not change what an unrelated output computes.
+void CheckSharedInputHalo(Context& context, KernelLibrary& kernels) {
+    struct Variant {
+        const char* label;
+        enum { Arith, Curve, Blend, Extract, SlopeMask, Normals, Combine } consumer;
+    };
+    const Variant variants[] = {
+        {"arith over a value that also feeds a blur", Variant::Arith},
+        {"curve over a value that also feeds a blur", Variant::Curve},
+        {"blend over values that also feed a blur", Variant::Blend},
+        {"component extract over a value that also feeds a blur", Variant::Extract},
+        {"slope mask over a gradient that also feeds a blur", Variant::SlopeMask},
+        {"normals over a gradient that also feeds a blur", Variant::Normals},
+        {"vector combine over a value that also feeds a blur", Variant::Combine},
+    };
+    for (const Variant& variant : variants) {
+        const auto build = [&](Graph& graph, b8_t withBlur) -> Status {
+            Graph::NoiseParams noise;
+            noise.frequency = 0.02f;
+            noise.octaves   = 3;
+            noise.amplitude = 1.0f;
+            Result<Value> value = graph.AddNoise(noise, At(30));
+            if (!value) {
+                return std::unexpected(value.error());
+            }
+            Result<Value> pointwise = value;
+            switch (variant.consumer) {
+                case Variant::Arith: {
+                    Result<Value> doubled = graph.AddArith(
+                        ArithOp::Multiply, *value, *value, At(31));
+                    pointwise = doubled ? graph.AddArith(ArithOp::Add, *doubled, *value, At(32))
+                                        : doubled;
+                    break;
+                }
+                case Variant::Curve:
+                    pointwise = graph.AddCurve(CurveOp::Smoothstep, *value, -0.5f, 0.5f, At(31));
+                    break;
+                case Variant::Blend: {
+                    Result<Value> other = graph.AddArith(ArithOp::Multiply, *value, *value, At(31));
+                    Result<Value> mask  = graph.AddCurve(CurveOp::Smoothstep, *value, -0.3f, 0.3f,
+                                                         At(32));
+                    pointwise = other && mask ? graph.AddBlend(*value, *other, *mask, At(33))
+                                              : other;
+                    break;
+                }
+                case Variant::SlopeMask:
+                case Variant::Normals:
+                case Variant::Combine:
+                    break; // Built below, from the gradient channel.
+                case Variant::Extract: {
+                    // The gradient channel is an `R2 -> R2` value, so extracting from it is the
+                    // multi-component read.
+                    Value gradient = *value;
+                    gradient.channel = 1;
+                    gradient.mapping = Mapping{Domain::R2, 2};
+                    pointwise = graph.AddExtract(gradient, 1, At(31));
+                    break;
+                }
+            }
+            if (variant.consumer == Variant::SlopeMask || variant.consumer == Variant::Normals
+                || variant.consumer == Variant::Combine) {
+                Value gradient   = *value;
+                gradient.channel = 1;
+                gradient.mapping = Mapping{Domain::R2, 2};
+                if (variant.consumer == Variant::SlopeMask) {
+                    pointwise = graph.AddSlopeMask(gradient, 0.0f, 1.0f, At(31));
+                } else if (variant.consumer == Variant::Normals) {
+                    pointwise = graph.AddNormals(gradient, 1.0f, At(31));
+                } else {
+                    const std::array<Value, 2> parts{*value, *value};
+                    pointwise = graph.AddCombine(parts.data(), 2, At(31));
+                }
+            }
+            if (!pointwise) {
+                return std::unexpected(pointwise.error());
+            }
+            if (Status requested = graph.RequestOutput("a", *pointwise, -4.0f, 4.0f); !requested) {
+                return requested;
+            }
+            if (withBlur) {
+                Result<Value> blurred = graph.AddBlur(*value, 3, At(34));
+                if (!blurred) {
+                    return std::unexpected(blurred.error());
+                }
+                return graph.RequestOutput("b", *blurred, -1.0f, 1.0f);
+            }
+            return {};
+        };
+
+        Graph alone;
+        REQUIRE_OK_VOID(build(alone, false));
+        Graph shared;
+        REQUIRE_OK_VOID(build(shared, true));
+
+        const SectionExtent extent{.x = 64, .y = 1, .z = 64};
+        Result<Field>       before =
+            Evaluate(context, kernels, alone, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
+        REQUIRE_OK_VOID(before);
+        Result<Field> after =
+            Evaluate(context, kernels, shared, extent, 128, 1, 128, 1.0f, kOrigin, kSeed);
+        REQUIRE_OK_VOID(after);
+        Compare(variant.label, *before, *after, 1);
+    }
+}
+
 void CheckDeterminism(Context& context, KernelLibrary& kernels) {
     Graph blended;
     REQUIRE_OK_VOID(BuildBlendGraph(blended));
@@ -464,6 +576,9 @@ int main() {
         CheckThermalVolumeSeams(context, kernels);
         CheckHydraulicSeams(context, kernels);
         CheckChainedOpSeams(context, kernels);
+
+        test::Section("a pointwise op does not depend on what else reads its input");
+        CheckSharedInputHalo(context, kernels);
 
         test::Section("the same evaluation twice gives the same bytes");
         CheckDeterminism(context, kernels);

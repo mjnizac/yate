@@ -968,3 +968,29 @@ reason.
 `test_viewer` now has the case that was missing: a crater seen from inside, with the floor behind the
 wall under water and tinted. The wall is above the level, so the frame must be the same with the water
 on and off over the wall. Old viewport: 13.56 codes of difference. Fixed: 0.00.
+
+## Pointwise kernels read their inputs through the input's halo
+
+Found while auditing the op kernels before building shapes on them, by composing a pointwise op and a
+`Blur` over the same value and comparing the pointwise output with and without the blur.
+
+A value is allocated with the widest halo any consumer needs. So a value that feeds both `noise * 2 + 1`
+and a blur is wider than the arithmetic that reads it, and its rows are longer. `arith`, `curve`,
+`blend`, `slope_mask`, `normals` and `vector` indexed their inputs with their own layout, which is only
+right when the two halos are equal. Comparing the output with and without the blur branch: 99.99% of the
+samples differed. The compiler's comment said only a neighbourhood op ever sees a different halo, and
+the kernel library already had `InputIndex` for exactly this; nothing used it outside the neighbourhood
+ops.
+
+Every sample terrain that masks on a gradient while eroding the same noise was affected, and so was one
+golden: `eroded_r2/slope.png` was recorded with the corrupted values, and its own header said it
+covered "an iterative op and a pointwise op reading the same producer with different halos". The
+corrected output is bit-identical to the same graph with no erosion branch, which has no halo and is
+right by construction; the old golden differed from it in 96.6% of samples. It was regenerated.
+
+The six kernels now read inputs through `InputIndex(slot, local)` and write through `SampleIndex`.
+`test_seams` has the case that was missing, one per kernel, and fails on all seven variants with the old
+kernels.
+
+The sample terrains and the plates in `docs/images/lua` were rendered before this and some of them
+used such a mask. They are not regenerated here.

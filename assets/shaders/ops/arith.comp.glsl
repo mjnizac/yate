@@ -54,6 +54,11 @@ void main() {
     }
 
     uint index = SampleIndex(local);
+    // Read through `InputIndex`, not `index`: an input is allocated with *its* halo, which is the widest
+    // any of its consumers needs, so it can be wider than this node's own and then its rows are
+    // longer. `index` is the position in this node's own padded layout and is only right for outputs.
+    uint sourceIndex = InputIndex(kImmediateOperand == ARITH_IMMEDIATE_LEFT ? 1u : 0u, local);
+    uint otherIndex  = InputIndex(1u, local);
     uint countA = max(ParamUint(0), 1u);
     uint countB = max(ParamUint(1), 1u);
     uint countOut = max(ParamUint(2), 1u);
@@ -72,13 +77,13 @@ void main() {
         if (kImmediateOperand == ARITH_IMMEDIATE_LEFT) {
             left  = immediate;
             // A one-component operand is read at its only index, which is the broadcast.
-            right = source.values[index * countB + (countB == 1u ? 0u : c)];
+            right = source.values[sourceIndex * countB + (countB == 1u ? 0u : c)];
         } else if (kImmediateOperand == ARITH_IMMEDIATE_RIGHT) {
-            left  = source.values[index * countA + (countA == 1u ? 0u : c)];
+            left  = source.values[sourceIndex * countA + (countA == 1u ? 0u : c)];
             right = immediate;
         } else {
-            left  = source.values[index * countA + (countA == 1u ? 0u : c)];
-            right = other.values[index * countB + (countB == 1u ? 0u : c)];
+            left  = source.values[sourceIndex * countA + (countA == 1u ? 0u : c)];
+            right = other.values[otherIndex * countB + (countB == 1u ? 0u : c)];
         }
         target.values[index * countOut + c] = Apply(left, right);
     }

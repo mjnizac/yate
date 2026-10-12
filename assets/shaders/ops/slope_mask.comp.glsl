@@ -20,7 +20,10 @@ void main() {
     }
 
     uint index = SampleIndex(local);
-    vec2 gradient = LoadVec2(0u, index);
+    // Read through `InputIndex`, not `index`: an input is allocated with *its* halo, which is the widest
+    // any of its consumers needs, so it can be wider than this node's own and then its rows are
+    // longer. `index` is the position in this node's own padded layout and is only right for outputs.
+    vec2 gradient = LoadVec2(0u, InputIndex(0u, local));
     float slope = length(gradient);
 
     StoreScalar(0u, index, smoothstep(ParamFloat(0), ParamFloat(1), slope));
