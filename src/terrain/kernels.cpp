@@ -47,13 +47,15 @@ constexpr OpInfo kOps[] = {
      .name           = "Noise",
      .shader         = "ops/fbm.comp.spv",
      .nodeClass      = NodeClass::Pointwise,
-     .maxInputs      = 0,
+     // One optional input: the position field the noise is sampled at, in metres.
+     .maxInputs      = 1,
      .maxChannels    = 2,
      .channelNames   = {"value", "gradient"},
      .resolutionWord = 6,
      .hasReference   = false, // Has its own reference, `EvalNoise`, not the pointwise one.
-     // Two axes: the base function and whether the octave sum is normalized.
-     .specFieldCount = 2},
+     // Three axes: the base function, whether the octave sum is normalized, and whether the noise
+     // reads a position field instead of the sample's own position.
+     .specFieldCount = 3},
     {.kind           = OpKind::Normals,
      .name           = "Normals",
      .shader         = "ops/normals.comp.spv",

@@ -1021,6 +1021,130 @@ return main
                                     whole.values.size() * sizeof(float)) == 0);
 }
 
+/// `position` on a noise: the unwarped path is unchanged, the units are metres applied once, and a
+/// position field of the wrong dimension is refused with the line.
+void TestWarpedNoise() {
+    test::Section("noise sampled at a position field");
+
+    const char* const kinds[] = {"fBm", "Ridged", "Billow"};
+    const auto noise = [](const char* kind, const std::string& extra) {
+        return std::string("    local result = Noises.") + kind
+               + "{ frequency = 0.01, octaves = 4, amplitude = 50, seed = 3" + extra + " }.value";
+    };
+
+    // A shift by whole samples, so the shifted grid lands on the same lattice and the comparison is
+    // exact up to the rounding of one addition.
+    constexpr double kShiftX = 136.0;
+    constexpr double kShiftZ = -96.0;
+    Grid             shifted;
+    shifted.originX += kShiftX;
+    shifted.originZ += kShiftZ;
+
+    for (const char* kind : kinds) {
+        char label[64];
+
+        const Field plain = Export((std::string("wn_plain_") + kind).c_str(), noise(kind, ""));
+        const Field world = Export((std::string("wn_coords_") + kind).c_str(),
+                                   "    local c = Terrain.Coords{}\n"
+                                       + noise(kind, ", position = Vec.Combine{ c.x, c.z }"));
+        ++test::g_checks;
+        const bool same = plain.Ok() && world.Ok()
+                          && std::memcmp(plain.values.data(), world.values.data(),
+                                         plain.values.size() * sizeof(float)) == 0;
+        std::snprintf(label, sizeof(label), "%s at its own position is the plain noise", kind);
+        std::printf("     %-34s %s\n", label, same ? "byte-identical" : "DIFFER");
+        CHECK(same);
+
+        // Moved by a constant: the same field read somewhere else.
+        const Field moved = Export(
+            (std::string("wn_moved_") + kind).c_str(),
+            "    local c = Terrain.Coords{}\n"
+                + noise(kind, ", position = Vec.Combine{ c.x + 136.0, c.z - 96.0 }"));
+        const Field there = Export((std::string("wn_there_") + kind).c_str(), noise(kind, ""), shifted);
+        std::snprintf(label, sizeof(label), "%s moved by a constant", kind);
+        Compare(label, moved,
+                [&](double x, double z) { return At(there, x + kShiftX, z + kShiftZ); }, 1e-3);
+
+        // Scale is applied once: sampling at 2p with frequency f is sampling at p with frequency 2f.
+        const Field doubled = Export(
+            (std::string("wn_double_") + kind).c_str(),
+            "    local c = Terrain.Coords{}\n"
+                + noise(kind, ", position = Vec.Combine{ c.x * 2.0, c.z * 2.0 }"));
+        const Field fast = Export(
+            (std::string("wn_fast_") + kind).c_str(),
+            std::string("    local result = Noises.") + kind
+                + "{ frequency = 0.02, octaves = 4, amplitude = 50, seed = 3 }.value");
+        std::snprintf(label, sizeof(label), "%s with the position doubled", kind);
+        Compare(label, doubled, [&](double x, double z) { return At(fast, x, z); }, 5e-2);
+    }
+
+    // The real API: Shapes.Warp straight into each noise, and the result agrees across section sizes.
+    const std::string script = std::string(kDirectory) + "/warped_noise.lua";
+    {
+        std::ofstream out(script, std::ios::binary);
+        out << R"(local function main(params)
+    local w = Shapes.Warp{ amplitude = 60, frequency = 0.004, octaves = 3, seed = params.seed }
+    local a = Noises.fBm{ frequency = 0.01, octaves = 4, amplitude = 30, position = w }
+    local b = Noises.Ridged{ frequency = 0.008, octaves = 5, amplitude = 40, position = w, seed = 1 }
+    local c = Noises.Billow{ frequency = 0.006, octaves = 3, amplitude = 20, position = w, seed = 2 }
+    local sum = a.value + b.value + c.value
+    local carved = Erosion.Hydraulic{ input = sum, iterations = 4, rain = 0.3, capacity = 20 }
+    return { d = { value = carved, range = { -200, 200 } } }
+end
+return main
+)";
+    }
+    Grid wide;
+    wide.spacing = 4.0;
+    wide.side    = 128;
+    Grid small   = wide;
+    small.section = 16;
+    wide.section  = 64;
+    const Field whole  = RunExport(script, std::string(kDirectory) + "/warped_64", wide, "d", "--seed 5");
+    const Field pieces = RunExport(script, std::string(kDirectory) + "/warped_16", small, "d", "--seed 5");
+    ++test::g_checks;
+    const bool identical = whole.Ok() && pieces.Ok()
+                           && std::memcmp(whole.values.data(), pieces.values.data(),
+                                          whole.values.size() * sizeof(float)) == 0;
+    std::printf("     Shapes.Warp into every noise, sections 64 and 16: %s\n",
+                identical ? "byte-identical" : "DIFFER");
+    CHECK(identical);
+    if (whole.Ok()) {
+        double lowest = 1e30, highest = -1e30;
+        for (const float v : whole.values) {
+            lowest  = std::min(lowest, static_cast<double>(v));
+            highest = std::max(highest, static_cast<double>(v));
+        }
+        ++test::g_checks;
+        CHECK(std::isfinite(lowest) && std::isfinite(highest) && highest - lowest > 10.0);
+    }
+
+    struct Case {
+        const char* name;
+        const char* body;
+        const char* fragment;
+    };
+    const Case cases[] = {
+        {"wn_scalar_position",
+         "    local result = Noises.fBm{ position = Terrain.Const{ value = 1.0 } }.value",
+         "position field, got R2->R1"},
+        {"wn_3d_with_2d_position",
+         "    local c = Terrain.Coords{}\n"
+         "    local result = Noises.fBm{ domain = 3, position = Vec.Combine{ c.x, c.z } }.value",
+         "an R3->R3 position field, got R2->R2"},
+    };
+    for (const Case& c : cases) {
+        const Field field = Export(c.name, c.body);
+        ++test::g_checks;
+        if (field.Ok() || field.error.find(c.fragment) == std::string::npos
+            || field.error.find(".lua:") == std::string::npos) {
+            ++test::g_failures;
+            std::printf("FAIL %s: expected an error naming '%s' with a line, got: %.240s\n", c.name,
+                        c.fragment, field.Ok() ? "success" : field.error.c_str());
+        }
+    }
+}
+
 /// Numbers that say whether a terrain is *sane*. Not whether it is convincing: that is a person's eye.
 struct Indicators {
     double      low = 0.0;
@@ -1250,6 +1374,7 @@ int main() {
     TestPolygons();
     TestProfiles();
     TestErrors();
+    TestWarpedNoise();
     TestLandforms();
     TestPreludeErrors();
     TestPreludeHash();

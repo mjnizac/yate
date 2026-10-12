@@ -27,8 +27,9 @@ inline constexpr u32_t kVariantFieldBits       = 8;
 inline constexpr u32_t kVariantFieldMask       = 0xFFu;
 
 /// Packs byte-wide variant fields, least significant first.
-[[nodiscard]] constexpr u32_t PackVariant(u32_t field0, u32_t field1 = 0) noexcept {
-    return (field0 & kVariantFieldMask) | ((field1 & kVariantFieldMask) << kVariantFieldBits);
+[[nodiscard]] constexpr u32_t PackVariant(u32_t field0, u32_t field1 = 0, u32_t field2 = 0) noexcept {
+    return (field0 & kVariantFieldMask) | ((field1 & kVariantFieldMask) << kVariantFieldBits)
+           | ((field2 & kVariantFieldMask) << (2 * kVariantFieldBits));
 }
 
 /// Static description of one op: its kernel, its class and how the compiler may treat it.

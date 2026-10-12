@@ -678,6 +678,11 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.offset      = args.Float("offset", 0.0);
         params.seedSalt    = args.Count("seed", 0, 0, ~0u);
         params.normalize   = args.Boolean("normalize", true);
+        // A position field in metres, `R2 -> R2` (x, z) or `R3 -> R3`, such as `Shapes.Warp{}`: the
+        // noise is sampled where it points instead of where the sample is.
+        if (args.Has("position")) {
+            params.position = args.Input("position");
+        }
         args.Finish();
 
         return Handle{Unwrap(graph.AddNoise(params, location))};

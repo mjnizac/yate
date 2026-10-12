@@ -176,11 +176,32 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
             "Noise lacunarity must be strictly greater than zero, got {}", params.lacunarity));
     }
 
+    const b8_t warped = params.position.IsValid();
+    if (warped) {
+        if (Status checked = CheckValue(params.position, "Noise position", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        const Mapping wanted{params.domain, static_cast<u8_t>(params.domain == Domain::R3 ? 3 : 2)};
+        if (!(params.position.mapping == wanted)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "a {} noise expects an {} position field, got {}",
+                params.domain == Domain::R3 ? "3D" : "2D", ToString(wanted),
+                ToString(params.position.mapping)));
+        }
+    }
+
     Node node;
     node.kind      = OpKind::Noise;
     node.nodeClass = NodeClass::Pointwise;
-    // Two variant axes: the base function and whether the octave sum is normalized.
-    node.variant      = PackVariant(static_cast<u32_t>(params.kind), params.normalize ? 1u : 0u);
+    // Three variant axes: the base function, whether the octave sum is normalized, and whether a
+    // position field is read.
+    node.variant      = PackVariant(static_cast<u32_t>(params.kind), params.normalize ? 1u : 0u,
+                                    warped ? 1u : 0u);
+    if (warped) {
+        node.inputCount = 1;
+        node.inputs[0]  = params.position;
+    }
     node.channelCount = 2;
     node.channels[0]  = Mapping{params.domain, 1};
     // The gradient has one component per axis: R2 -> R2, R3 -> R3.

@@ -7,6 +7,10 @@
 // Variants (specialization constants, so both fold away when the pipeline is created):
 //   3  base function, see ENGINE_BASE_* in lib/noise.lib.glsl
 //   4  normalize: 1 divides by the sum of the octave amplitudes, 0 is the classic unnormalized sum
+//   5  warped: 1 reads input 0, a position field in metres, instead of the sample's own position
+//
+// A warped noise reports the gradient at the position it sampled; it does not include the Jacobian
+// of the field that moved it.
 //
 // Parameters:
 //   0  frequency    cycles per metre, strictly positive
@@ -28,6 +32,7 @@
 
 layout(constant_id = 3) const uint kBaseFunction = ENGINE_BASE_SIMPLEX;
 layout(constant_id = 4) const uint kFbmNormalize = 1u;
+layout(constant_id = 5) const uint kWarped = 0u;
 
 #include "lib/fbm.lib.glsl"
 
@@ -86,7 +91,8 @@ void main() {
     if (IsR3()) {
         // Positions come from the integer sample times the sample spacing, never accumulated, so
         // neighbouring sections agree exactly on their shared samples.
-        vec3 position = vec3(world) * resolution;
+        vec3 position = kWarped != 0u ? LoadVec3(0u, InputIndex(0u, local))
+                                      : vec3(world) * resolution;
         vec4 n = Fbm3(position, octaves, amplitude, persistence, frequency, lacunarity, seed);
 
         if (WantsChannel(CHANNEL_VALUE)) {
@@ -96,7 +102,8 @@ void main() {
             StoreVec3(CHANNEL_GRADIENT, index, n.yzw);
         }
     } else {
-        vec2 position = vec2(float(world.x), float(world.z)) * resolution;
+        vec2 position = kWarped != 0u ? LoadVec2(0u, InputIndex(0u, local))
+                                      : vec2(float(world.x), float(world.z)) * resolution;
         vec3 n = Fbm2(position, octaves, amplitude, persistence, frequency, lacunarity, seed);
 
         if (WantsChannel(CHANNEL_VALUE)) {

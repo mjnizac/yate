@@ -287,6 +287,15 @@ public:
         /// half-range and the declared output range stays predictable. Cleared gives the classic
         /// unnormalized fBm, where `amplitude` is the first octave's amplitude.
         b8_t normalize = true;
+        /// Optional position field the noise is sampled at, in metres: `R2 -> R2` for an R2 noise
+        /// (x, z) and `R3 -> R3` for an R3 one. Invalid means the sample's own world position, which
+        /// is the path every noise took before this field existed and is unchanged bit for bit.
+        ///
+        /// The gradient the noise reports is the noise's gradient *at* the sampled position. It does
+        /// not include the Jacobian of the field that moved it, so under a strong warp it is the
+        /// slope of the unwarped noise carried along, not the slope of the warped surface; take
+        /// `Terrain.Gradient` of the result where the true slope matters.
+        Value position{};
     };
 
     /// Returns the value channel. `Channel(value, 1)` selects the analytic gradient.
