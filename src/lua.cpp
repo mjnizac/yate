@@ -20,8 +20,10 @@
 #include <engine/log.hpp>
 #include <engine/memory/allocator.hpp>
 #include <engine/memory/general.hpp>
+#include <engine/platform.hpp>
 #include <engine/terrain/graph.hpp>
 #include <engine/terrain/kernels.hpp>
+#include <engine/terrain/sha256.hpp>
 
 #include <sol/sol.hpp>
 
@@ -29,7 +31,10 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -141,15 +146,24 @@ Value Unwrap(Result<Value> result) {
 
 /// Where in the script the Lua code that called this binding sits.
 ///
-/// Level 1 is the caller of the running C function. Nothing here uses the `debug` library, which is
-/// deliberately not opened for scripts.
+/// Level 1 is the caller of the running C function. Frames of the prelude are skipped: when
+/// `Landforms.Cone` calls `Geometry.Circle` and the radius is wrong, the line that is wrong is the one
+/// in the script that called `Landforms.Cone`, not a line of the engine's own Lua. Nothing here uses
+/// the `debug` library, which is deliberately not opened for scripts.
 [[nodiscard]] SourceLocation CallerLocation(lua_State* state) {
-    lua_Debug frame{};
-    if (lua_getstack(state, 1, &frame) == 0 || lua_getinfo(state, "Sl", &frame) == 0) {
-        return SourceLocation{"?", 0};
+    SourceLocation found{"?", 0};
+    lua_Debug      frame{};
+    for (int level = 1; lua_getstack(state, level, &frame) != 0; ++level) {
+        if (lua_getinfo(state, "Sl", &frame) == 0) {
+            break;
+        }
+        found = SourceLocation{InternChunkName(frame.short_src),
+                               frame.currentline > 0 ? static_cast<u32_t>(frame.currentline) : 0u};
+        if (std::strncmp(frame.short_src, "prelude/", 8) != 0) {
+            return found;
+        }
     }
-    return SourceLocation{InternChunkName(frame.short_src),
-                          frame.currentline > 0 ? static_cast<u32_t>(frame.currentline) : 0u};
+    return found;
 }
 
 // --- Handles ------------------------------------------------------------------------------------
@@ -1201,6 +1215,67 @@ void Bind(sol::state& state, Graph& graph) {
     return {};
 }
 
+// --- The prelude --------------------------------------------------------------------------------
+//
+// Lua the engine runs before the script: `Shapes.*` and `Landforms.*`, which are compositions of the
+// ops rather than ops themselves. They are Lua because that is the language a script author reads and
+// edits, and because a landform is five lines of calls, not a kernel.
+//
+// A closed list of files next to the executable, in load order, rather than a directory scan: what the
+// engine runs before a script is part of what a terrain *is*, so it is named, hashed into the sidecar
+// and never picked up from wherever a path happens to lead.
+
+constexpr std::array<const char*, 2> kPreludeFiles{"10_shapes.lua", "20_landforms.lua"};
+
+[[nodiscard]] std::string PreludePath(const char* name) {
+    const std::string_view root = platform::ExecutableDirectory();
+    return std::string(root) + "lua/prelude/" + name;
+}
+
+[[nodiscard]] Result<std::string> ReadPrelude(const char* name) {
+    const std::string path = PreludePath(name);
+    std::ifstream     stream(path, std::ios::binary);
+    if (!stream) {
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Script,
+                    "could not open the engine prelude {}; it is copied next to the executable by the "
+                    "build",
+                    path);
+    }
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+/// Runs the prelude in `state`. Each file is called with one argument, a table holding what only the
+/// engine may reach: `fail(message)`, which raises a script error at the line of the script that called
+/// into the prelude. It is passed rather than made global so a script cannot call it.
+[[nodiscard]] Status LoadPrelude(sol::state& state) {
+    sol::table engineApi = state.create_table();
+    engineApi.set_function("fail", [](sol::this_state lua, const std::string& message) {
+        Fail(CallerLocation(lua), "{}", message);
+    });
+
+    for (const char* name : kPreludeFiles) {
+        Result<std::string> text = ReadPrelude(name);
+        if (!text) {
+            return std::unexpected(text.error());
+        }
+        const std::string chunkName = std::string("=prelude/") + name;
+        sol::load_result  chunk     = state.load(*text, chunkName);
+        if (!chunk.valid()) {
+            const sol::error error = chunk;
+            ENGINE_FAIL(ErrorCode::ScriptError, ErrorStage::Script, "the prelude {} does not load: {}",
+                        name, error.what());
+        }
+        sol::protected_function run    = chunk;
+        const auto              result = run(engineApi);
+        if (!result.valid()) {
+            const sol::error error = result;
+            ENGINE_FAIL(ErrorCode::ScriptError, ErrorStage::Script, "the prelude {} failed: {}", name,
+                        error.what());
+        }
+    }
+    return {};
+}
+
 /// Lua calls this when an error escapes an unprotected call, which cannot be recovered from.
 ///
 /// Every call this file makes into Lua is protected, so reaching here means a bug rather than a bad
@@ -1314,6 +1389,11 @@ Status RunScript(Graph& graph, std::string_view path, const ScriptEnvironment& e
 
     Bind(state, graph);
 
+    // Before the script, after the bindings it composes and the sandbox it runs inside.
+    if (Status prelude = LoadPrelude(state); !prelude) {
+        return std::unexpected(prelude.error());
+    }
+
     const std::string          file  = std::string(path);
     sol::protected_function_result loaded = state.safe_script_file(
         file, sol::script_pass_on_error);
@@ -1343,6 +1423,20 @@ Status RunScript(Graph& graph, std::string_view path, const ScriptEnvironment& e
     LOG_INFO("script {} built {} node(s) and {} output(s), {} KiB of Lua state", path,
              graph.NodeCount(), graph.OutputCount(), AllocatedBytes() / 1024);
     return {};
+}
+
+Result<std::array<char, 65>> PreludeHash() {
+    terrain::Sha256 hash;
+    for (const char* name : kPreludeFiles) {
+        Result<std::string> text = ReadPrelude(name);
+        if (!text) {
+            return std::unexpected(text.error());
+        }
+        hash.Update(std::string_view{name});
+        hash.Update("\n", 1);
+        hash.Update(text->data(), text->size());
+    }
+    return hash.Final();
 }
 
 u64_t AllocatedBytes() { return memory::Lua().Stats().used; }

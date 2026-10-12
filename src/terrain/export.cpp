@@ -852,6 +852,11 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         }
         metadata.shaderHash = *shaderHash;
         metadata.paramsHash = HashParams(job.params);
+        Result<std::array<char, 65>> preludeHash = lua::PreludeHash();
+        if (!preludeHash) {
+            return std::unexpected(preludeHash.error());
+        }
+        metadata.preludeHash = *preludeHash;
     }
     metadata.seed               = job.seed;
     metadata.minX               = job.minX;

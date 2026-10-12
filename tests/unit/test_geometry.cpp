@@ -11,6 +11,7 @@
 #include "test_support.hpp"
 
 #include <engine/platform.hpp>
+#include <engine/terrain/sha256.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -317,6 +318,205 @@ void TestProfiles() {
             2e-4);
 }
 
+void TestLandforms() {
+    test::Section("landforms and shapes from the prelude");
+
+    Compare("Landforms.Cone, placed",
+            Export("l_cone", "    local result = Landforms.Cone{ at = { 48, -16 }, radius = 96,\n"
+                             "                                  height = 70 }"),
+            [](double x, double z) {
+                const double u = std::clamp((96.0 - std::hypot(x - 48.0, z + 16.0)) / 96.0, 0.0, 1.0);
+                return 70.0 * u;
+            },
+            5e-3);
+
+    Compare("Landforms.Bowl digs",
+            Export("l_bowl", "    local result = Landforms.Bowl{ radius = 100, depth = 30 }"),
+            [](double x, double z) {
+                const double u = std::clamp((100.0 - std::hypot(x, z)) / 100.0, 0.0, 1.0);
+                return -30.0 * (u * u * (3.0 - 2.0 * u));
+            },
+            5e-3);
+
+    Compare("Landforms.Pyramid has square faces",
+            Export("l_pyramid", "    local result = Landforms.Pyramid{ size = { 160, 160 }, height = 40 }"),
+            [](double x, double z) {
+                const double d = std::max(std::fabs(x) - 80.0, std::fabs(z) - 80.0);
+                return 40.0 * std::clamp(-d / 80.0, 0.0, 1.0);
+            },
+            5e-3);
+
+    Compare("Landforms.Cylinder has a flat top",
+            Export("l_cylinder", "    local result = Landforms.Cylinder{ radius = 96, height = 50, edge = 8 }"),
+            [](double x, double z) {
+                const double d = std::hypot(x, z) - 96.0;
+                const double t = std::clamp((d + 8.0) / 16.0, 0.0, 1.0);
+                return 50.0 * (1.0 - t * t * (3.0 - 2.0 * t));
+            },
+            5e-3);
+
+    // A straight ridge along x: 64 m across, 50 m high, smooth in section, ending at x = +-192.
+    Compare("Landforms.Ridge along a curve",
+            Export("l_ridge", "    local result = Landforms.Ridge{\n"
+                              "        points = { { -192, 0 }, { 192, 0 } }, width = 64, height = 50 }"),
+            [](double x, double z) {
+                const double along = std::max(std::fabs(x) - 192.0, 0.0);
+                const double d     = std::hypot(along, z);
+                const double u     = std::clamp((32.0 - d) / 32.0, 0.0, 1.0);
+                return 50.0 * (u * u * (3.0 - 2.0 * u));
+            },
+            5e-3);
+
+    Compare("Landforms.Trench is the same cut downwards",
+            Export("l_trench", "    local result = Landforms.Trench{\n"
+                               "        points = { { -192, 0 }, { 192, 0 } }, width = 64, depth = 20 }"),
+            [](double x, double z) {
+                const double along = std::max(std::fabs(x) - 192.0, 0.0);
+                const double d     = std::hypot(along, z);
+                const double u     = std::clamp((32.0 - d) / 32.0, 0.0, 1.0);
+                return -20.0 * (u * u * (3.0 - 2.0 * u));
+            },
+            5e-3);
+
+    Compare("Shapes.Union is the nearer of two",
+            Export("s_union", "    local a = Shapes.Circle{ at = { -64, 0 }, radius = 50 }\n"
+                              "    local b = Shapes.Circle{ at = { 64, 0 }, radius = 50 }\n"
+                              "    local result = Shapes.Union{ a, b }"),
+            [](double x, double z) {
+                return std::min(std::hypot(x + 64.0, z) - 50.0, std::hypot(x - 64.0, z) - 50.0);
+            },
+            2e-4);
+
+    Compare("Shapes.Subtract cuts one out of another",
+            Export("s_subtract", "    local a = Shapes.Circle{ radius = 100 }\n"
+                                 "    local b = Shapes.Circle{ at = { 60, 0 }, radius = 50 }\n"
+                                 "    local result = Shapes.Subtract{ a = a, b = b }"),
+            [](double x, double z) {
+                return std::max(std::hypot(x, z) - 100.0, -(std::hypot(x - 60.0, z) - 50.0));
+            },
+            2e-4);
+
+    Compare("Shapes.Mask is 1 inside and 0 outside",
+            Export("s_mask", "    local c = Shapes.Circle{ radius = 80 }\n"
+                             "    local result = Shapes.Mask{ shape = c, feather = 16 }"),
+            [](double x, double z) {
+                const double d = std::hypot(x, z) - 80.0;
+                const double t = std::clamp((d + 16.0) / 32.0, 0.0, 1.0);
+                return 1.0 - t * t * (3.0 - 2.0 * t);
+            },
+            2e-4);
+
+    Compare("a warp of amplitude 0 changes nothing",
+            Export("s_warp0", "    local position = Shapes.Warp{ amplitude = 0 }\n"
+                              "    local result = Shapes.Circle{ position = position, radius = 100 }"),
+            [](double x, double z) { return std::hypot(x, z) - 100.0; }, 1e-3);
+
+    // A warp that is on bends the edge: some samples must differ from the plain circle, and the
+    // field must stay close to it, within the amplitude.
+    const Field warped = Export("s_warp", "    local position = Shapes.Warp{ amplitude = 30, seed = 3 }\n"
+                                          "    local result = Shapes.Circle{ position = position, radius = 100 }");
+    ++test::g_checks;
+    if (!warped.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL warp: no field (%.200s)\n", warped.error.c_str());
+    } else {
+        std::size_t moved = 0;
+        double      worst = 0.0;
+        for (std::size_t row = 0; row < kSide; ++row) {
+            for (std::size_t column = 0; column < kSide; ++column) {
+                const double x = kOrigin + kSpacing * static_cast<double>(column);
+                const double z = kOrigin + kSpacing * static_cast<double>(row);
+                const double e =
+                    std::fabs(static_cast<double>(warped.values[row * kSide + column])
+                              - (std::hypot(x, z) - 100.0));
+                moved += e > 0.5 ? 1 : 0;
+                worst = std::max(worst, e);
+            }
+        }
+        CHECK(moved > 100);
+        // The warp moves a sample by at most `amplitude` on each axis, and a distance is 1-Lipschitz.
+        CHECK(worst <= 30.0 * std::sqrt(2.0) + 1e-3);
+    }
+}
+
+void TestPreludeErrors() {
+    test::Section("a prelude error names the script line, not the prelude");
+
+    struct Case {
+        const char* name;
+        const char* body;
+        const char* fragment;
+    };
+    const Case cases[] = {
+        {"p_missing_radius", "    local result = Landforms.Cone{ height = 10 }", "needs 'radius'"},
+        {"p_unknown_key", "    local result = Landforms.Cone{ radius = 5, height = 1, slope = 2 }",
+         "does not take 'slope'"},
+        {"p_wrong_type", "    local result = Shapes.Circle{ radius = 'big' }", "got string"},
+        {"p_bad_profile",
+         "    local result = Landforms.Dome{ radius = 5, height = 1, profile = 'cliff' }",
+         "does not know the profile"},
+        {"p_inner_error", "    local result = Landforms.Cone{ radius = -5, height = 10 }", "radius"},
+        {"p_one_shape", "    local a = Shapes.Circle{ radius = 5 }\n"
+                       "    local result = Shapes.Union{ a }", "at least two"},
+        {"p_spline_limit",
+         "    local points = {}\n"
+         "    for i = 1, 40 do points[i] = { i * 8, (i % 5) * 10 } end\n"
+         "    local result = Shapes.Spline{ points = points, subdivisions = 8 }",
+         "limit is 128"},
+    };
+    for (const Case& c : cases) {
+        const Field field = Export(c.name, c.body);
+        ++test::g_checks;
+        const std::string script = std::string(c.name) + ".lua:";
+        const bool        named  = field.error.find(script) != std::string::npos;
+        const bool        inside = field.error.find("prelude/") != std::string::npos;
+        if (field.Ok() || field.error.find(c.fragment) == std::string::npos || !named || inside) {
+            ++test::g_failures;
+            std::printf("FAIL %s: expected '%s' at the script's line and no prelude frame, got: %.300s\n",
+                        c.name, c.fragment, field.Ok() ? "success" : field.error.c_str());
+        }
+    }
+
+    // And the line is the line of the call, not just any line: the call below is on line 3.
+    const Field second = Export("p_line", "    local a = 1\n"
+                                          "    local result = Landforms.Cone{ height = 10 }");
+    ++test::g_checks;
+    if (second.Ok() || second.error.find("p_line.lua:3:") == std::string::npos) {
+        ++test::g_failures;
+        std::printf("FAIL p_line: expected line 3, got: %.200s\n", second.error.c_str());
+    }
+}
+
+void TestPreludeHash() {
+    test::Section("the prelude is part of the provenance");
+
+    const std::string metadata = ReadFile(std::string(kDirectory) + "/l_cone/metadata.json");
+    const std::string key      = "\"prelude_hash\": \"";
+    const std::size_t at       = metadata.find(key);
+    ++test::g_checks;
+    if (at == std::string::npos) {
+        ++test::g_failures;
+        std::printf("FAIL the sidecar has no prelude_hash\n");
+        return;
+    }
+    const std::string recorded = metadata.substr(at + key.size(), 64);
+
+    // Recomputed here from the files next to this executable, in the engine's load order.
+    // The prelude sits next to the exporter, so its directory is the exporter's.
+    std::string directory = TERRAIN_EXPORT_EXE;
+    directory.erase(directory.find_last_of("/\\") + 1);
+
+    engine::terrain::Sha256 hash;
+    for (const char* name : {"10_shapes.lua", "20_landforms.lua"}) {
+        const std::string text = ReadFile(directory + "lua/prelude/" + name);
+        hash.Update(std::string_view{name});
+        hash.Update("\n", 1);
+        hash.Update(text.data(), text.size());
+    }
+    const std::array<char, 65> expected = hash.Final();
+    CHECK(recorded == std::string(expected.data(), 64));
+}
+
 void TestErrors() {
     test::Section("bad geometry is refused with the line");
 
@@ -375,6 +575,9 @@ int main() {
     TestPolygons();
     TestProfiles();
     TestErrors();
+    TestLandforms();
+    TestPreludeErrors();
+    TestPreludeHash();
 
     return test::Summary("test_geometry");
 }

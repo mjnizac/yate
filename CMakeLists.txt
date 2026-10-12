@@ -58,6 +58,25 @@ endfunction()
 engine_collect_shaders(ENGINE_SHADER_OUTPUTS)
 add_custom_target(engine_shaders ALL DEPENDS ${ENGINE_SHADER_OUTPUTS})
 
+# The Lua prelude: scripts the engine runs before the user's, copied next to the executable. The list is
+# closed on purpose and matches `kPreludeFiles` in src/lua.cpp, in load order.
+set(ENGINE_PRELUDE_FILES 10_shapes.lua 20_landforms.lua)
+set(ENGINE_PRELUDE_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/lua/prelude")
+set(ENGINE_PRELUDE_OUTPUTS "")
+foreach(prelude_file ${ENGINE_PRELUDE_FILES})
+    set(prelude_source "${CMAKE_CURRENT_SOURCE_DIR}/assets/lua/prelude/${prelude_file}")
+    set(prelude_output "${ENGINE_PRELUDE_OUTPUT_DIR}/${prelude_file}")
+    add_custom_command(
+        OUTPUT "${prelude_output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${ENGINE_PRELUDE_OUTPUT_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${prelude_source}" "${prelude_output}"
+        DEPENDS "${prelude_source}"
+        COMMENT "prelude ${prelude_file}"
+        VERBATIM)
+    list(APPEND ENGINE_PRELUDE_OUTPUTS "${prelude_output}")
+endforeach()
+add_custom_target(engine_prelude ALL DEPENDS ${ENGINE_PRELUDE_OUTPUTS})
+
 # --- Engine objects -------------------------------------------------------------------------
 
 add_library(engine_objects OBJECT
@@ -136,6 +155,7 @@ target_compile_definitions(engine_interface INTERFACE
 target_link_libraries(engine_interface INTERFACE engine_third_party)
 
 # Internal declarations are visible only while compiling the engine itself.
+add_dependencies(engine_objects engine_prelude)
 target_compile_definitions(engine_objects PRIVATE IS_ENGINE engine_EXPORTS)
 target_link_libraries(engine_objects PUBLIC engine_interface)
 

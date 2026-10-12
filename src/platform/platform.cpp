@@ -245,7 +245,15 @@ void SetThreadName(const char* name) noexcept {
 #endif
 }
 
-std::string_view ExecutableDirectory() noexcept { return {g_executableDirectory.data()}; }
+std::string_view ExecutableDirectory() noexcept {
+    // Asked for lazily when `Init` has not run: the Lua runtime reads its prelude from beside the
+    // executable, and a test that drives it without starting the engine has no other way to find it.
+    // Every caller gets the same answer, so a race between two first calls writes the same bytes.
+    if (g_executableDirectory[0] == 0) {
+        QueryExecutableDirectory();
+    }
+    return {g_executableDirectory.data()};
+}
 std::string_view CpuName() noexcept { return {g_cpuName.data()}; }
 std::string_view OsName() noexcept { return {g_osName.data()}; }
 u32_t            LogicalCoreCount() noexcept { return g_coreCount; }

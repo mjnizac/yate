@@ -824,6 +824,7 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
     json.Key("script_hash", std::string_view{metadata.scriptHash.data()});
     json.Key("shader_hash", std::string_view{metadata.shaderHash.data()});
     json.Key("params_hash", std::string_view{metadata.paramsHash.data()});
+    json.Key("prelude_hash", std::string_view{metadata.preludeHash.data()});
     json.Key("seed", metadata.seed);
     json.Key("resolution", metadata.resolution);
     json.Key("section_size", metadata.sectionSize);
