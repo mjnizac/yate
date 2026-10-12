@@ -1,0 +1,144 @@
+# Continuous integration.
+#
+# What this can and cannot do, stated up front because it is the reason the file exists:
+#
+#   * A hosted runner has no GPU, so only the suites that need no device run on every push. That is
+#     the allocators, the mapping and error types, the graph compiler, the Lua error contract and the
+#     bytes-in-the-file check. It is not the whole suite, and it is not nothing: every defect the
+#     project has recorded was found by hand, on one machine, after it shipped.
+#   * The GPU suites (kernels, seams, noise, erosion, viewer, datasets, black-box CLI) run on a
+#     self-hosted runner with a Vulkan 1.4 device, and only when the repository variable
+#     `GPU_RUNNER` is set to `true`, so a repository without one does not queue a job forever.
+#   * Linux is **unverified**: the engine has only ever been built with MSVC on Windows. Those jobs are
+#     allowed to fail and say so, so their first run is information rather than a red build. Remove
+#     `continue-on-error` the day one of them is green.
+#
+# Actions are pinned by commit for the same reason the dependencies are: a tag can move.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly, for the GPU job and so a dependency that disappears upstream is noticed.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The suites that need no Vulkan device.
+  CPU_TESTS: "test_allocators|test_mapping|test_errors|test_compiler|test_lua_errors|test_output_files"
+
+jobs:
+  windows-msvc:
+    name: Windows / MSVC / ${{ matrix.config }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67 # v6
+
+      # The headers, the loader, `glslc` and the validation layers. The engine needs the SDK to build
+      # even when the tests that follow never touch a device: the shaders are compiled at build time.
+      - uses: jakoch/install-vulkan-sdk-action@d17de7e2f5e50efb5d2123efed18497d3c58c533 # v1
+        with:
+          vulkan_version: 1.4.304.1
+          install_runtime: true
+          cache: true
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Tests that need no device
+        working-directory: build
+        run: ctest --output-on-failure -R "$env:CPU_TESTS"
+
+  linux:
+    name: Linux / ${{ matrix.compiler }} / ${{ matrix.sanitizer }}
+    runs-on: ubuntu-24.04
+    # Never been built there. See the header.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: gcc, cc: gcc-14, cxx: g++-14, sanitizer: none, flags: "" }
+          - { compiler: gcc, cc: gcc-14, cxx: g++-14, sanitizer: asan-ubsan,
+              flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
+          - { compiler: clang, cc: clang-18, cxx: clang++-18, sanitizer: none, flags: "" }
+          - { compiler: clang, cc: clang-18, cxx: clang++-18, sanitizer: asan-ubsan,
+              flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake gcc-14 g++-14 clang-18 \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev libvulkan-dev glslang-tools spirv-tools
+
+      - uses: jakoch/install-vulkan-sdk-action@d17de7e2f5e50efb5d2123efed18497d3c58c533 # v1
+        with:
+          vulkan_version: 1.4.304.1
+          cache: true
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="${{ matrix.flags }}" -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Tests that need no device
+        working-directory: build
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --output-on-failure -R "$CPU_TESTS"
+
+  gpu:
+    name: GPU suites (self-hosted)
+    if: ${{ vars.GPU_RUNNER == 'true' }}
+    runs-on: [self-hosted, windows, gpu]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build
+        shell: cmd
+        run: build.cmd Release
+
+      - name: Whole suite
+        working-directory: build/Release
+        run: ctest --output-on-failure
+
+      # The check the suite does not make: the same export, byte for byte, across section sizes. It is
+      # the engine's one firm claim and it takes about two and a half minutes.
+      - name: 16k acceptance, section 512 against section 1024
+        shell: bash
+        run: |
+          set -e
+          export_exe=build/Release/bin/terrain_export
+          args="--script assets/scripts/basic.lua --min 0,0 --max 16384,16384 --resolution 1.0"
+          $export_exe $args --section 512 --out out/acc512
+          $export_exe $args --section 1024 --out out/acc1024
+          cmp out/acc512/height.png out/acc1024/height.png
+          cmp out/acc512/normals.png out/acc1024/normals.png
