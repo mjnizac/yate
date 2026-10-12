@@ -127,10 +127,14 @@ included.
 Only `base`, `math`, `string` and `table` are opened, so there is no `io`, no `os`, no `package`, no
 `require`, no `debug` and no `coroutine`: a script cannot start a process or load a C module.
 
-It **can** read and run other Lua files — `dofile`, `loadfile` and `load` come with `base` and nothing
-removes them. That is a gap rather than a decision, it is recorded in `docs/todo.md`, and it reaches
-beyond security: the metadata sidecar hashes the script *file*, so a chunk assembled with `load` is not
-described by its own hash.
+`dofile`, `loadfile`, `load`, `collectgarbage`, `pcall` and `xpcall` are removed from `base` after it
+opens. The loaders are how a script would read a file or run code the metadata sidecar's script hash
+does not describe; `pcall` goes because it defeats the time budget, which can only *raise* an error and
+which a script could otherwise catch and ignore.
+
+A script also has a wall-clock budget, 10 s by default (`ScriptEnvironment::timeoutSeconds`). Building
+a graph is bookkeeping, so exceeding it means a loop, and the result is an error with a line number
+rather than a process that never returns.
 
 ## Errors
 

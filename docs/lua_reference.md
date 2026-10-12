@@ -762,11 +762,11 @@ An unknown key is an error, never silently ignored, and the message lists the ke
 Only `base`, `math`, `string` and `table` are opened, so there is no `io`, no `os`, no `package`, no
 `require`, no `debug` and no `coroutine`: a script cannot start a process or load a C module.
 
-It **can** read and run other Lua files. `dofile`, `loadfile` and `load` come with the `base` library
-and nothing removes them afterwards, which was measured by enumerating `_G` from a script rather than
-assumed. That is a gap rather than a decision, and it is recorded in `docs/todo.md`. It has a
-consequence beyond security worth knowing about: the metadata sidecar records a hash of the script
-*file*, so a script that assembles a chunk with `load` and runs it is not described by its own hash.
+`dofile`, `loadfile`, `load`, `collectgarbage`, `pcall` and `xpcall` are removed from `base` after it
+opens, which was checked by enumerating `_G` from a script. The loaders would let a script read a file
+or run code the sidecar's script hash does not describe, and `pcall` would let it swallow the time
+budget's error and keep looping. The budget is 10 s of wall clock for building the graph; exceeding it
+is an error with a line number.
 
 What a script genuinely cannot do is branch on terrain data, because none exists while it runs: a
 handle is a promise, not a value.

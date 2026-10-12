@@ -63,7 +63,7 @@ void Expect(b8_t condition, const char* name, const char* what) {
 /// line, which is the part that matters to whoever has to fix it.
 void CheckFailure(const char* name, std::string_view source, u32_t line,
                   std::initializer_list<const char*> fragments,
-                  ErrorStage expectedStage = ErrorStage::Script) {
+                  ErrorStage expectedStage = ErrorStage::Script, f64_t timeoutSeconds = 10.0) {
     const std::string path = WriteScript(name, source);
     if (path.empty()) {
         Expect(false, name, "the script file could be written");
@@ -75,6 +75,7 @@ void CheckFailure(const char* name, std::string_view source, u32_t line,
     environment.maxX       = 256.0;
     environment.maxZ       = 256.0;
     environment.resolution = 1.0;
+    environment.timeoutSeconds = timeoutSeconds;
 
     const Status result = lua::RunScript(graph, path, environment);
     Expect(!result.has_value(), name, "the script is rejected");
@@ -344,6 +345,44 @@ return main
                  0, {"io"});
 }
 
+// --- The sandbox --------------------------------------------------------------------------------
+//
+// Each of these was reachable until it was measured by enumerating `_G` from a script: the docs said a
+// script could not read files, and `dofile` and `loadfile` said otherwise. `load` is the worse one,
+// because it runs code that the sidecar's script hash does not describe.
+
+void TestSandbox() {
+    test::Section("the sandbox");
+
+    for (const char* global : {"dofile", "loadfile", "load", "collectgarbage", "pcall", "xpcall"}) {
+        const std::string name = std::string("sandbox_") + global;
+        const std::string source = std::string("local function main()\n    ") + global
+                                   + "('x')\nend\nreturn main\n";
+        CheckFailure(name.c_str(), source, 2, {"attempt to call a nil value", global});
+    }
+
+    CheckFailure("sandbox_io", R"(local function main()
+    local f = io.open("secret.txt")
+end
+return main
+)", 2, {"attempt to index a nil value", "io"});
+
+    // The budget. A short one, so the suite does not wait ten seconds. The second case is the one that
+    // matters: it caught the first version of this check, where the hook raised its error, the script's
+    // own `pcall` swallowed it and the loop carried on until it was killed from outside.
+    CheckFailure("budget_loop", R"(local function main()
+    while true do end
+end
+return main
+)", 0, {"time budget", "infinite loop"}, ErrorStage::Script, 0.3);
+
+    CheckFailure("budget_unreachable_pcall", R"(local function main()
+    while true do pcall(function() while true do end end) end
+end
+return main
+)", 0, {"attempt to call a nil value", "pcall"}, ErrorStage::Script, 0.3);
+}
+
 /// A script that is fine must stay fine. Without this the suite would pass if `RunScript` simply
 /// failed on everything.
 void TestGoodScriptPasses() {
@@ -396,6 +435,7 @@ int main() {
     TestMappingErrors();
     TestParameterErrors();
     TestScriptErrors();
+    TestSandbox();
     TestGoodScriptPasses();
 
     // Every state is created and destroyed inside RunScript, so nothing may be left behind.

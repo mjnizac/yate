@@ -126,27 +126,6 @@ looks at a pixel and a check that looks at the bytes of a written file — are t
 
 ## Hardening
 
-- [ ] **The Lua sandbox does not hold, and `docs/lua_api.md` claims it does.** The state opens `base`,
-      `math`, `string` and `table` and removes nothing afterwards. Enumerating `_G` from a script
-      returns `dofile loadfile load collectgarbage rawset rawget setmetatable getmetatable pcall print
-      select next rawlen`. So "a script cannot read files" is false — `dofile` and `loadfile` do exactly
-      that — while "cannot start processes or load C modules" is true, since `io`, `os`, `package`,
-      `require`, `debug` and `coroutine` really are absent.
-
-      The consequence the review did not draw is the one that matters most here: **`load` breaks
-      provenance.** The sidecar records a hash of the script *file*, and a script that builds a chunk at
-      runtime and runs it is not described by that hash. For an engine whose headline property is
-      reproducibility, that is a correctness hole rather than only a security one.
-
-      The fix is a whitelist rather than a blacklist: clear the globals that are not wanted after
-      opening the libraries, and make `docs/lua_api.md` state exactly what remains.
-
-- [ ] **A script can hang the process.** `while true do end` runs until killed; there is no instruction
-      budget and no wall-clock limit. Measured: still running after 15 s, exit 124 under `timeout`. A
-      `lua_sethook` count hook is a handful of lines and gives a bounded, catchable failure. This is
-      worth doing for a *trusted* script too, because the viewer runs the script on a worker thread at
-      every hot reload and a typo currently wedges it.
-
 - [ ] **The CLI parser accepts trailing garbage and non-finite numbers.** Measured on this copy:
       `--resolution 123abc` is accepted as 123; `--section 200abc` is accepted as 200 and only then
       rejected for not being a power of two; `--resolution -1` and `--resolution nan` pass the parser

@@ -27,6 +27,11 @@ struct ScriptEnvironment {
     f64_t maxY       = 0.0;
     f64_t maxZ       = 0.0;
     f64_t resolution = 1.0;
+    /// Wall-clock budget for building the graph, in seconds. Zero disables it. Building a graph is
+    /// bookkeeping, so a script that needs seconds is a script that loops; the budget turns that into
+    /// an error with a line number instead of a process that never returns, which matters most in the
+    /// viewer, where the script runs on a worker thread at every hot reload.
+    f64_t timeoutSeconds = 10.0;
     /// User parameters, exposed to the script as named fields of `params`.
     const terrain::Params* params = nullptr;
 };

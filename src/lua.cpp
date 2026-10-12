@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <mutex>
@@ -879,9 +880,51 @@ int AtPanic(lua_State* state) noexcept {
         const sol::error error = result;
         message               = error.what();
     }
-    return MakeScriptError(ErrorCode::ScriptError, ErrorStage::Script, chunkName, 0, "{}: {}", what,
-                           message);
+
+    // An error raised by the Lua VM itself -- calling a nil, indexing a nil, arithmetic on a string --
+    // has no binding behind it, so nothing recorded the line. It does carry it, as a `file:LINE:`
+    // prefix inside the text, and a traceback the script's author does not need appended after it.
+    // Without this every such error reported line 0, which is the one thing a message from this
+    // engine is supposed to never do.
+    if (const usize_t trace = message.find("\nstack traceback"); trace != std::string::npos) {
+        message.erase(trace);
+    }
+    u32_t line = 0;
+    for (usize_t i = 0; i + 2 < message.size() && line == 0; ++i) {
+        if (message[i] != ':' || message[i + 1] < '0' || message[i + 1] > '9') {
+            continue;
+        }
+        usize_t end = i + 1;
+        u32_t   value = 0;
+        while (end < message.size() && message[end] >= '0' && message[end] <= '9' && value < 1000000) {
+            value = value * 10 + static_cast<u32_t>(message[end] - '0');
+            ++end;
+        }
+        if (end < message.size() && message[end] == ':') {
+            line = value;
+        }
+    }
+    return MakeScriptError(ErrorCode::ScriptError, ErrorStage::Script, chunkName, line, "{}: {}",
+                           what, message);
 }
+
+// The wall-clock budget, checked from a count hook. Thread-local because RunScript runs on the
+// viewer's reload worker as well as on the main thread, and two scripts never share a thread.
+thread_local std::chrono::steady_clock::time_point t_deadline;
+thread_local double                                 t_budgetSeconds = 0.0;
+
+/// Runs every `kHookStride` VM instructions. Nothing here owns a destructor, because `luaL_error`
+/// unwinds with `longjmp` or an exception depending on how Lua was built and must work for both.
+void BudgetHook(lua_State* L, lua_Debug*) {
+    if (std::chrono::steady_clock::now() > t_deadline) {
+        // `lua_pushfstring` has no precision modifiers, so whole seconds through `%d`.
+        luaL_error(L, "the script exceeded its time budget of %d s; is there an infinite loop?",
+                   static_cast<int>(t_budgetSeconds));
+    }
+}
+
+/// How often the budget is looked at. A clock read is cheap, but not free per instruction.
+constexpr int kHookStride = 10000;
 
 } // namespace
 
@@ -896,8 +939,30 @@ Status RunScript(Graph& graph, std::string_view path, const ScriptEnvironment& e
     // view shows the script's cost as its own pool (spec section 7.4).
     sol::state state(AtPanic, memory::LuaAlloc, &memory::Lua());
     // Deliberately narrow: a terrain script needs arithmetic, strings and tables. `io`, `os` and
-    // `package` are not opened, so a script cannot read files, start processes or pull in C modules.
+    // `package` are not opened, so a script cannot start processes or pull in C modules.
     state.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string, sol::lib::table);
+
+    // `base` still carries the loaders, and a loader is how a script reads a file or runs code the
+    // sidecar's script hash does not describe. `collectgarbage` goes too: the allocator is the
+    // engine's, and a script has no business steering a collector it does not own.
+    //
+    // `pcall` and `xpcall` go because they defeat the time budget: the hook can only *raise* an error,
+    // and a script that wraps its loop in `pcall` catches it and carries on. Measured, not assumed:
+    // `while true do pcall(function() while true do end end) end` ran until it was killed from
+    // outside. A graph builder has no use for catching errors, since every failure it can hit is a
+    // validation error that should reach the user with its line.
+    for (const char* name :
+         {"dofile", "loadfile", "load", "loadstring", "collectgarbage", "pcall", "xpcall"}) {
+        state[name] = sol::lua_nil;
+    }
+
+    if (environment.timeoutSeconds > 0.0) {
+        t_budgetSeconds = environment.timeoutSeconds;
+        t_deadline      = std::chrono::steady_clock::now()
+                          + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                              std::chrono::duration<double>(environment.timeoutSeconds));
+        lua_sethook(state.lua_state(), BudgetHook, LUA_MASKCOUNT, kHookStride);
+    }
 
     Bind(state, graph);
 
