@@ -73,8 +73,14 @@ uncompressed, in row-major order with the dimensions in the sidecar. On an 8192 
 it computed instead of an export of billions of sections. Every numeric option is parsed strictly: a
 trailing suffix, `nan`, `inf` and an overflow are errors that name the option and the text.
 `--png-level` and `--png-filter` trade encoding time against output size; the defaults are level 2 and
-the `up` filter, and `--png-level 1` is the setting for a job that wants throughput over size. Run
-`--help` for the rest.
+the `up` filter, and `--png-level 1` is the setting for a job that wants throughput over size. With
+`none` or `up` the deflate stream is built in parallel (see `docs/decisions.md`); `all` uses one thread.
+Run `--help` for the rest.
+
+The sidecar's `outputs[].statistics` holds the min, max and mean of each output over its components and
+the number of samples that were NaN or infinite, which a 16-bit PNG would store as terrain. A non-zero
+count is also a warning in the log. `timings_ms` splits the time into script, compilation, pipeline
+creation, GPU, readback, encode and write, and the time the main loop spent waiting on an encoder.
 
 The seam and determinism acceptance check, which has to be run by hand because it takes about two and a
 half minutes and 300 MB:

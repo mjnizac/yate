@@ -22,6 +22,7 @@
 
 #include <spng.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <fstream>
@@ -217,6 +218,212 @@ void TestSha256AndHashFile() {
     }
 }
 
+// --- The parallel deflate path ----------------------------------------------------------------------
+//
+// The pixels of a PNG are built from independently compressed chunks of 32 rows. What can go wrong is
+// at the seams of that: a chunk boundary, the first and last chunk (which carry the zlib header and the
+// checksum), a chunk of one row, a count of rows that is not a multiple of anything. The decoder is
+// libspng's, and it verifies the zlib checksum, so a stream with a wrong Adler-32 or a bad CRC does not
+// decode at all.
+
+[[nodiscard]] f32_t PatternValue(u32_t x, u32_t y) {
+    // Smooth in one direction and noisy in the other, so the Up filter has something to do and the
+    // compressor has both runs and entropy.
+    u32_t h = x * 0x9E3779B9u + y * 0x85EBCA6Bu;
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    const f32_t noise = static_cast<f32_t>(h & 0xFFu) / 255.0f;
+    const f32_t ramp  = static_cast<f32_t>((x + y * 3u) % 211u) / 211.0f;
+    return 0.6f * ramp + 0.4f * noise;
+}
+
+/// What `Quantize` makes of a value in [0, 1], written out so the test does not call it.
+[[nodiscard]] u32_t Expected16(f32_t value) {
+    if (value <= 0.0f) {
+        return 0;
+    }
+    if (value >= 1.0f) {
+        return 65535;
+    }
+    return static_cast<u32_t>(value * 65535.0f + 0.5f);
+}
+
+void TestParallelDeflateRoundTrips() {
+    test::Section("the chunked deflate stream decodes to exactly the samples written");
+
+    const u32_t widths[]  = {1, 3, 257};
+    // 31, 32 and 33 straddle a chunk; 64 is two exact chunks; 65 leaves a chunk of one row.
+    const u32_t heights[] = {1, 2, 31, 32, 33, 64, 65, 200};
+    const u32_t levels[]  = {0, 1, 2, 6};
+    const PngFilter filters[] = {PngFilter::None, PngFilter::Up};
+
+    u32_t cases = 0;
+    u32_t wrong = 0;
+    for (const u32_t width : widths) {
+        for (const u32_t height : heights) {
+            for (const u32_t level : levels) {
+                for (const PngFilter filter : filters) {
+                    const std::string path = std::string(kDirectory) + "/chunked.png";
+                    {
+                        Result<PngWriter> writer = PngWriter::Create(
+                            path, width, height, Mapping{Domain::R2, 1}, 0.0f, 1.0f,
+                            PngCompression{filter, level});
+                        REQUIRE_OK_VOID(writer);
+                        std::vector<f32_t> row(width);
+                        for (u32_t y = 0; y < height; ++y) {
+                            for (u32_t x = 0; x < width; ++x) {
+                                row[x] = PatternValue(x, y);
+                            }
+                            REQUIRE_OK_VOID(writer->WriteRow(row.data()));
+                        }
+                        REQUIRE_OK_VOID(writer->Finish());
+                    }
+
+                    ++cases;
+                    const Decoded image = Decode(path);
+                    b8_t          good  = image.width == width && image.height == height
+                                 && image.bytes.size() == static_cast<usize_t>(width) * height * 2;
+                    for (u32_t y = 0; good && y < height; ++y) {
+                        for (u32_t x = 0; good && x < width; ++x) {
+                            const usize_t at = (static_cast<usize_t>(y) * width + x) * 2;
+                            const u32_t   got = (static_cast<u32_t>(image.bytes[at]) << 8)
+                                              | image.bytes[at + 1];
+                            good = got == Expected16(PatternValue(x, y));
+                        }
+                    }
+                    if (!good) {
+                        ++wrong;
+                        std::printf("FAIL %ux%u level %u filter %d did not round-trip\n", width,
+                                    height, level, static_cast<int>(filter));
+                    }
+                }
+            }
+        }
+    }
+    std::printf("     %u file(s) decoded to the exact samples\n", cases - wrong);
+    CHECK_EQ(wrong, u32_t{0});
+}
+
+void TestVectorChunking() {
+    test::Section("a three-channel image is chunked correctly too");
+
+    constexpr u32_t kWidth  = 70;
+    constexpr u32_t kHeight = 77; // two full chunks and thirteen rows.
+    const std::string path = std::string(kDirectory) + "/chunked_rgb.png";
+    {
+        Result<PngWriter> writer = PngWriter::Create(path, kWidth, kHeight, Mapping{Domain::R2, 3},
+                                                     0.0f, 1.0f, PngCompression{});
+        REQUIRE_OK_VOID(writer);
+        std::vector<f32_t> row(kWidth * 3);
+        for (u32_t y = 0; y < kHeight; ++y) {
+            for (u32_t x = 0; x < kWidth; ++x) {
+                // Vector outputs are remapped from [-1, 1], so [-1, 1] values cover the range.
+                row[x * 3 + 0] = PatternValue(x, y) * 2.0f - 1.0f;
+                row[x * 3 + 1] = PatternValue(x + 11, y + 5) * 2.0f - 1.0f;
+                row[x * 3 + 2] = PatternValue(x + 29, y + 17) * 2.0f - 1.0f;
+            }
+            REQUIRE_OK_VOID(writer->WriteRow(row.data()));
+        }
+        REQUIRE_OK_VOID(writer->Finish());
+    }
+    const Decoded image = Decode(path);
+    CHECK_EQ(image.width, kWidth);
+    CHECK_EQ(image.height, kHeight);
+    CHECK_EQ(static_cast<u32_t>(image.color), u32_t{2});
+    u32_t wrong = 0;
+    if (image.bytes.size() == static_cast<usize_t>(kWidth) * kHeight * 6) {
+        for (u32_t y = 0; y < kHeight; ++y) {
+            for (u32_t x = 0; x < kWidth; ++x) {
+                for (u32_t c = 0; c < 3; ++c) {
+                    const u32_t offsetX[3] = {0, 11, 29};
+                    const u32_t offsetY[3] = {0, 5, 17};
+                    const f32_t source =
+                        PatternValue(x + offsetX[c], y + offsetY[c]) * 2.0f - 1.0f;
+                    // [-1, 1] -> [0, 1] exactly as Quantize does it.
+                    const f32_t normalized = (source - -1.0f) / 2.0f;
+                    const usize_t at = ((static_cast<usize_t>(y) * kWidth + x) * 3 + c) * 2;
+                    const u32_t   got = (static_cast<u32_t>(image.bytes[at]) << 8) | image.bytes[at + 1];
+                    wrong += got != Expected16(normalized) ? 1 : 0;
+                }
+            }
+        }
+    } else {
+        wrong = 1;
+    }
+    CHECK_EQ(wrong, u32_t{0});
+}
+
+void TestBandSizeDoesNotChangeTheFile() {
+    test::Section("the same image is the same file whatever the band size");
+
+    // The claim the 16k acceptance run makes, at a size a unit test can afford: chunks are counted in
+    // rows from the top of the image, not from the top of a band, so cutting the image into bands of
+    // 7, 32 or 61 rows must not move a single byte.
+    constexpr u32_t kWidth  = 129;
+    constexpr u32_t kHeight = 200;
+    std::vector<std::string> contents;
+    for (const u32_t band : {7u, 32u, 61u, 200u}) {
+        const std::string path = std::string(kDirectory) + "/bands.png";
+        Result<PngWriter> writer = PngWriter::Create(path, kWidth, kHeight, Mapping{Domain::R2, 1},
+                                                     0.0f, 1.0f, PngCompression{});
+        REQUIRE_OK_VOID(writer);
+        BandEncoder encoder;
+        REQUIRE_OK_VOID(encoder.Start(std::move(*writer), kWidth, band, 1));
+        for (u32_t top = 0; top < kHeight; top += band) {
+            const u32_t rows = std::min(band, kHeight - top);
+            for (u32_t r = 0; r < rows; ++r) {
+                f32_t* row = encoder.Filling().Row(r);
+                for (u32_t x = 0; x < kWidth; ++x) {
+                    row[x] = PatternValue(x, top + r);
+                }
+            }
+            REQUIRE_OK_VOID(encoder.Submit(rows));
+        }
+        REQUIRE_OK_VOID(encoder.Finish());
+
+        std::ifstream stream(path, std::ios::binary);
+        contents.emplace_back((std::istreambuf_iterator<char>(stream)),
+                              std::istreambuf_iterator<char>());
+    }
+    CHECK(!contents[0].empty());
+    for (usize_t i = 1; i < contents.size(); ++i) {
+        CHECK(contents[i] == contents[0]);
+    }
+}
+
+void TestFilterAllStillWorks() {
+    test::Section("the libspng path, for the filter that tries all of them");
+
+    const std::string path = std::string(kDirectory) + "/all.png";
+    constexpr u32_t   kWidth  = 40;
+    constexpr u32_t   kHeight = 50;
+    {
+        Result<PngWriter> writer = PngWriter::Create(path, kWidth, kHeight, Mapping{Domain::R2, 1},
+                                                     0.0f, 1.0f,
+                                                     PngCompression{PngFilter::All, 2});
+        REQUIRE_OK_VOID(writer);
+        std::vector<f32_t> row(kWidth);
+        for (u32_t y = 0; y < kHeight; ++y) {
+            for (u32_t x = 0; x < kWidth; ++x) {
+                row[x] = PatternValue(x, y);
+            }
+            REQUIRE_OK_VOID(writer->WriteRow(row.data()));
+        }
+        REQUIRE_OK_VOID(writer->Finish());
+    }
+    const Decoded image = Decode(path);
+    u32_t         wrong = image.bytes.size() == kWidth * kHeight * 2 ? 0 : 1;
+    for (u32_t y = 0; wrong == 0 && y < kHeight; ++y) {
+        for (u32_t x = 0; wrong == 0 && x < kWidth; ++x) {
+            const usize_t at = (static_cast<usize_t>(y) * kWidth + x) * 2;
+            const u32_t   got = (static_cast<u32_t>(image.bytes[at]) << 8) | image.bytes[at + 1];
+            wrong += got != Expected16(PatternValue(x, y)) ? 1 : 0;
+        }
+    }
+    CHECK_EQ(wrong, u32_t{0});
+}
+
 } // namespace
 
 int main() {
@@ -228,6 +435,10 @@ int main() {
     TestGrayscaleBytes();
     TestClampingIsCountedAndSaturates();
     TestVectorThroughTheBandEncoder();
+    TestParallelDeflateRoundTrips();
+    TestVectorChunking();
+    TestBandSizeDoesNotChangeTheFile();
+    TestFilterAllStillWorks();
     TestSha256AndHashFile();
 
     memory::Shutdown();

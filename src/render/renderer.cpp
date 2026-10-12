@@ -1153,7 +1153,9 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     // tile the height range culled. One quad over the footprint of every resident tile, drawn after the
     // terrain; the depth test, not the draw order, is what keeps it behind the terrain (see
     // `viewer/water.vert.glsl`).
-    if (shadeWater && state.seaPipeline.IsValid()) {
+    // Zero opacity is no water at all, the open sea included: drawn anyway it left a blue plate at the
+    // edge of the ring that the terrain shading, skipped at alpha 0, did not explain.
+    if (shadeWater && water.opacity > 0.0f && state.seaPipeline.IsValid()) {
         f32_t minX = std::numeric_limits<f32_t>::max();
         f32_t minZ = minX;
         f32_t maxX = std::numeric_limits<f32_t>::lowest();

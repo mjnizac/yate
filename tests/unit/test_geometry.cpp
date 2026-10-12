@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -38,10 +39,20 @@ constexpr std::size_t  kSide      = 64;
 constexpr double       kSpacing   = 8.0;
 constexpr double       kOrigin    = -256.0;
 
+/// Where a field was sampled. The default is the 64 x 64 grid at 8 m over [-256, 256) that most cases use.
+struct Grid {
+    double      originX = kOrigin;
+    double      originZ = kOrigin;
+    double      spacing = kSpacing;
+    std::size_t side    = kSide;
+    std::size_t section = 16;
+};
+
 struct Field {
     std::vector<float> values;
     std::string        error;
-    [[nodiscard]] bool Ok() const { return values.size() == kSide * kSide; }
+    Grid               grid;
+    [[nodiscard]] bool Ok() const { return values.size() == grid.side * grid.side; }
 };
 
 [[nodiscard]] std::string ReadFile(const std::string& path) {
@@ -49,23 +60,26 @@ struct Field {
     return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
-/// Exports `body` (the text of a Lua `main`) over the test grid with `--raw`.
+/// Runs the exporter on `script` over `grid` with `--raw` and reads back the output named `output`.
 ///
-/// `body` returns its value as `local result`, and the wrapper names it the `d` output.
-[[nodiscard]] Field Export(const char* name, const std::string& body) {
-    Field             field;
-    const std::string script = std::string(kDirectory) + "/" + name + ".lua";
-    {
-        std::ofstream out(script, std::ios::binary);
-        out << "local function main()\n" << body
-            << "\n    return { d = { value = result, range = { -1000, 1000 } } }\nend\nreturn main\n";
-    }
-    const std::string directory = std::string(kDirectory) + "/" + name;
-    const std::string capture   = std::string(kDirectory) + "/capture.txt";
-    std::string       command   = std::string("\"") + TERRAIN_EXPORT_EXE + "\" --script \"" + script
-                          + "\" --min -256,-256 --max 256,256 --resolution 8 --section 16 --raw "
-                            "--out \""
-                          + directory + "\" > \"" + capture + "\" 2>&1";
+/// `extra` is appended to the command line (seed, parameters). Any failure is in `Field::error`, which
+/// carries the exporter's own text so a test can check what a user would have read.
+[[nodiscard]] Field RunExport(const std::string& script, const std::string& directory, const Grid& grid,
+                              const std::string& output, const std::string& extra = "") {
+    Field field;
+    field.grid = grid;
+
+    char range[160];
+    std::snprintf(range, sizeof(range), "--min %.6f,%.6f --max %.6f,%.6f --resolution %.6f --section %zu",
+                  grid.originX, grid.originZ,
+                  grid.originX + grid.spacing * static_cast<double>(grid.side),
+                  grid.originZ + grid.spacing * static_cast<double>(grid.side), grid.spacing,
+                  grid.section);
+
+    const std::string capture = std::string(kDirectory) + "/capture.txt";
+    std::string       command = std::string("\"") + TERRAIN_EXPORT_EXE + "\" --script \"" + script
+                          + "\" " + range + " --raw " + extra + " --out \"" + directory + "\" > \""
+                          + capture + "\" 2>&1";
 #ifdef _WIN32
     command = "\"" + command + "\"";
 #endif
@@ -74,17 +88,38 @@ struct Field {
         field.error = ReadFile(capture);
         return field;
     }
-    const std::string bytes = ReadFile(directory + "/d.raw");
-    if (bytes.size() == kSide * kSide * sizeof(float)) {
-        field.values.resize(kSide * kSide);
+    const std::string bytes = ReadFile(directory + "/" + output + ".raw");
+    if (bytes.size() == grid.side * grid.side * sizeof(float)) {
+        field.values.resize(grid.side * grid.side);
         std::memcpy(field.values.data(), bytes.data(), bytes.size());
     } else {
-        field.error = "d.raw is " + std::to_string(bytes.size()) + " bytes";
+        field.error = output + ".raw is " + std::to_string(bytes.size()) + " bytes";
     }
     return field;
 }
 
+/// Exports `body` (the text of a Lua `main`) over `grid`.
+///
+/// `body` returns its value as `local result`, and the wrapper names it the `d` output.
+[[nodiscard]] Field Export(const char* name, const std::string& body, const Grid& grid = Grid{},
+                           const std::string& extra = "") {
+    const std::string script = std::string(kDirectory) + "/" + name + ".lua";
+    {
+        std::ofstream out(script, std::ios::binary);
+        out << "local function main()\n" << body
+            << "\n    return { d = { value = result, range = { -1000, 1000 } } }\nend\nreturn main\n";
+    }
+    return RunExport(script, std::string(kDirectory) + "/" + name, grid, "d", extra);
+}
+
 using Expected = std::function<double(double x, double z)>;
+
+[[nodiscard]] double WorldX(const Field& field, std::size_t column) {
+    return field.grid.originX + field.grid.spacing * static_cast<double>(column);
+}
+[[nodiscard]] double WorldZ(const Field& field, std::size_t row) {
+    return field.grid.originZ + field.grid.spacing * static_cast<double>(row);
+}
 
 /// Compares every sample with `expected`, and reports the worst and where.
 void Compare(const char* label, const Field& field, const Expected& expected, double tolerance) {
@@ -94,33 +129,34 @@ void Compare(const char* label, const Field& field, const Expected& expected, do
         std::printf("FAIL %s: no field (%.200s)\n", label, field.error.c_str());
         return;
     }
-    double      worst   = 0.0;
-    std::size_t worstAt = 0;
-    for (std::size_t row = 0; row < kSide; ++row) {
-        for (std::size_t column = 0; column < kSide; ++column) {
-            const double x = kOrigin + kSpacing * static_cast<double>(column);
-            const double z = kOrigin + kSpacing * static_cast<double>(row);
-            const double error =
-                std::fabs(static_cast<double>(field.values[row * kSide + column]) - expected(x, z));
+    const std::size_t side    = field.grid.side;
+    double            worst   = 0.0;
+    std::size_t       worstAt = 0;
+    for (std::size_t row = 0; row < side; ++row) {
+        for (std::size_t column = 0; column < side; ++column) {
+            const double error = std::fabs(static_cast<double>(field.values[row * side + column])
+                                           - expected(WorldX(field, column), WorldZ(field, row)));
             if (error > worst) {
                 worst   = error;
-                worstAt = row * kSide + column;
+                worstAt = row * side + column;
             }
         }
     }
     if (worst > tolerance) {
         ++test::g_failures;
         std::printf("FAIL %s: worst error %.6g at sample (%zu, %zu), tolerance %.3g\n", label, worst,
-                    worstAt % kSide, worstAt / kSide, tolerance);
+                    worstAt % side, worstAt / side, tolerance);
         return;
     }
     std::printf("     %-34s worst error %.3g\n", label, worst);
 }
 
 [[nodiscard]] double At(const Field& field, double x, double z) {
-    const std::size_t column = static_cast<std::size_t>(std::llround((x - kOrigin) / kSpacing));
-    const std::size_t row    = static_cast<std::size_t>(std::llround((z - kOrigin) / kSpacing));
-    return field.Ok() ? static_cast<double>(field.values[row * kSide + column]) : 0.0;
+    const std::size_t column =
+        static_cast<std::size_t>(std::llround((x - field.grid.originX) / field.grid.spacing));
+    const std::size_t row =
+        static_cast<std::size_t>(std::llround((z - field.grid.originZ) / field.grid.spacing));
+    return field.Ok() ? static_cast<double>(field.values[row * field.grid.side + column]) : 0.0;
 }
 
 [[nodiscard]] double BoxDistance(double x, double z, double hx, double hz) {
@@ -526,7 +562,8 @@ void TestPreludeHash() {
 void TestReferenceTerrains() {
     test::Section("the reference terrains run and have relief");
 
-    const char* const scripts[] = {"volcanic_island", "mountain_range", "canyon", "mesas"};
+    const char* const scripts[] = {"volcanic_island", "mountain_range", "canyon", "mesas",
+                                   "coast"};
     for (const char* name : scripts) {
         const std::string directory = std::string(kDirectory) + "/ref_" + name;
         const std::string capture   = std::string(kDirectory) + "/capture.txt";
@@ -565,6 +602,592 @@ void TestReferenceTerrains() {
         // More than a hundred metres of relief over four kilometres: a flat field fails this.
         CHECK(*high - *low > 100.0f);
     }
+}
+
+// --- Audit: degenerate input, limits and numerical behaviour ---------------------------------------
+
+struct Point {
+    double x;
+    double z;
+};
+
+/// The distance to a polygon and its inside, written again in double precision with the ordinary
+/// even-odd rule. It shares no code with the kernel or with the chain the binding builds, so agreement
+/// says the chain is assembled in the right order, the wrap is right and the parity is right.
+[[nodiscard]] double ReferencePolygon(const std::vector<Point>& polygon, double px, double pz) {
+    double best   = 1e300;
+    bool   inside = false;
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+        const Point a = polygon[i];
+        const Point b = polygon[(i + 1) % polygon.size()];
+
+        const double bax = b.x - a.x;
+        const double baz = b.z - a.z;
+        const double pax = px - a.x;
+        const double paz = pz - a.z;
+        const double len = bax * bax + baz * baz;
+        double       h   = len > 0.0 ? (pax * bax + paz * baz) / len : 0.0;
+        h                = std::clamp(h, 0.0, 1.0);
+        best             = std::min(best, std::hypot(pax - bax * h, paz - baz * h));
+
+        if ((a.z > pz) != (b.z > pz)) {
+            const double xAt = a.x + (pz - a.z) * (b.x - a.x) / (b.z - a.z);
+            if (px < xAt) {
+                inside = !inside;
+            }
+        }
+    }
+    return inside ? -best : best;
+}
+
+[[nodiscard]] std::string LuaPoints(const std::vector<Point>& points) {
+    std::string text = "{ ";
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        char entry[64];
+        std::snprintf(entry, sizeof(entry), "{ %.6f, %.6f }%s", points[i].x, points[i].z,
+                      i + 1 < points.size() ? ", " : "");
+        text += entry;
+    }
+    return text + " }";
+}
+
+/// A deterministic pseudo-random polygon: a fixed generator, so a failure names a reproducible case.
+[[nodiscard]] std::vector<Point> RandomPolygon(std::uint32_t seed, std::size_t count, bool star) {
+    std::uint32_t state = seed * 2654435761u + 12345u;
+    const auto    next  = [&]() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<double>(state >> 8) / 16777216.0;
+    };
+    std::vector<Point> points;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (star) {
+            // Around a centre, so it is simple but concave.
+            const double angle  = 2.0 * 3.14159265358979323846 * static_cast<double>(i)
+                                  / static_cast<double>(count);
+            const double radius = 60.0 + 140.0 * next();
+            points.push_back({std::round(radius * std::cos(angle) * 1e6) / 1e6,
+                              std::round(radius * std::sin(angle) * 1e6) / 1e6});
+        } else {
+            // Anywhere: usually self-intersecting, which the even-odd rule still defines.
+            points.push_back({std::round((next() * 400.0 - 200.0) * 1e6) / 1e6,
+                              std::round((next() * 400.0 - 200.0) * 1e6) / 1e6});
+        }
+    }
+    return points;
+}
+
+void TestPolygonsAgainstReference() {
+    test::Section("polygons agree with an independent double-precision reference");
+
+    struct Case {
+        std::uint32_t seed;
+        std::size_t   count;
+        bool          star;
+    };
+    // Counts straddle the two-segments-per-node boundary (odd and even), and include the smallest
+    // polygon and one of 63 vertices, which is 32 nodes.
+    const Case cases[] = {{1, 3, true},  {2, 4, true},  {3, 5, true},  {4, 8, true},
+                          {5, 21, true}, {6, 63, true}, {7, 6, false}, {8, 17, false},
+                          {9, 40, false}};
+    for (const Case& c : cases) {
+        const std::vector<Point> polygon = RandomPolygon(c.seed, c.count, c.star);
+        char                     name[48];
+        std::snprintf(name, sizeof(name), "ref_polygon_%u", c.seed);
+        const Field field = Export(
+            name, "    local result = Geometry.Segments{ points = " + LuaPoints(polygon) + " }");
+        char label[96];
+        std::snprintf(label, sizeof(label), "%zu-gon, %s", c.count,
+                      c.star ? "star-shaped" : "random, self-intersecting");
+        // Both sides see the same decimal vertices. The GPU holds them as f32, so a sample within
+        // ~1e-4 m of an edge can flip sign, which changes the value by that much and no more.
+        Compare(label, field,
+                [&](double x, double z) { return ReferencePolygon(polygon, x, z); }, 2e-3);
+    }
+}
+
+void TestDegenerateGeometry() {
+    test::Section("degenerate shapes behave");
+
+    // A repeated vertex makes a zero-length segment: its distance is the distance to the point and it
+    // never crosses a scanline, so the polygon is the same polygon.
+    const std::vector<Point> square{{-104, -104}, {104, -104}, {104, 104}, {-104, 104}};
+    const std::vector<Point> repeated{{-104, -104}, {-104, -104}, {104, -104}, {104, 104},
+                                      {104, 104},   {-104, 104}};
+    Compare("repeated vertices change nothing",
+            Export("degen_repeat",
+                   "    local result = Geometry.Segments{ points = " + LuaPoints(repeated) + " }"),
+            [&](double x, double z) { return ReferencePolygon(square, x, z); }, 2e-3);
+
+    // Collinear vertices along an edge: the same square again.
+    const std::vector<Point> collinear{{-104, -104}, {0, -104}, {104, -104}, {104, 0},
+                                       {104, 104},   {0, 104},  {-104, 104}, {-104, 0}};
+    Compare("collinear vertices change nothing",
+            Export("degen_collinear",
+                   "    local result = Geometry.Segments{ points = " + LuaPoints(collinear) + " }"),
+            [&](double x, double z) { return ReferencePolygon(square, x, z); }, 2e-3);
+
+    // A polygon whose area is zero has no inside: the sign must never be negative.
+    const Field flat = Export(
+        "degen_flat", "    local result = Geometry.Segments{ points = { { -100, 0 }, { 100, 0 }, "
+                      "{ 0, 0 } } }");
+    ++test::g_checks;
+    if (!flat.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL zero-area polygon: no field (%.200s)\n", flat.error.c_str());
+    } else {
+        bool negative = false;
+        for (const float value : flat.values) {
+            negative = negative || value < -1e-3f;
+        }
+        CHECK(!negative);
+    }
+
+    // Exactly the centre of an ellipse: the distance bound divides by a zero gradient there, and the
+    // kernel falls back to the smaller radius, which is the true distance to the edge.
+    const Field ellipse = Export("degen_ellipse_centre",
+                                 "    local result = Geometry.Ellipse{ radii = { 128, 64 } }");
+    CHECK(std::fabs(At(ellipse, 0.0, 0.0) + 64.0) < 1e-4);
+
+    // A box exactly as rounded as it is wide is a stadium-free "pill": its smaller half-size is the
+    // rounding, so it is a circle on one axis. The distance is still the exact box distance.
+    Compare("a box rounded by its smaller half-size",
+            Export("degen_pill", "    local result = Geometry.Box{ size = { 200, 80 }, rounding = 40 }"),
+            [](double x, double z) {
+                // Two semicircles of radius 40 on a 120 m bar.
+                const double along = std::max(std::fabs(x) - 60.0, 0.0);
+                return std::hypot(along, z) - 40.0;
+            },
+            2e-4);
+}
+
+void TestLimitsAndInvalidInput() {
+    test::Section("limits and invalid input are refused, with the line");
+
+    // The segment limit is exact: 128 segments is the largest polygon and 129 is refused.
+    const auto ngon = [](int sides) {
+        std::vector<Point> points;
+        for (int i = 0; i < sides; ++i) {
+            const double angle = 2.0 * 3.14159265358979323846 * i / sides;
+            points.push_back({std::round(100.0 * std::cos(angle) * 1e6) / 1e6,
+                              std::round(100.0 * std::sin(angle) * 1e6) / 1e6});
+        }
+        return points;
+    };
+    Compare("a 128-gon is the largest polygon",
+            Export("limit_128",
+                   "    local result = Geometry.Segments{ points = " + LuaPoints(ngon(128)) + " }"),
+            [&](double x, double z) { return ReferencePolygon(ngon(128), x, z); }, 2e-3);
+
+    struct Refused {
+        const char* name;
+        std::string body;
+        const char* fragment;
+    };
+    const Refused refused[] = {
+        {"limit_129", "    local result = Geometry.Segments{ points = " + LuaPoints(ngon(129)) + " }",
+         "at most 128"},
+        {"limit_line_130",
+         "    local result = Geometry.Segments{ closed = false, points = " + LuaPoints(ngon(130))
+             + " }",
+         "at most 129 points"},
+        {"nan_radius", "    local result = Geometry.Circle{ radius = 0 / 0 }", "radius"},
+        {"inf_radius", "    local result = Geometry.Circle{ radius = math.huge }", "non-finite"},
+        {"inf_placement",
+         "    local p = Terrain.Transform{ at = { math.huge, 0 } }\n"
+         "    local result = Geometry.Circle{ position = p, radius = 5 }",
+         "finite"},
+        {"zero_box", "    local result = Geometry.Box{ size = { 0, 10 } }", "size"},
+        {"over_rounded_box", "    local result = Geometry.Box{ size = { 10, 10 }, rounding = 6 }",
+         "rounding"},
+        {"flat_ellipse", "    local result = Geometry.Ellipse{ radii = { 0, 5 } }", "radii"},
+        {"empty_polygon", "    local result = Shapes.Polygon{ points = {} }", "empty list"},
+        {"short_point", "    local result = Shapes.Polygon{ points = { { 0, 0 }, { 1 }, { 2, 2 } } }",
+         "pair"},
+        {"empty_union", "    local result = Shapes.Union{}", "at least two"},
+        {"negative_feather",
+         "    local result = Shapes.Mask{ shape = Shapes.Circle{ radius = 5 }, feather = -1 }",
+         "feather"},
+        {"warp_unknown_key", "    local result = Shapes.Warp{ amplitud = 5 }", "does not take"},
+        {"zero_profile_width",
+         "    local result = Curves.Profile{ input = Geometry.Circle{ radius = 5 }, kind = 'linear',\n"
+         "                                   width = 0 }",
+         "width"},
+        {"negative_terrace", "    local result = Curves.Terrace{ input = Terrain.Coords{}.x, step = -4 }",
+         "step"},
+        {"terrace_sharpness",
+         "    local result = Curves.Terrace{ input = Terrain.Coords{}.x, step = 4, sharpness = 2 }",
+         "sharpness"},
+        {"negative_smooth",
+         "    local c = Geometry.Circle{ radius = 5 }\n"
+         "    local result = Combine.SmoothMax{ a = c, b = c, k = -3 }",
+         "greater than zero"},
+        {"ridge_one_point",
+         "    local result = Landforms.Ridge{ points = { { 0, 0 } }, width = 50, height = 10 }",
+         "at least 2"},
+        {"zero_ridge_width",
+         "    local result = Landforms.Ridge{ points = { { 0, 0 }, { 50, 0 } }, width = 0, height = 10 }",
+         "width"},
+    };
+    for (const Refused& r : refused) {
+        const Field field = Export(r.name, r.body);
+        ++test::g_checks;
+        const bool named = field.error.find(std::string(r.name) + ".lua:") != std::string::npos;
+        if (field.Ok() || field.error.find(r.fragment) == std::string::npos || !named) {
+            ++test::g_failures;
+            std::printf("FAIL %s: expected '%s' with the script's line, got: %.260s\n", r.name,
+                        r.fragment, field.Ok() ? "success" : field.error.c_str());
+        }
+    }
+}
+
+void TestOriginAndResolution() {
+    test::Section("far from the origin, and at other resolutions");
+
+    // Positions that are multiples of 8 m are exact in f32 out to 2^21, so a shape far from the origin
+    // is as exact as one at it.
+    Grid far;
+    far.originX = 500000.0;
+    far.originZ = 500000.0;
+    const std::string placed =
+        "    local at = Terrain.Transform{ at = { 500256, 500256 } }\n"
+        "    local result = Geometry.Circle{ position = at, radius = 100 }";
+    Compare("5e5 m from the origin, exact spacing", Export("far_exact", placed, far),
+            [](double x, double z) { return std::hypot(x - 500256.0, z - 500256.0) - 100.0; }, 1e-3);
+
+    // A spacing f32 cannot hold exactly puts each sample position off by up to half a ulp, which at
+    // 5e5 m is 0.016 m. That is a property of positions in f32, not of the shape, and the bound is the
+    // ulp: the test says it rather than hiding it in a loose tolerance.
+    // The exporter snaps `--min` to the nearest sample index, and a sample's position is that integer
+    // times the spacing, both in f32. The reference does the same, so what is measured is the shape
+    // and not where the grid happened to land.
+    Grid fine = far;
+    fine.spacing = 0.7;
+    const long long firstIndex = std::llround(far.originX / fine.spacing);
+    Compare("5e5 m from the origin, inexact spacing", Export("far_inexact", placed, fine),
+            [&](double x, double z) {
+                const long long column = std::llround((x - fine.originX) / fine.spacing);
+                const long long row    = std::llround((z - fine.originZ) / fine.spacing);
+                const float     px = static_cast<float>(firstIndex + column) * 0.7f;
+                const float     pz = static_cast<float>(firstIndex + row) * 0.7f;
+                return std::hypot(static_cast<double>(px) - 500256.0,
+                                  static_cast<double>(pz) - 500256.0) - 100.0;
+            },
+            2e-3);
+
+    // The same graph at 8 m and 16 m over the same world: the coarse samples are a subset of the fine
+    // ones, and a pointwise graph must agree on them exactly. Noise is in it, through the warp.
+    const std::string body =
+        "    local position = Shapes.Warp{ amplitude = 40, seed = 5 }\n"
+        "    local cone = Landforms.Cone{ at = { 30, -20 }, radius = 180, height = 90,\n"
+        "                                 position = position }\n"
+        "    local ridge = Landforms.Ridge{ points = { { -220, 80 }, { 0, 140 }, { 200, 60 } },\n"
+        "                                   width = 70, height = 40, position = position }\n"
+        "    local result = Combine.SmoothMax{ a = cone, b = ridge, k = 15 }";
+    Grid coarse;
+    coarse.spacing = 16.0;
+    coarse.side    = 32;
+    const Field fineField   = Export("res_8", body);
+    const Field coarseField = Export("res_16", body, coarse);
+    ++test::g_checks;
+    if (!fineField.Ok() || !coarseField.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL resolutions: no field (%.200s)\n",
+                    (fineField.Ok() ? coarseField.error : fineField.error).c_str());
+    } else {
+        std::size_t differing = 0;
+        for (std::size_t row = 0; row < coarse.side; ++row) {
+            for (std::size_t column = 0; column < coarse.side; ++column) {
+                const float a = coarseField.values[row * coarse.side + column];
+                const float b = fineField.values[(2 * row) * kSide + 2 * column];
+                differing += std::memcmp(&a, &b, sizeof(float)) != 0 ? 1 : 0;
+            }
+        }
+        std::printf("     8 m against 16 m: %zu of %zu coincident samples differ\n", differing,
+                    coarse.side * coarse.side);
+        CHECK_EQ(differing, std::size_t{0});
+    }
+}
+
+void TestContinuity() {
+    test::Section("profiles are continuous, across section borders too");
+
+    // 2 m samples and 16-sample sections: a border every 32 m. A step in the profile, or a seam
+    // between sections, would show as a jump larger than the steepest slope times the spacing.
+    Grid fine;
+    fine.spacing = 2.0;
+    fine.side    = 256;
+    fine.section = 16;
+
+    struct Landform {
+        const char* name;
+        const char* body;
+        double      steepest; // metres of height per metre of ground
+    };
+    const Landform landforms[] = {
+        // Linear cone: 100 m over 200 m.
+        {"cont_cone", "    local result = Landforms.Cone{ radius = 200, height = 100 }", 0.5},
+        // Smoothstep: the steepest point is 1.5 x the average slope.
+        {"cont_dome",
+         "    local result = Landforms.Dome{ radius = 200, height = 100, profile = 'smooth' }", 0.75},
+        // The scarp: plateau profile over edge + falloff = 44 m, smoothstep, so 1.5 / 44 per metre.
+        {"cont_plateau",
+         "    local result = Landforms.Plateau{ size = { 300, 200 }, height = 100, rotation = 25,\n"
+         "                                     edge = 4, falloff = 40 }",
+         100.0 * 1.5 / 44.0},
+        {"cont_ridge",
+         "    local result = Landforms.Ridge{ points = { { -200, -40 }, { 0, 60 }, { 200, -20 } },\n"
+         "                                   width = 120, height = 60, profile = 'linear' }",
+         60.0 / 60.0 * 1.2},
+    };
+    for (const Landform& l : landforms) {
+        const Field field = Export(l.name, l.body, fine);
+        ++test::g_checks;
+        if (!field.Ok()) {
+            ++test::g_failures;
+            std::printf("FAIL %s: no field (%.200s)\n", l.name, field.error.c_str());
+            continue;
+        }
+        double widest = 0.0;
+        for (std::size_t row = 0; row < fine.side; ++row) {
+            for (std::size_t column = 0; column + 1 < fine.side; ++column) {
+                const double a = field.values[row * fine.side + column];
+                const double b = field.values[row * fine.side + column + 1];
+                const double c = column < fine.side && row + 1 < fine.side
+                                     ? field.values[(row + 1) * fine.side + column]
+                                     : a;
+                widest = std::max({widest, std::fabs(b - a), std::fabs(c - a)});
+            }
+        }
+        const double bound = l.steepest * fine.spacing * 1.02 + 1e-3;
+        std::printf("     %-14s largest step %.3f m between neighbours, bound %.3f m\n", l.name,
+                    widest, bound);
+        CHECK(widest <= bound);
+    }
+}
+
+void TestSectionsAndInteraction() {
+    test::Section("shapes through erosion, noise and sections");
+
+    // A graph that mixes every kind of op: shapes, noise, a mask, a terrace, hydraulic and thermal
+    // erosion with a blur between. Exported twice with different section sizes, which has to agree
+    // to the byte, because the halo of the erosion crosses every border.
+    const std::string script = std::string(kDirectory) + "/interaction.lua";
+    {
+        std::ofstream out(script, std::ios::binary);
+        out << R"(local function main(params)
+    local position = Shapes.Warp{ amplitude = 30, frequency = 0.01, seed = params.seed }
+    local hill = Landforms.Cone{ at = { 20, 10 }, radius = 150, height = 80, position = position }
+    local mesa = Landforms.Plateau{ at = { -90, -70 }, size = { 120, 90 }, height = 60, rotation = 30,
+                                    edge = 3, falloff = 25, position = position }
+    local noise = Noises.fBm{ frequency = 0.02, octaves = 4, amplitude = 12, seed = params.seed + 1 }
+    local mask = Shapes.Mask{ shape = Shapes.Circle{ radius = 170, position = position }, feather = 40 }
+    local land = Combine.SmoothMax{ a = hill, b = mesa, k = 14 } + noise.value * mask
+    local stepped = Curves.Terrace{ input = land, step = 12, sharpness = 0.6 }
+    local carved = Erosion.Hydraulic{ input = stepped, iterations = 6, rain = 0.3, capacity = 20 }
+    local smooth = Filters.Blur{ input = carved, radius = 1 }
+    local settled = Erosion.Thermal{ input = smooth, iterations = 5, talus = 1.0, strength = 0.3 }
+    return { d = { value = settled, range = { -50, 200 } } }
+end
+return main
+)";
+    }
+    Grid wide;
+    wide.spacing = 4.0;
+    wide.side    = 128;
+    Grid small = wide;
+    small.section = 16;
+    wide.section  = 64;
+    const Field whole  = RunExport(script, std::string(kDirectory) + "/interaction_64", wide, "d",
+                                   "--seed 11");
+    const Field pieces = RunExport(script, std::string(kDirectory) + "/interaction_16", small, "d",
+                                   "--seed 11");
+    ++test::g_checks;
+    if (!whole.Ok() || !pieces.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL interaction: no field (%.200s)\n",
+                    (whole.Ok() ? pieces.error : whole.error).c_str());
+        return;
+    }
+    const bool identical = std::memcmp(whole.values.data(), pieces.values.data(),
+                                       whole.values.size() * sizeof(float)) == 0;
+    std::printf("     sections of 64 and 16 samples: %s\n", identical ? "byte-identical" : "DIFFER");
+    CHECK(identical);
+
+    // And it is deterministic: the same job twice gives the same bytes.
+    const Field again = RunExport(script, std::string(kDirectory) + "/interaction_64b", wide, "d",
+                                  "--seed 11");
+    ++test::g_checks;
+    CHECK(again.Ok() && std::memcmp(whole.values.data(), again.values.data(),
+                                    whole.values.size() * sizeof(float)) == 0);
+}
+
+/// Numbers that say whether a terrain is *sane*. Not whether it is convincing: that is a person's eye.
+struct Indicators {
+    double      low = 0.0;
+    double      high = 0.0;
+    double      below = 0.0;  // fraction under sea level
+    double      steepest = 0.0;
+    double      p99 = 0.0;
+    std::size_t bad = 0;       // NaN or infinite
+};
+
+[[nodiscard]] Indicators Measure(const Field& field) {
+    Indicators out;
+    const std::size_t side = field.grid.side;
+    out.low  = 1e300;
+    out.high = -1e300;
+    std::size_t below = 0;
+    std::vector<double> slopes;
+    slopes.reserve(side * side);
+    for (std::size_t row = 0; row < side; ++row) {
+        for (std::size_t column = 0; column < side; ++column) {
+            const double v = field.values[row * side + column];
+            if (!std::isfinite(v)) {
+                ++out.bad;
+                continue;
+            }
+            out.low  = std::min(out.low, v);
+            out.high = std::max(out.high, v);
+            below += v < 0.0 ? 1 : 0;
+            if (column + 1 < side && row + 1 < side) {
+                const double dx = (field.values[row * side + column + 1] - v) / field.grid.spacing;
+                const double dz = (field.values[(row + 1) * side + column] - v) / field.grid.spacing;
+                slopes.push_back(std::hypot(dx, dz));
+            }
+        }
+    }
+    out.below = static_cast<double>(below) / static_cast<double>(side * side);
+    std::sort(slopes.begin(), slopes.end());
+    out.steepest = slopes.empty() ? 0.0 : slopes.back();
+    out.p99      = slopes.empty() ? 0.0 : slopes[slopes.size() * 99 / 100];
+    return out;
+}
+
+void TestTerrainIndicators() {
+    test::Section("complete terrains: finite, in range, sane slopes, deterministic");
+
+    // 4 km at 16 m: 256 x 256 samples. Slopes are rise over run between neighbours at that spacing, so
+    // a scarp reads as steep and a cliff steeper; the bounds are what each terrain's own design allows.
+    Grid grid;
+    grid.originX = -2048.0;
+    grid.originZ = -2048.0;
+    grid.spacing = 16.0;
+    grid.side    = 256;
+    grid.section = 128;
+
+    struct Terrain {
+        const char* name;
+        double      lowest;      // declared range of the script, which the result must stay inside
+        double      highest;
+        double      steepest;    // an upper bound on neighbour slope at 16 m
+        double      seaFraction; // expected share below 0 m, +- 0.15
+    };
+    const Terrain terrains[] = {
+        // The land is a disc of about 1100 m radius (where the cone crosses 0 m) in a 4096 m window:
+        // 23% of it, so 77% under the sea.
+        {"volcanic_island", -150.0, 760.0, 2.5, 0.77},
+        // 66 degrees at the 99th percentile at 16 m spacing: the ridged detail has a 240 m wavelength
+        // and four octaves, so the finest is about 30 m, two samples. Steep, and measured.
+        {"mountain_range", -300.0, 1785.0, 4.0, 0.0},
+        {"canyon", 0.0, 640.0, 12.0, 0.0},
+        {"mesas", -120.0, 660.0, 12.0, 0.0},
+        {"coast", -110.0, 255.0, 4.5, 0.4},
+    };
+    for (const Terrain& t : terrains) {
+        const std::string script =
+            std::string(ENGINE_SOURCE_ROOT) + "/assets/scripts/shapes/" + t.name + ".lua";
+        const std::string directory = std::string(kDirectory) + "/ind_" + t.name;
+        const Field       first     = RunExport(script, directory, grid, "height", "--seed 7");
+        ++test::g_checks;
+        if (!first.Ok()) {
+            ++test::g_failures;
+            std::printf("FAIL %s: no field (%.260s)\n", t.name, first.error.c_str());
+            continue;
+        }
+        const Indicators m = Measure(first);
+        std::printf("     %-16s %7.1f to %7.1f m | %4.0f%% under 0 | slope p99 %.2f max %.2f\n", t.name,
+                    m.low, m.high, m.below * 100.0, m.p99, m.steepest);
+        CHECK_EQ(m.bad, std::size_t{0});
+        CHECK(m.low >= t.lowest);
+        CHECK(m.high <= t.highest);
+        CHECK(m.high - m.low > 100.0);
+        CHECK(m.steepest <= t.steepest);
+        CHECK(std::fabs(m.below - t.seaFraction) <= 0.12);
+
+        // The same seed and bounds again: identical bytes.
+        const Field second = RunExport(script, directory + "_b", grid, "height", "--seed 7");
+        ++test::g_checks;
+        CHECK(second.Ok() && std::memcmp(first.values.data(), second.values.data(),
+                                         first.values.size() * sizeof(float)) == 0);
+    }
+}
+
+/// The sidecar's `statistics` block for the single output `d`, read back as text.
+struct SidecarStatistics {
+    bool   found     = false;
+    double minimum   = 0.0;
+    double maximum   = 0.0;
+    double mean      = 0.0;
+    double samples   = 0.0;
+    double nonFinite = 0.0;
+};
+
+[[nodiscard]] SidecarStatistics ReadStatistics(const std::string& directory) {
+    SidecarStatistics out;
+    const std::string text = ReadFile(directory + "/metadata.json");
+    const std::size_t at   = text.find("\"statistics\"");
+    if (at == std::string::npos) {
+        return out;
+    }
+    const auto number = [&](const char* key) {
+        const std::string needle = std::string("\"") + key + "\": ";
+        const std::size_t k      = text.find(needle, at);
+        return k == std::string::npos ? 0.0 : std::strtod(text.c_str() + k + needle.size(), nullptr);
+    };
+    out.found     = true;
+    out.minimum   = number("min");
+    out.maximum   = number("max");
+    out.mean      = number("mean");
+    out.samples   = number("samples");
+    out.nonFinite = number("non_finite");
+    return out;
+}
+
+void TestStatistics() {
+    test::Section("the sidecar says what the samples came to");
+
+    // A constant: everything is the value and there is nothing else.
+    (void)Export("stat_const", "    local result = Terrain.Const{ value = -50 }");
+    const SidecarStatistics flat = ReadStatistics(std::string(kDirectory) + "/stat_const");
+    CHECK(flat.found);
+    CHECK_EQ(flat.samples, static_cast<double>(kSide * kSide));
+    CHECK_EQ(flat.minimum, -50.0);
+    CHECK_EQ(flat.maximum, -50.0);
+    CHECK(std::fabs(flat.mean + 50.0) < 1e-9);
+    CHECK_EQ(flat.nonFinite, 0.0);
+
+    // A cone: the apex is a sample, the foot is zero, and the mean is the sum of the same formula.
+    (void)Export("stat_cone", "    local result = Landforms.Cone{ radius = 150, height = 100 }");
+    const SidecarStatistics cone = ReadStatistics(std::string(kDirectory) + "/stat_cone");
+    double                  sum  = 0.0;
+    for (std::size_t row = 0; row < kSide; ++row) {
+        for (std::size_t column = 0; column < kSide; ++column) {
+            const double x = kOrigin + kSpacing * static_cast<double>(column);
+            const double z = kOrigin + kSpacing * static_cast<double>(row);
+            sum += 100.0 * std::clamp((150.0 - std::hypot(x, z)) / 150.0, 0.0, 1.0);
+        }
+    }
+    CHECK(cone.found);
+    CHECK(std::fabs(cone.maximum - 100.0) < 1e-3);
+    CHECK_EQ(cone.minimum, 0.0);
+    CHECK(std::fabs(cone.mean - sum / static_cast<double>(kSide * kSide)) < 1e-3);
+
+    // A field of NaN: the 16-bit PNG would store it as terrain, so the count is what says it is not.
+    (void)Export("stat_nan", "    local result = Terrain.Const{ value = 0 / 0 }");
+    const SidecarStatistics broken = ReadStatistics(std::string(kDirectory) + "/stat_nan");
+    CHECK(broken.found);
+    CHECK_EQ(broken.nonFinite, static_cast<double>(kSide * kSide));
+    CHECK_EQ(broken.samples, 0.0);
 }
 
 void TestErrors() {
@@ -629,6 +1252,14 @@ int main() {
     TestPreludeErrors();
     TestPreludeHash();
     TestReferenceTerrains();
+    TestPolygonsAgainstReference();
+    TestDegenerateGeometry();
+    TestLimitsAndInvalidInput();
+    TestOriginAndResolution();
+    TestContinuity();
+    TestSectionsAndInteraction();
+    TestTerrainIndicators();
+    TestStatistics();
 
     return test::Summary("test_geometry");
 }

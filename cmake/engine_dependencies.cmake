@@ -257,6 +257,9 @@ target_link_libraries(engine_third_party INTERFACE
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
     spng_static
+    # The PNG writer builds its deflate stream from zlib-ng directly (see output_writer.cpp), so the
+    # engine links it as well as libspng.
+    ZLIB::ZLIB
     spdlog::spdlog
     mimalloc-static
     Tracy::TracyClient

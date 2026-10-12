@@ -1042,3 +1042,62 @@ were wrong. That is its own section above, and it was fixed first, with the test
 Caves, arches and overhangs (one height per x, z), shapes in `R3`, rivers and channel networks, and
 reading polygons from a file. A polygon is capped at 128 segments because each pair is a pass over
 every sample.
+
+## The PNG encoder, measured and then parallelised
+
+The benchmark said, as it had before, that the encoder is the export. 4096 square, `basic.lua`, section
+512, best of three on a GTX 1070 and an i7-4790:
+
+| setting | total | GPU | readback | wait on the encoder | size |
+| --- | --- | --- | --- | --- | --- |
+| level 0, filter up | 0.80 s | 0.17 s | 0.23 s | 0.38 s | 134 MB |
+| level 1, filter up | 2.07 s | | | 1.49 s | 129 MB |
+| level 2, filter up (default) | 2.80 s | 0.17 s | 0.23 s | 2.13 s | 109 MB |
+| level 6, filter up | 3.78 s | | | 2.98 s | 108 MB |
+| level 2, filter all | 5.03 s | | | 4.10 s | 110 MB |
+| `--raw` | 0.45 s | 0.17 s | 0.23 s | 0.13 s | 268 MB |
+
+GPU and readback together are 14% of the default. A level 0 stream still takes 0.8 s, so about a third of
+the cost is not deflate at all (quantising, filtering, checksumming and writing). Within an output the
+work was one thread; the two outputs already ran on one thread each, and the three-channel normals, with
+three times the bytes, set the wall time.
+
+**What was built.** The zlib stream is cut into chunks of 32 rows counted from the top of the image, each
+deflated on its own as raw deflate ending in a sync flush, by a team of up to four threads per output, and
+written in order as one IDAT per chunk; the zlib header goes in front of the first and the Adler-32 of the
+whole, folded with `adler32_combine`, behind the last. It is pigz's construction.
+
+**What it has to keep, and the checks.**
+
+* The pixels. 192 images across widths 1, 3 and 257, heights around the chunk size (1, 2, 31, 32, 33, 64,
+  65, 200), levels 0, 1, 2 and 6 and both filters decode through libspng, which verifies the checksum, to
+  exactly the samples written; an RGB image with a partial last chunk does too; every dataset golden,
+  recorded by the previous encoder, matches at tolerance 0.
+* The claim that a different section size does not change a byte. Chunks are fixed rows from the top, not
+  from the top of a band, so a band of 7, 32, 61 or 200 rows gives the same file, and the 16k export is
+  byte-identical at sections 512 and 1024.
+* Size. The same 109.2 MB; a fresh dictionary every 32 rows costs nothing visible.
+
+**Result**, same machine, alternating old and new binaries, three of each, 12 s between runs:
+
+| | old | new |
+| --- | --- | --- |
+| 4096 square | 2.91, 2.95, 2.97 s | 0.94, 0.96, 0.96 s |
+| 8192 square | 18.9, 19.9, 22.6 s | 5.4, 12.1, 14.3 s |
+
+At 4096 it is 3.1x and steady. At 8192 the new encoder's deflate is 3.4 s of wall time (13.8 s of CPU on
+four threads, about 29 MB/s a core on 16-bit data with a 2014 core), and what moves between runs is
+`fwrite`: 1.1, 2.5 and 3.6 s on three consecutive runs, because the output drive is a hard disk taking
+the previous run's dirty pages. Timing a heavy export right after another measures the disk. The
+instrumentation that told these apart is a log line per PNG with the compression CPU time, the time the
+producer was blocked and the time in `fwrite`.
+
+**Statistics.** The exporter now computes min, max, mean and the count of non-finite samples of each
+output as it reads tiles back, and writes them into the sidecar. It costs about 40 ms on the 4096
+export (4%). The reason is the NaN count: a 16-bit PNG stores NaN and infinity as 0 or 65535, which is
+terrain, and nothing before this would have said so.
+
+**Why not more.** A faster library such as libdeflate has no streaming interface, and an export that has
+to hold the whole image to compress it is the memory behaviour this pipeline exists to avoid. Filtering
+and quantising are still on the producer thread; making them parallel is the next lever and was not
+needed to take the encoder off the critical path at 4k.

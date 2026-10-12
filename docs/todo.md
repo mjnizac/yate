@@ -25,17 +25,33 @@ full history is in the git log.
 
 ## Testing
 
-- [ ] **The CI workflow has never run.** `.github/workflows/ci.yml` builds with MSVC (Debug, Release) and
-      runs the six suites that need no device on every push; Linux with GCC and Clang under ASan and
-      UBSan is there too and is allowed to fail, because the engine has only ever been built with MSVC
-      on Windows; and a GPU job runs the whole suite plus the 16k section-size acceptance on a
-      self-hosted runner when the repository variable `GPU_RUNNER` is `true`. None of that is verified
-      until it has run once on GitHub. Expect the first Linux run to fail, and the action's Vulkan SDK
-      version to need adjusting.
+- [ ] **CI is red on Windows since milestone 11, and Linux has never built.** `ci.yml` has run on
+      GitHub (read from the public API; the logs need admin rights). Run `9dba657` passed on Windows.
+      Runs `39092a3` and `ccd62ee` fail in the step "Tests that need no device" on both Windows
+      configurations, and every Linux job fails in "Build" in every run. The Windows failure does **not**
+      reproduce here: a clean clone of `ccd62ee`, configured and built exactly as the workflow does, with
+      CRLF checkout and with the Vulkan drivers disabled, passes all six suites. The failing step's log is
+      the missing piece: it names the suite. The same goes for the Linux compile errors.
 
 - [ ] **One GPU, one vendor, one OS.** Everything has been validated on a GTX 1070 on Windows. Queue
       family selection, memory types, readback and the swapchain are exactly the areas where AMD and
       Intel differ. It needs hardware, and the GPU job above is how it would be exercised.
+
+- [ ] **The open sea ends at the ring.** The quad that draws water where no terrain was covers the
+      footprint of the resident tiles, so a surface at 0 m above a floor at -50 m shows a plate whose far
+      edge floats above the terrain's. Extending it to the far plane would paint sea over a world that
+      has not been evaluated, which is the less honest of the two.
+
+- [ ] **No introspection of the API.** An agent can learn a call's keys only from the docs or from the
+      error an unknown key produces, which lists them. A generated catalogue would need the bindings to
+      declare their parameters in data instead of reading them as they go.
+
+- [ ] **User macros cannot be shared between scripts.** `require`, `dofile` and `load` are removed on
+      purpose, and the prelude is a closed list of files. A script can define its own local functions;
+      sharing them across scripts needs a loading mechanism and a security decision, neither made.
+
+- [ ] **Slope statistics.** The sidecar reports min, max, mean and the count of non-finite samples. Slope
+      percentiles are computed by `test_geometry` from the raw export and are not in the sidecar.
 
 ## Not yet decided
 

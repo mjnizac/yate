@@ -23,6 +23,7 @@
 #include <engine/vulkan/window.hpp>
 #include <engine/window_layer.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -629,6 +630,146 @@ int main() {
                 const f64_t differs = MeanDifferenceBand(wallWet, wallDry, 0.08, 0.45);
                 std::printf("     water on against off over the wall: %.2f codes\n", differs);
                 CHECK(differs < 2.0);
+
+                test::Section("water defaults and limits");
+                // What a viewer that was never told anything about water does.
+                const ViewerLayer::Water defaults;
+                CHECK(!defaults.enabled);
+                CHECK_EQ(defaults.level, 0.0f);
+                CHECK_EQ(defaults.opacity, 0.75f);
+                CHECK_EQ(defaults.colour[0], 0.10f);
+                CHECK_EQ(defaults.colour[1], 0.28f);
+                CHECK_EQ(defaults.colour[2], 0.38f);
+
+                reloadFlat(-50.0);
+                viewer.MoveCameraTo(0.0f, 120.0f, -400.0f);
+                window.StopAfter(window.FramesPresented() + 30);
+                (*application)->Run();
+                for (int round = 0; round < 40 && viewer.MissingTiles() != 0; ++round) {
+                    window.StopAfter(window.FramesPresented() + 10);
+                    (*application)->Run();
+                }
+
+                ViewerLayer::Water limit;
+                limit.enabled = false;
+                viewer.SetWater(limit);
+                const Frame base = shoot("water_limit_dry");
+
+                // A level far below everything: nothing is under it, so nothing changes.
+                limit.enabled = true;
+                limit.level   = -1.0e6f;
+                viewer.SetWater(limit);
+                const f64_t farBelow = MeanDifferenceClear(base, shoot("water_limit_far_below"));
+                std::printf("     level -1e6: %.3f codes of change\n", farBelow);
+                CHECK(farBelow < 0.5);
+
+                // Zero opacity is the same as no water, for the terrain.
+                limit.level   = 0.0f;
+                limit.opacity = 0.0f;
+                viewer.SetWater(limit);
+                const f64_t clear = MeanDifferenceClear(base, shoot("water_limit_opacity_0"));
+                std::printf("     opacity 0: %.3f codes of change\n", clear);
+                CHECK(clear < 0.5);
+
+                // The open sea: water is drawn where no terrain was, which here is the sky above the far
+                // edge of the ring, because the surface at 0 m stands above a floor at -50 m. Pixels that
+                // are the clear colour without water and something else with it are that surface.
+                limit.level   = 0.0f;
+                limit.opacity = 0.75f;
+                viewer.SetWater(limit);
+                const Frame sea = shoot("water_open_sea");
+                usize_t     openWater = 0;
+                for (u32_t y = 0; y < sea.height; ++y) {
+                    for (u32_t x = static_cast<u32_t>(sea.width * kClearOfPanelsX); x < sea.width;
+                         ++x) {
+                        const usize_t i = (static_cast<usize_t>(y) * sea.width + x) * 3;
+                        int           dryDelta = 0;
+                        int           wetDelta = 0;
+                        for (usize_t c = 0; c < 3; ++c) {
+                            dryDelta = std::max(dryDelta, std::abs(static_cast<int>(base.rgb[i + c]) - kClearSrgb[c]));
+                            wetDelta = std::max(wetDelta, std::abs(static_cast<int>(sea.rgb[i + c]) - kClearSrgb[c]));
+                        }
+                        openWater += dryDelta <= 6 && wetDelta > 6 ? 1 : 0;
+                    }
+                }
+                std::printf("     open water over what was background: %zu pixel(s)\n", openWater);
+                CHECK(openWater > 100);
+
+                // A level far above the eye with full opacity: every ray is under water for its whole
+                // length, so every terrain pixel is exactly the water colour. Linear (0.10, 0.28, 0.38)
+                // through the sRGB transfer function is (89, 143, 165).
+                limit.level   = 1.0e6f;
+                limit.opacity = 1.0f;
+                viewer.SetWater(limit);
+                const Frame deepWater = shoot("water_limit_deep");
+                // The median over the region clear of the panels, not the mean: the horizon crosses it,
+                // and a few rows of sky are not what is being measured.
+                const auto channel = [&](const Frame& frame, usize_t c) {
+                    const u32_t first = static_cast<u32_t>(frame.width * kClearOfPanelsX);
+                    const u32_t top   = static_cast<u32_t>(frame.height * kClearOfPanelsY);
+                    std::vector<u8_t> values;
+                    for (u32_t y = top; y < frame.height; ++y) {
+                        for (u32_t x = first; x < frame.width; ++x) {
+                            values.push_back(
+                                frame.rgb[(static_cast<usize_t>(y) * frame.width + x) * 3 + c]);
+                        }
+                    }
+                    std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+                    return values.empty() ? 0.0 : static_cast<f64_t>(values[values.size() / 2]);
+                };
+                // The colour is packed to 8 bits (26, 71, 97 of 255) and leaves through the sRGB
+                // transfer function: (90, 144, 166).
+                std::printf("     full opacity, deep: %.0f %.0f %.0f (expect 90 144 166)\n",
+                            channel(deepWater, 0), channel(deepWater, 1), channel(deepWater, 2));
+                CHECK(std::fabs(channel(deepWater, 0) - 90.0) <= 2.0);
+                CHECK(std::fabs(channel(deepWater, 1) - 144.0) <= 2.0);
+                CHECK(std::fabs(channel(deepWater, 2) - 166.0) <= 2.0);
+
+                // A grey water colour of known linear value through the sRGB swapchain: the output is
+                // the sRGB encoding of the colour as quantised to 8 bits, to within a code.
+                for (const f32_t grey : {0.1f, 0.25f, 0.5f, 0.75f}) {
+                    limit.colour = {grey, grey, grey};
+                    viewer.SetWater(limit);
+                    const Frame greyFrame = shoot("water_limit_grey");
+                    const f64_t quantised = std::round(static_cast<f64_t>(grey) * 255.0) / 255.0;
+                    const f64_t encoded =
+                        255.0 * (1.055 * std::pow(quantised, 1.0 / 2.4) - 0.055);
+                    std::printf("     linear %.2f -> %.0f (sRGB %.1f)\n", static_cast<f64_t>(grey),
+                                channel(greyFrame, 1), encoded);
+                    CHECK(std::fabs(channel(greyFrame, 1) - encoded) <= 1.5);
+                }
+                // Black and white water: the extremes of the colour range stay at the extremes.
+                limit.colour = {0.0f, 0.0f, 0.0f};
+                viewer.SetWater(limit);
+                const Frame black = shoot("water_limit_black");
+                CHECK(channel(black, 0) < 3.0 && channel(black, 1) < 3.0 && channel(black, 2) < 3.0);
+                limit.colour = {1.0f, 1.0f, 1.0f};
+                viewer.SetWater(limit);
+                const Frame white = shoot("water_limit_white");
+                CHECK(channel(white, 0) > 252.0 && channel(white, 1) > 252.0
+                      && channel(white, 2) > 252.0);
+
+                test::Section("water is one colour across tile borders after the ring moves");
+                reloadFlat(0.0);
+                limit = ViewerLayer::Water{};
+                limit.enabled = true;
+                viewer.SetWater(limit);
+                // Far enough that the whole ring is re-streamed: a tile border is a border of two
+                // evaluations, and the water is shaded from each tile's own fragments.
+                viewer.MoveCameraTo(20.0f * 128.0f, 120.0f, 20.0f * 128.0f);
+                window.StopAfter(window.FramesPresented() + 30);
+                (*application)->Run();
+                for (int round = 0; round < 40 && viewer.MissingTiles() != 0; ++round) {
+                    window.StopAfter(window.FramesPresented() + 10);
+                    (*application)->Run();
+                }
+                CHECK_EQ(viewer.MissingTiles(), u32_t{0});
+                const Frame relocated = shoot("water_after_move");
+                const Spread movedSpread = ClearSpread(relocated);
+                std::printf("     after the ring moved: %zu pixel(s), spread %d code(s)\n",
+                            movedSpread.pixels, movedSpread.widest);
+                CHECK(movedSpread.pixels > 1000);
+                CHECK(movedSpread.widest <= 3);
             }
         }
 

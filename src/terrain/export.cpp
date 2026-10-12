@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -339,7 +340,64 @@ void MakeTilePath(std::array<char, 256>& out, std::string_view directory, std::s
 /// A 2D output is staged through a band and encoded on its own worker thread; a volume is written
 /// brick by brick straight into the raw file, because a raw layout can be seeked into, needs no
 /// staging, and costs a memcpy rather than a deflate.
+/// Accumulates what an output's samples came to as tiles are read back.
+struct RunningStatistics {
+    f64_t minimum   = std::numeric_limits<f64_t>::infinity();
+    f64_t maximum   = -std::numeric_limits<f64_t>::infinity();
+    f64_t sum       = 0.0;
+    u64_t samples   = 0;
+    u64_t nonFinite = 0;
+
+    /// A `columns x rows x layers` block of `components`-component samples inside a buffer whose rows
+    /// are `stride` samples apart (and, for a volume, whose layers are `stride` rows apart).
+    void Add(const f32_t* block, u32_t stride, u32_t columns, u32_t rows, u32_t layers,
+             u32_t components) {
+        f64_t low  = minimum;
+        f64_t high = maximum;
+        f64_t total = 0.0;
+        u64_t good  = 0;
+        u64_t bad   = 0;
+        for (u32_t layer = 0; layer < layers; ++layer) {
+            for (u32_t row = 0; row < rows; ++row) {
+                const f32_t* at =
+                    block
+                    + ((static_cast<u64_t>(layer) * stride + row) * stride) * components;
+                const u64_t count = static_cast<u64_t>(columns) * components;
+                for (u64_t i = 0; i < count; ++i) {
+                    const f64_t value = at[i];
+                    if (!std::isfinite(value)) {
+                        ++bad;
+                        continue;
+                    }
+                    low   = value < low ? value : low;
+                    high  = value > high ? value : high;
+                    total += value;
+                    ++good;
+                }
+            }
+        }
+        minimum = low;
+        maximum = high;
+        sum += total;
+        samples += good;
+        nonFinite += bad;
+    }
+
+    [[nodiscard]] OutputStatistics Result() const {
+        OutputStatistics out;
+        out.samples   = samples;
+        out.nonFinite = nonFinite;
+        if (samples != 0) {
+            out.minimum = minimum;
+            out.maximum = maximum;
+            out.mean    = sum / static_cast<f64_t>(samples);
+        }
+        return out;
+    }
+};
+
 struct OutputChannel {
+    RunningStatistics                         statistics;
     std::array<char, 256>                     path{};
     std::array<char, OutputRequest::kMaxName> name{};
     BandEncoder                               encoder;
@@ -750,6 +808,10 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                         + (static_cast<u64_t>(outputs[i].halo) * padded + outputs[i].halo)
                               * outputs[i].components;
 
+                    outputs[i].statistics.Add(samples, padded, tileColumns, bandRows,
+                                              outputs[i].isVolume ? layers : 1,
+                                              outputs[i].components);
+
                     if (job.tiles) {
                         const Clock::time_point writeStart = Clock::now();
                         if (Status written = WriteTile(outputs[i], job, samples, padded,
@@ -832,9 +894,17 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             encodeMs += outputs[i].encoder.EncodeMilliseconds();
         }
         summary.clampedSamples += clamped;
+        const OutputStatistics statistics = outputs[i].statistics.Result();
+        if (statistics.nonFinite != 0) {
+            LOG_WARN("output '{}' has {} sample(s) that are NaN or infinite; a 16-bit PNG stores them as "
+                     "0 or 65535, which reads as terrain",
+                     outputs[i].name.data(), statistics.nonFinite);
+        }
+        LOG_INFO("output '{}': {:.3f} to {:.3f}, mean {:.3f}, {} sample(s)", outputs[i].name.data(),
+                 statistics.minimum, statistics.maximum, statistics.mean, statistics.samples);
         (void)metadata.AddOutput(outputs[i].name.data(), outputs[i].path.data(),
                                  outputs[i].mapping, outputs[i].format, outputs[i].rangeMin,
-                                 outputs[i].rangeMax, clamped);
+                                 outputs[i].rangeMax, clamped, statistics);
     }
 
     detail::CopyBounded(metadata.scriptPath, job.script);

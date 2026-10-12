@@ -30,8 +30,8 @@ Fifteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `
 `Geometry.*`, and the Lua prelude's `Shapes.*` and `Landforms.*`, documented with pictures in
 `docs/lua_reference.md`.
 
-Four reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
-canyon, mesas), with previews in `docs/images/shapes/`. The shape layer is `Geometry.*` (C++ ops), plus
+Five reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
+canyon, mesas, coast), with previews in `docs/images/shapes/`. The shape layer is `Geometry.*` (C++ ops), plus
 `Shapes.*` and `Landforms.*`, which are Lua in `assets/lua/prelude/` that the engine loads before every
 script.
 
@@ -77,8 +77,9 @@ Measured in the session that closed milestone 11, on the GTX 1070, unless the ro
 
 | | |
 | --- | --- |
-| 8192 square, `basic.lua`, section 512 | PNG 23.3 s total; `--raw` 13.0 s total, about three times the bytes |
-| 16384 square, `basic.lua`, section 512 | 96 to 110 s per run, three runs; height and normals byte-identical across section sizes 512 and 1024 |
+| 4096 square, `basic.lua`, section 512 | 0.94 to 0.96 s with the parallel deflate, 2.91 to 2.97 s with the single-thread one; same 109.2 MB; 3.1x |
+| 8192 square, same | 5.4 to 14 s now, 19 to 23 s before; the spread is the HDD taking writes, not the encoder (deflate is 3.4 s of wall time at 4 threads) |
+| 16384 square, `basic.lua` | outputs byte-identical across section sizes 512 and 1024; 70 s at 512, 123 s at 1024 on a drive already busy |
 | Viewer | 0.7 to 0.9 ms a frame at 1280x720, 37 to 49 tiles on screen |
 | Resolution independence, thermal only | 8 m against 16 m differs by 0.02 m on average |
 | Resolution independence, `basic.lua` | 8 m against 16 m differs by 5.45 m on average and 44.3 m at worst |
@@ -97,8 +98,9 @@ Open, with the measurements, in `docs/todo.md`:
   not.
 * **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
   it. Adding diagonal neighbours was tried and measured worse.
-* **The CI workflow was pushed with milestone 11 and its first run has not been reviewed.** The Linux job
-  has never been compiled. Expect that job to need fixes.
+* **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not
+  reproduce locally; Linux has never built. Both need the log of the failing step.
+* **Water at the ring's edge** shows a plate where the surface stands above a lower floor (todo).
 * **One GPU, one vendor, one OS.**
 
 Vulkan 1.4 is the target on purpose (spec section 5), though no 1.4-only feature is used: the 1.4

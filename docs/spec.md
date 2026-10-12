@@ -659,7 +659,7 @@ Each milestone ends with its acceptance criterion met and `docs/status.md` updat
 
 
 11. **Shapes, profiles and landforms.**
-    `Transform` and `Shape` ops, distance profiles and terraces as `Curve` variants, smooth min and max, a Lua prelude with `Shapes.*` and `Landforms.*`, and four reference terrains.
+    `Transform` and `Shape` ops, distance profiles and terraces as `Curve` variants, smooth min and max, a Lua prelude with `Shapes.*` and `Landforms.*`, and five reference terrains.
     *Accepted when:* every kernel matches its CPU reference, shapes and landforms match closed-form values through the exporter, a prelude error names the calling script's line, and the four terrains export and preview.
 
 ---

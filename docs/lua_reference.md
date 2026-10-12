@@ -902,7 +902,7 @@ return main
 
 ### The reference terrains
 
-Four complete terrains in `assets/scripts/shapes/`. Each runs, exports and previews, has its parameters
+Five complete terrains in `assets/scripts/shapes/`. Each runs, exports and previews, has its parameters
 at the top as `params.*` with defaults, and is also exercised by `test_geometry`. The pictures are
 `terrain_viewer` output.
 
@@ -911,6 +911,7 @@ at the top as `params.*` with defaults, and is also exercised by `test_geometry`
 | `volcanic_island.lua` | a concave cone sized so the crater rim lands on `peak`; a crater cut with a mask and a smooth minimum; a parasitic cone; gullies kept to the flanks | `--water` |
 | `mountain_range.lua` | ridges along splines joined with smooth maxima, peaks on the crest, a valley cut afterwards, relief masked to the massif | `--view 20,-24,4600` |
 | `canyon.lua` | a gorge and a side canyon from splines through a plateau profile; strata by `Curves.Terrace` blended in on the walls only | `--view 25,-32,4200` |
+| `coast.lua` | a closed spline filled to a signed distance; a beach and a cliff as two profiles of the same distance, blended by a feathered mask; a sea shelf; best with `--water` | `--water --view 60,-18,2300 --target -1250,20,-450` |
 | `mesas.lua` | rotated plateaus of several sizes, a pyramid and two domes, strata over everything, scree from a high-talus thermal pass | `--view 35,-24,3300` |
 
 ```bash
@@ -925,6 +926,8 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/mountain_range.l
 ![Canyon](images/shapes/canyon.png)
 
 ![Mesas and badlands](images/shapes/mesas.png)
+
+![Coast with cliffs, a beach and water](images/shapes/coast.png)
 
 **The limit of all of this is the heightfield.** One height per (x, z): no caves, arches, overhangs or
 stacked surfaces. A scarp can be vertical, never undercut.

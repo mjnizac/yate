@@ -8,7 +8,9 @@
 #include <engine/platform.hpp>
 
 #include <spng.h>
+#include <zlib.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -18,6 +20,7 @@
 #include <thread>
 #include <cstring>
 #include <utility>
+#include <vector>
 
 namespace engine::terrain {
 
@@ -198,6 +201,464 @@ const char* ToString(PngFilter filter) noexcept {
     return "unknown";
 }
 
+// --- Parallel deflate ----------------------------------------------------------------------------
+//
+// The pixels of a PNG are one zlib stream, and zlib compresses a stream on one thread. On a 4096 square
+// export with erosion that thread is 79% of the wall time (GPU 5%, readback 7%) while most of the cores
+// sit idle, so this is where the export time goes.
+//
+// The stream is built the way pigz builds one. The filtered scanlines are cut into chunks of a fixed
+// number of rows and each chunk is deflated on its own, as raw deflate, ending in a sync flush so that it
+// stops on a byte boundary. Concatenated they are one valid deflate stream; the last chunk is finished
+// instead of flushed, and the zlib header and the Adler-32 of the whole are written around it. Adler-32
+// combines, so the checksum of the whole is folded together from the checksums of the chunks.
+//
+// What this must not change, and why it does not:
+//
+//   * **The bytes are a function of the rows alone.** A chunk is a fixed count of rows counted from the
+//     top of the image, not from the top of a band, so a different section size cuts the same chunks and
+//     the same file comes out. Neither the thread count nor which thread got which chunk is visible.
+//   * **The pixels.** Filtering does not depend on chunking (the row above is the previous *raw* row,
+//     whichever chunk it was in), and a decoder sees one ordinary zlib stream.
+//   * **Memory.** At most `slots` chunks are held per output, so it is a bounded handful of megabytes.
+//
+// It costs a little size: each chunk starts with an empty dictionary, which at 32 rows of a few
+// kilobytes each is a fraction of a percent.
+
+constexpr u32_t   kChunkRows         = 32;
+constexpr usize_t kMaxDeflateThreads = 4;
+
+class ParallelDeflate {
+public:
+    enum class State : int { Free = 0, Queued, Compressing, Done };
+
+    struct Slot {
+        u8_t*   input          = nullptr;
+        u8_t*   output         = nullptr;
+        usize_t inputBytes     = 0;
+        usize_t outputCapacity = 0;
+        usize_t outputBytes    = 0;
+        u32_t   adler          = 1;
+        b8_t    last           = false;
+        int     error          = 0;
+        f64_t   compressMs     = 0.0;
+        State   state          = State::Free;
+    };
+
+    /// Where the time of this output went, for the log. `compressMs` is summed over the workers, so it
+    /// is CPU time; `blockedMs` is the time the producer waited for a free slot or for the last chunks,
+    /// which is the part of the compression that was on the critical path; `writeMs` is time in `fwrite`.
+    struct Timing {
+        f64_t compressMs = 0.0;
+        f64_t blockedMs  = 0.0;
+        f64_t writeMs    = 0.0;
+        usize_t threads  = 0;
+    };
+    [[nodiscard]] Timing Timings() const { return {m_compressMs, m_blockedMs, m_writeMs, m_threads}; }
+
+    ParallelDeflate() = default;
+    ~ParallelDeflate() { Destroy(); }
+    ENGINE_NO_COPY(ParallelDeflate);
+    ENGINE_NO_MOVE(ParallelDeflate);
+
+    /// `file` stays owned by the caller. Writes the signature and IHDR.
+    [[nodiscard]] Status Start(std::FILE* file, u32_t width, u32_t height, u32_t components,
+                               PngCompression compression) {
+        m_file     = file;
+        m_height   = height;
+        m_filter   = compression.filter;
+        m_rowBytes = static_cast<usize_t>(width) * components * sizeof(u16_t);
+        m_scanline = m_rowBytes + 1;
+        m_level    = static_cast<int>(compression.level);
+        m_strategy = compression.filter == PngFilter::None ? Z_DEFAULT_STRATEGY : Z_FILTERED;
+
+        // The two bytes in front of the deflate data. FLEVEL is informational, and FCHECK makes the
+        // pair a multiple of 31.
+        m_zlibHeader[0] = 0x78;
+        m_zlibHeader[1] = compression.level < 2 ? 0x01 : (compression.level < 6 ? 0x5E : 0x9C);
+
+        const u32_t cores = std::thread::hardware_concurrency();
+        m_threads = std::clamp<usize_t>(cores / 2, 1, kMaxDeflateThreads);
+        m_slotCount = m_threads * 2;
+
+        // The bound of what one chunk can deflate to, taken from a stream set up the same way.
+        z_stream probe{};
+        if (deflateInit2(&probe, m_level, Z_DEFLATED, -15, 8, m_strategy) != Z_OK) {
+            ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export, "could not set up zlib");
+        }
+        const usize_t chunkBytes = static_cast<usize_t>(kChunkRows) * m_scanline;
+        const usize_t bound      = deflateBound(&probe, static_cast<uLong>(chunkBytes)) + 128;
+        deflateEnd(&probe);
+
+        for (usize_t i = 0; i < m_slotCount; ++i) {
+            m_slots[i].input = static_cast<u8_t*>(memory::General().Allocate(chunkBytes, 16));
+            m_slots[i].output = static_cast<u8_t*>(memory::General().Allocate(bound, 16));
+            m_slots[i].outputCapacity = bound;
+            if (m_slots[i].input == nullptr || m_slots[i].output == nullptr) {
+                ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export,
+                            "could not allocate the deflate buffers");
+            }
+        }
+        m_previous = static_cast<u8_t*>(memory::General().Allocate(m_rowBytes, 16));
+        m_current  = static_cast<u8_t*>(memory::General().Allocate(m_rowBytes, 16));
+        if (m_previous == nullptr || m_current == nullptr) {
+            ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export, "could not allocate a row");
+        }
+        std::memset(m_previous, 0, m_rowBytes);
+
+        // Signature and IHDR.
+        static constexpr u8_t kSignature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+        if (!Write(kSignature, sizeof(kSignature))) {
+            ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not write the PNG header");
+        }
+        u8_t ihdr[13];
+        StoreBigEndian32(ihdr + 0, width);
+        StoreBigEndian32(ihdr + 4, height);
+        ihdr[8]  = 16;
+        ihdr[9]  = components == 3 ? 2 : 0; // Truecolour, or grayscale.
+        ihdr[10] = 0;
+        ihdr[11] = 0;
+        ihdr[12] = 0;
+        if (!WriteChunk("IHDR", ihdr, sizeof(ihdr))) {
+            ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not write the PNG header");
+        }
+
+        m_adler = static_cast<u32_t>(adler32(0L, Z_NULL, 0));
+        m_workers.reserve(m_threads);
+        for (usize_t i = 0; i < m_threads; ++i) {
+            m_workers.emplace_back(&ParallelDeflate::RunWorker, this);
+        }
+        m_started = true;
+        return {};
+    }
+
+    /// One row of `rowBytes / 2` samples in host order.
+    [[nodiscard]] Status AddRow(const u16_t* samples) {
+        if (m_rowsAdded >= m_height) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                        "row {} is past the declared height of {}", m_rowsAdded, m_height);
+        }
+        Slot&         slot = m_slots[m_chunkNumber % m_slotCount];
+        const u32_t   rowInChunk = m_rowsAdded % kChunkRows;
+        if (rowInChunk == 0) {
+            // The slot is taken back from the writer before it is filled.
+            const auto blockedFrom = std::chrono::steady_clock::now();
+            while (!SlotIsFree(slot)) {
+                if (Status written = WriteOne(true); !written) {
+                    return written;
+                }
+            }
+            m_blockedMs += std::chrono::duration<f64_t, std::milli>(
+                               std::chrono::steady_clock::now() - blockedFrom)
+                               .count();
+        }
+
+        // Big-endian bytes, then the filter against the previous *raw* row.
+        const usize_t count = m_rowBytes / sizeof(u16_t);
+        for (usize_t i = 0; i < count; ++i) {
+            m_current[2 * i]     = static_cast<u8_t>(samples[i] >> 8);
+            m_current[2 * i + 1] = static_cast<u8_t>(samples[i] & 0xFF);
+        }
+        u8_t* destination = slot.input + static_cast<usize_t>(rowInChunk) * m_scanline;
+        if (m_filter == PngFilter::Up) {
+            destination[0] = 2;
+            for (usize_t i = 0; i < m_rowBytes; ++i) {
+                destination[1 + i] = static_cast<u8_t>(m_current[i] - m_previous[i]);
+            }
+        } else {
+            destination[0] = 0;
+            std::memcpy(destination + 1, m_current, m_rowBytes);
+        }
+        std::swap(m_current, m_previous);
+        ++m_rowsAdded;
+
+        const b8_t full = rowInChunk + 1 == kChunkRows;
+        const b8_t last = m_rowsAdded == m_height;
+        if (full || last) {
+            slot.inputBytes = static_cast<usize_t>(rowInChunk + 1) * m_scanline;
+            slot.last       = last;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                slot.state = State::Queued;
+                ++m_submitted;
+            }
+            m_workAvailable.notify_one();
+            ++m_chunkNumber;
+            // Whatever has finished is written now, so the files grows as the image does.
+            return WriteReady();
+        }
+        return {};
+    }
+
+    /// Writes the remaining chunks and the end of the file. All rows must have been added.
+    [[nodiscard]] Status Finish() {
+        if (m_rowsAdded != m_height) {
+            ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Export,
+                        "{} of {} rows were written before finishing", m_rowsAdded, m_height);
+        }
+        const auto blockedFrom = std::chrono::steady_clock::now();
+        while (m_written < m_submitted) {
+            if (Status written = WriteOne(true); !written) {
+                return written;
+            }
+        }
+        m_blockedMs += std::chrono::duration<f64_t, std::milli>(
+                           std::chrono::steady_clock::now() - blockedFrom)
+                           .count();
+        Stop();
+        if (!WriteChunk("IEND", nullptr, 0)) {
+            ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not write the PNG end");
+        }
+        return {};
+    }
+
+private:
+    static void StoreBigEndian32(u8_t* out, u32_t value) {
+        out[0] = static_cast<u8_t>(value >> 24);
+        out[1] = static_cast<u8_t>(value >> 16);
+        out[2] = static_cast<u8_t>(value >> 8);
+        out[3] = static_cast<u8_t>(value);
+    }
+
+    /// `fwrite` in pieces. One large `fwrite` is pathologically slow with this CRT: see
+    /// `RawVolumeWriter::AppendRows`.
+    [[nodiscard]] b8_t Write(const void* data, usize_t size) {
+        const auto* bytes = static_cast<const u8_t*>(data);
+        constexpr usize_t kPiece = 1u << 20;
+        while (size > 0) {
+            const usize_t take = size < kPiece ? size : kPiece;
+            if (std::fwrite(bytes, 1, take, m_file) != take) {
+                return false;
+            }
+            bytes += take;
+            size -= take;
+        }
+        return true;
+    }
+
+    [[nodiscard]] b8_t WriteChunk(const char* type, const u8_t* data, usize_t size) {
+        u8_t length[4];
+        StoreBigEndian32(length, static_cast<u32_t>(size));
+        u32_t crc = static_cast<u32_t>(crc32(0L, Z_NULL, 0));
+        crc       = static_cast<u32_t>(crc32(crc, reinterpret_cast<const Bytef*>(type), 4));
+        if (size != 0) {
+            crc = static_cast<u32_t>(crc32(crc, data, static_cast<uInt>(size)));
+        }
+        u8_t tail[4];
+        StoreBigEndian32(tail, crc);
+        return Write(length, 4) && Write(type, 4) && (size == 0 || Write(data, size))
+               && Write(tail, 4);
+    }
+
+    [[nodiscard]] b8_t SlotIsFree(const Slot& slot) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return slot.state == State::Free;
+    }
+
+    /// Writes the head chunk if it has finished, waiting for it when `block`. Returns once one chunk
+    /// has been written, or at once when none can be.
+    [[nodiscard]] Status WriteOne(b8_t block) {
+        if (m_written >= m_submitted) {
+            return {};
+        }
+        Slot& slot = m_slots[m_written % m_slotCount];
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            if (slot.state != State::Done) {
+                if (!block) {
+                    return {};
+                }
+                m_changed.wait(lock, [&slot] { return slot.state == State::Done; });
+            }
+        }
+        if (slot.error != 0) {
+            ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "zlib failed with code {}", slot.error);
+        }
+
+        m_compressMs += slot.compressMs;
+        const auto writeFrom = std::chrono::steady_clock::now();
+
+        // The checksum of everything so far, folded from the chunks'.
+        m_adler = m_written == 0 ? slot.adler
+                                 : static_cast<u32_t>(adler32_combine(
+                                       m_adler, slot.adler, static_cast<z_off_t>(slot.inputBytes)));
+
+        // One IDAT per chunk: the zlib header goes in front of the first and the checksum behind the
+        // last, and the CRC runs over the pieces.
+        const b8_t    first  = m_written == 0;
+        const usize_t size   = (first ? 2 : 0) + slot.outputBytes + (slot.last ? 4 : 0);
+        u8_t          length[4];
+        StoreBigEndian32(length, static_cast<u32_t>(size));
+        u32_t crc = static_cast<u32_t>(crc32(0L, Z_NULL, 0));
+        crc       = static_cast<u32_t>(crc32(crc, reinterpret_cast<const Bytef*>("IDAT"), 4));
+        b8_t ok   = Write(length, 4) && Write("IDAT", 4);
+        if (first) {
+            crc = static_cast<u32_t>(crc32(crc, m_zlibHeader, 2));
+            ok  = ok && Write(m_zlibHeader, 2);
+        }
+        crc = static_cast<u32_t>(crc32(crc, slot.output, static_cast<uInt>(slot.outputBytes)));
+        ok  = ok && Write(slot.output, slot.outputBytes);
+        if (slot.last) {
+            u8_t adler[4];
+            StoreBigEndian32(adler, m_adler);
+            crc = static_cast<u32_t>(crc32(crc, adler, 4));
+            ok  = ok && Write(adler, 4);
+        }
+        u8_t tail[4];
+        StoreBigEndian32(tail, crc);
+        ok = ok && Write(tail, 4);
+        m_writeMs += std::chrono::duration<f64_t, std::milli>(
+                         std::chrono::steady_clock::now() - writeFrom)
+                         .count();
+        if (!ok) {
+            ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not write the image data");
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            slot.state = State::Free;
+        }
+        ++m_written;
+        return {};
+    }
+
+    [[nodiscard]] Status WriteReady() {
+        for (;;) {
+            const u64_t before = m_written;
+            if (Status written = WriteOne(false); !written) {
+                return written;
+            }
+            if (m_written == before) {
+                return {};
+            }
+        }
+    }
+
+    void RunWorker() {
+        platform::SetThreadName("engine-deflate");
+        z_stream stream{};
+        const b8_t ready = deflateInit2(&stream, m_level, Z_DEFLATED, -15, 8, m_strategy) == Z_OK;
+        for (;;) {
+            u64_t chunk = 0;
+            {
+                std::unique_lock<std::mutex> lock(m_mutex);
+                m_workAvailable.wait(
+                    lock, [this] { return m_stopping || m_nextToCompress < m_submitted; });
+                if (m_nextToCompress >= m_submitted) {
+                    break; // Stopping, and nothing is left.
+                }
+                chunk = m_nextToCompress++;
+                m_slots[chunk % m_slotCount].state = State::Compressing;
+            }
+            Slot& slot = m_slots[chunk % m_slotCount];
+
+            const auto compressFrom = std::chrono::steady_clock::now();
+            if (!ready) {
+                slot.error       = Z_MEM_ERROR;
+                slot.outputBytes = 0;
+                slot.adler       = 1;
+                slot.compressMs  = 0.0;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    slot.state = State::Done;
+                }
+                m_changed.notify_all();
+                continue;
+            }
+            deflateReset(&stream);
+            stream.next_in   = slot.input;
+            stream.avail_in  = static_cast<uInt>(slot.inputBytes);
+            stream.next_out  = slot.output;
+            stream.avail_out = static_cast<uInt>(slot.outputCapacity);
+            const int code   = deflate(&stream, slot.last ? Z_FINISH : Z_SYNC_FLUSH);
+            const b8_t good  = slot.last ? code == Z_STREAM_END : code == Z_OK;
+            slot.error       = good && stream.avail_in == 0 ? 0 : (code != 0 ? code : Z_BUF_ERROR);
+            slot.outputBytes = slot.outputCapacity - stream.avail_out;
+            slot.adler       = static_cast<u32_t>(
+                adler32(adler32(0L, Z_NULL, 0), slot.input, static_cast<uInt>(slot.inputBytes)));
+            slot.compressMs = std::chrono::duration<f64_t, std::milli>(
+                                  std::chrono::steady_clock::now() - compressFrom)
+                                  .count();
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                slot.state = State::Done;
+            }
+            m_changed.notify_all();
+        }
+        if (ready) {
+            deflateEnd(&stream);
+        }
+    }
+
+    void Stop() {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stopping = true;
+        }
+        m_workAvailable.notify_all();
+        for (std::thread& worker : m_workers) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        m_workers.clear();
+    }
+
+    void Destroy() noexcept {
+        Stop();
+        for (usize_t i = 0; i < m_slotCount; ++i) {
+            if (m_slots[i].input != nullptr) {
+                memory::General().Free(m_slots[i].input);
+                m_slots[i].input = nullptr;
+            }
+            if (m_slots[i].output != nullptr) {
+                memory::General().Free(m_slots[i].output);
+                m_slots[i].output = nullptr;
+            }
+        }
+        if (m_previous != nullptr) {
+            memory::General().Free(m_previous);
+            m_previous = nullptr;
+        }
+        if (m_current != nullptr) {
+            memory::General().Free(m_current);
+            m_current = nullptr;
+        }
+    }
+
+    std::FILE* m_file = nullptr;
+    u32_t      m_height = 0;
+    usize_t    m_rowBytes = 0;
+    usize_t    m_scanline = 0;
+    int        m_level = 2;
+    int        m_strategy = Z_DEFAULT_STRATEGY;
+    PngFilter  m_filter = PngFilter::Up;
+    u8_t       m_zlibHeader[2] = {0x78, 0x01};
+    b8_t       m_started = false;
+
+    usize_t m_threads   = 1;
+    usize_t m_slotCount = 2;
+    std::array<Slot, kMaxDeflateThreads * 2> m_slots{};
+    std::vector<std::thread> m_workers;
+
+    u8_t* m_previous = nullptr;
+    u8_t* m_current  = nullptr;
+    u32_t m_rowsAdded   = 0;
+    u64_t m_chunkNumber = 0;
+    u64_t m_written     = 0;
+    u32_t m_adler       = 1;
+    f64_t m_compressMs  = 0.0;
+    f64_t m_blockedMs   = 0.0;
+    f64_t m_writeMs     = 0.0;
+
+    std::mutex              m_mutex;
+    std::condition_variable m_workAvailable;
+    std::condition_variable m_changed;
+    u64_t                   m_submitted      = 0;
+    u64_t                   m_nextToCompress = 0;
+    b8_t                    m_stopping       = false;
+};
+
 Result<PngFilter> ParsePngFilter(std::string_view name) {
     if (name == "none") {
         return PngFilter::None;
@@ -240,13 +701,55 @@ Result<PngWriter> PngWriter::Create(std::string_view path, u32_t width, u32_t he
         ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not open {} for writing", path);
     }
 
+    const u32_t components = ComponentsOf(format);
+
+    // `None` and `Up` are built by `ParallelDeflate`. `All` tries every filter on every row and keeps the
+    // smallest, which is libspng's own heuristic and not worth reimplementing for a setting that costs
+    // twice the time for 1% of the size, so it stays on libspng, one thread.
+    ParallelDeflate* deflate = nullptr;
+    if (compression.filter != PngFilter::All) {
+        void* storage = memory::General().Allocate(sizeof(ParallelDeflate), alignof(ParallelDeflate));
+        if (storage == nullptr) {
+            std::fclose(file);
+            ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export,
+                        "could not allocate the PNG encoder");
+        }
+        deflate = new (storage) ParallelDeflate{};
+        if (Status started =
+                deflate->Start(file, width, height, components, compression);
+            !started) {
+            deflate->~ParallelDeflate();
+            memory::General().Free(storage);
+            std::fclose(file);
+            return std::unexpected(started.error());
+        }
+
+        PngWriter writer;
+        writer.m_file             = file;
+        writer.m_deflate          = deflate;
+        writer.m_width            = width;
+        writer.m_height           = height;
+        writer.m_components       = components;
+        writer.m_sourceComponents = mapping.components;
+        writer.m_format           = format;
+        writer.m_rangeMin         = rangeMin;
+        writer.m_rangeMax         = rangeMax;
+        writer.m_row              = static_cast<u16_t*>(memory::General().Allocate(
+            static_cast<usize_t>(width) * components * sizeof(u16_t), alignof(u16_t)));
+        if (writer.m_row == nullptr) {
+            ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export,
+                        "could not allocate a {}-sample scratch row", width * components);
+        }
+        LOG_DEBUG("writing {} ({}x{}, {}, parallel deflate)", path, width, height,
+                  ToString(format));
+        return writer;
+    }
+
     spng_ctx* context = spng_ctx_new(SPNG_CTX_ENCODER);
     if (context == nullptr) {
         std::fclose(file);
         ENGINE_FAIL(ErrorCode::OutOfMemory, ErrorStage::Export, "could not create a libspng context");
     }
-
-    const u32_t components = ComponentsOf(format);
 
     spng_ihdr header{};
     header.width      = width;
@@ -323,6 +826,12 @@ void PngWriter::Release() noexcept {
         spng_ctx_free(static_cast<spng_ctx*>(m_context));
         m_context = nullptr;
     }
+    if (m_deflate != nullptr) {
+        auto* deflate = static_cast<ParallelDeflate*>(m_deflate);
+        deflate->~ParallelDeflate();
+        memory::General().Free(deflate);
+        m_deflate = nullptr;
+    }
     if (m_file != nullptr) {
         std::fclose(static_cast<std::FILE*>(m_file));
         m_file = nullptr;
@@ -338,6 +847,7 @@ PngWriter& PngWriter::operator=(PngWriter&& other) noexcept {
     Release();
     m_context     = other.m_context;
     m_file        = other.m_file;
+    m_deflate     = other.m_deflate;
     m_row         = other.m_row;
     m_width       = other.m_width;
     m_height      = other.m_height;
@@ -354,12 +864,13 @@ PngWriter& PngWriter::operator=(PngWriter&& other) noexcept {
     m_clamped     = other.m_clamped;
     other.m_context = nullptr;
     other.m_file    = nullptr;
+    other.m_deflate = nullptr;
     other.m_row     = nullptr;
     return *this;
 }
 
 Status PngWriter::WriteRow(const f32_t* samples) {
-    if (m_context == nullptr) {
+    if (m_context == nullptr && m_deflate == nullptr) {
         ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Export, "writing to a closed PNG");
     }
     if (m_rowsWritten >= m_height) {
@@ -385,6 +896,11 @@ Status PngWriter::WriteRow(const f32_t* samples) {
         }
     }
 
+    if (m_deflate != nullptr) {
+        ++m_rowsWritten;
+        return static_cast<ParallelDeflate*>(m_deflate)->AddRow(m_row);
+    }
+
     const usize_t rowBytes = static_cast<usize_t>(m_width) * m_components * sizeof(u16_t);
     const int     code = spng_encode_row(static_cast<spng_ctx*>(m_context), m_row, rowBytes);
     ++m_rowsWritten;
@@ -399,7 +915,7 @@ Status PngWriter::WriteRow(const f32_t* samples) {
 }
 
 Status PngWriter::Finish() {
-    if (m_context == nullptr) {
+    if (m_context == nullptr && m_deflate == nullptr) {
         return {};
     }
     if (m_rowsWritten != m_height) {
@@ -410,6 +926,18 @@ Status PngWriter::Finish() {
         LOG_WARN("{} sample(s) were clamped by the declared output range; the range is probably "
                  "wrong",
                  m_clamped);
+    }
+    if (m_deflate != nullptr) {
+        // Every row is in; the chunks still in flight are written and the stream is closed.
+        auto*        deflate  = static_cast<ParallelDeflate*>(m_deflate);
+        const Status finished = deflate->Finish();
+        const ParallelDeflate::Timing time = deflate->Timings();
+        LOG_INFO("png {}x{} ({}): deflate {:.0f} ms of cpu on {} thread(s), producer blocked {:.0f} ms, "
+                 "{:.0f} ms in fwrite",
+                 m_width, m_height, ToString(m_format), time.compressMs, time.threads, time.blockedMs,
+                 time.writeMs);
+        Release();
+        return finished;
     }
     Release();
     return {};
@@ -764,7 +1292,7 @@ f64_t BandEncoder::EncodeMilliseconds() const noexcept {
 
 b8_t ExportMetadata::AddOutput(std::string_view name, std::string_view file, Mapping mapping,
                                OutputFormat format, f32_t rangeMin, f32_t rangeMax,
-                               u64_t clampedSamples) {
+                               u64_t clampedSamples, const OutputStatistics& statistics) {
     if (outputCount == kMaxOutputs) {
         return false;
     }
@@ -776,6 +1304,7 @@ b8_t ExportMetadata::AddOutput(std::string_view name, std::string_view file, Map
     entry.rangeMin       = rangeMin;
     entry.rangeMax       = rangeMax;
     entry.clampedSamples = clampedSamples;
+    entry.statistics     = statistics;
     return true;
 }
 
@@ -850,6 +1379,13 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
         json.Key("range_min", static_cast<f64_t>(output.rangeMin));
         json.Key("range_max", static_cast<f64_t>(output.rangeMax));
         json.Key("clamped_samples", output.clampedSamples);
+        json.BeginObject("statistics");
+        json.Key("min", output.statistics.minimum);
+        json.Key("max", output.statistics.maximum);
+        json.Key("mean", output.statistics.mean);
+        json.Key("samples", output.statistics.samples);
+        json.Key("non_finite", output.statistics.nonFinite);
+        json.End();
         json.End();
     }
     json.EndArray();

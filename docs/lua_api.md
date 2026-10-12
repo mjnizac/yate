@@ -111,6 +111,24 @@ conditions, not style limits, and the error says which one was broken: a thermal
 half lets a cell overshoot its neighbour and oscillate instead of settling, and a hydraulic `flow_rate`
 above a quarter lets the four outflows of a cell exceed the water it has.
 
+## Discovering what a call takes
+
+There is no listing of the API in the engine. Two things stand in for one:
+
+* `docs/lua_reference.md` has every call with its keys, defaults and valid ranges.
+* A call with an unknown key fails with the keys it does accept, from the C++ bindings and the prelude
+  alike:
+
+  ```
+  terrain.lua:4: [script] Landforms.Cone does not take 'slope'; it accepts at, rotation, position, radius, height, profile
+  ```
+
+  A missing required key says which one, and a wrong type says what was found.
+
+Reproducibility is `--seed` and `--param key=value`, both recorded in the sidecar with SHA-256 of the
+script, the shaders the job ran, the parameters and the prelude. `outputs[].statistics` and
+`timings_ms` in the same sidecar are what a generation reports about itself.
+
 ## The prelude
 
 `Shapes.*` and `Landforms.*` are not ops. They are Lua the engine runs before the script
@@ -170,5 +188,5 @@ terrain.lua:14: [validation] Normals expects R2->R2 input, got R2->R1
 ```
 
 Two stages appear. `[script]` is a binding rejecting its own arguments; `[validation]` is a graph
-builder rejecting a mapping. Both carry the script line. `tests/unit/test_lua_errors.cpp` pins 126
+builder rejecting a mapping. Both carry the script line. `tests/unit/test_lua_errors.cpp` pins 202
 checks' worth of these: the stage, the line and the words that have to be in the message.

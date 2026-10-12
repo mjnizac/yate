@@ -108,6 +108,8 @@ private:
     /// Opaque `spng_ctx*` and `FILE*`, so this header pulls in neither libspng nor <cstdio>.
     void* m_context = nullptr;
     void* m_file    = nullptr;
+    /// The parallel deflate stream when the filter is `None` or `Up`; null for the libspng path.
+    void* m_deflate = nullptr;
     /// One scratch row of `width * components` big-endian samples, from `CPU/General`.
     u16_t* m_row = nullptr;
     u32_t  m_width  = 0;
@@ -250,6 +252,20 @@ private:
 ///
 /// Fixed-size inline storage: the sidecar is filled across the engine boundary and written in one
 /// place, and nothing here should allocate.
+/// What the samples of one output came to, over every component, before any quantisation.
+///
+/// This is what lets something that cannot look at an image judge a terrain: the real range against the
+/// declared one, whether the mean sits where the design says, and above all whether anything is NaN or
+/// infinite, which a 16-bit PNG would silently turn into 0 or 65535.
+struct OutputStatistics {
+    f64_t minimum = 0.0;
+    f64_t maximum = 0.0;
+    f64_t mean    = 0.0;
+    /// Finite samples counted, which `mean` is over.
+    u64_t samples   = 0;
+    u64_t nonFinite = 0;
+};
+
 struct ExportMetadata {
     static constexpr usize_t kMaxOutputs = 8;
     static constexpr usize_t kMaxText    = 128;
@@ -263,6 +279,7 @@ struct ExportMetadata {
         f32_t                     rangeMin       = 0.0f;
         f32_t                     rangeMax       = 1.0f;
         u64_t                     clampedSamples = 0;
+        OutputStatistics          statistics;
     };
 
     struct Timings {
@@ -326,7 +343,7 @@ struct ExportMetadata {
     /// Adds an output entry, returning false when `kMaxOutputs` is already reached.
     [[nodiscard]] b8_t AddOutput(std::string_view name, std::string_view file, Mapping mapping,
                                  OutputFormat format, f32_t rangeMin, f32_t rangeMax,
-                                 u64_t clampedSamples);
+                                 u64_t clampedSamples, const OutputStatistics& statistics = {});
 };
 
 /// Writes the `.json` sidecar next to the outputs. The timing and environment fields are what the
