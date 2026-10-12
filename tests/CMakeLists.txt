@@ -25,6 +25,15 @@ engine_add_unit_test(test_mapping)
 engine_add_unit_test(test_errors)
 engine_add_unit_test(test_compiler)
 engine_add_unit_test(test_lua_errors)
+engine_add_unit_test(test_output_files)
+
+# Black-box: runs terrain_export and terrain_viewer as a user would. It needs both built first, and a
+# device for the cases that actually export.
+engine_add_unit_test(test_cli)
+target_compile_definitions(test_cli PRIVATE
+    "TERRAIN_EXPORT_EXE=\"$<TARGET_FILE:terrain_export>\""
+    "TERRAIN_VIEWER_EXE=\"$<TARGET_FILE:terrain_viewer>\"")
+add_dependencies(test_cli terrain_export terrain_viewer engine_shaders)
 
 # Needs a Vulkan 1.4 device and the compiled shaders.
 engine_add_unit_test(test_compute_roundtrip)
