@@ -69,108 +69,41 @@ channel mask in its push constants and skips writing what nothing wants.
 ## Ops
 
 Every op takes a single named table. An unknown key is an error, not a silently ignored one, and the
-message lists the keys the op does accept. Every default is documented here.
+message lists the keys the op does accept.
 
-### Noises
+**Defaults, valid ranges, what to set each parameter to and a rendered picture of its effect are in
+`docs/lua_reference.md`.** They are deliberately not repeated here: two documents carrying the same
+numbers drift, and this one is the index.
 
-`Noises.fBm`, `Noises.Ridged`, `Noises.Billow`. Ridged and billow are base functions in their own
-right rather than a second axis, each carrying its own exact derivative.
-
-| Key | Default | Notes |
+| Call | Produces | Notes |
 | --- | --- | --- |
-| `kind` | `"simplex"` | `simplex`, `ridged` or `billow`. Only on `fBm`. |
-| `domain` | `2` | 2 or 3 |
-| `frequency` | `0.002` | strictly positive |
-| `octaves` | `6` | whole, 1 to 32 |
-| `lacunarity` | `2.0` | strictly positive |
-| `persistence` | `0.5` | strictly positive |
-| `amplitude` | `1.0` | output half-range when normalized |
-| `offset` | `0.0` | added after accumulation |
-| `seed` | `0` | salt, decorrelates nodes that share the job seed |
-| `normalize` | `true` | divide by the sum of the amplitudes, so `amplitude` is the half-range |
+| `Noises.fBm`, `Noises.Ridged`, `Noises.Billow` | `Rn -> R1` value, `Rn -> Rn` gradient | fractal noise with its exact analytic gradient, both out of one evaluation; `fBm{ kind = ... }` is the same op |
+| `Terrain.Const` | `Rn -> R1` | a constant; usually unnecessary, since a bare number works wherever a field does |
+| `Terrain.Coords` | `Rn -> Rn` | the integer **sample coordinate**, not metres, and on an `R2->R2` world z is `.y` |
+| `Terrain.Normals` | `R2->R3` | takes a **gradient**, not a height |
+| `Terrain.Gradient` | `Rn -> Rn` | central differences, **radius 1**; the only op that is not analytic |
+| `Masks.Slope` | `R2->R1` in `[0, 1]` | takes a gradient; feed it a low-octave one or the mask flickers |
+| `Combine.Blend` | the mapping of `a` and `b` | linear interpolation by a mask; the mask is not clamped |
+| `Combine.Min`, `Combine.Max` | the shared mapping | `Max` unions landforms, `Min` carves |
+| `Curves.Clamp`, `Remap`, `Power`, `Smoothstep` | the input's mapping | pointwise; `Remap` assumes a `[-1, 1]` input and `Power` only means what you want on a field in `[-1, 1]` |
+| `Filters.Blur` | the input's mapping | radius in **samples**, not metres; its radius becomes halo |
+| `Vec.Combine` | `Rn -> Rm` | a positional list of 2 to 4 scalars |
+| `Erosion.Thermal` | `Rn -> R1` | material slides past the talus; `iterations` **is** the influence radius |
+| `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `flow` carries water on `x` and sediment on `y` |
 
-Channel 0 is the value, channel 1 the analytic gradient, both out of one evaluation.
-
-### Terrain
-
-| Call | Mapping | Keys |
-| --- | --- | --- |
-| `Terrain.Normals` | `R2->R2` in, `R2->R3` out | `input`, `vertical_scale` (1.0) |
-| `Terrain.Gradient` | `Rn->R1` in, `Rn->Rn` out | `input` |
-| `Terrain.Coords` | `Rn->Rn` | `domain` (2) |
-| `Terrain.Const` | `Rn->R1` | `domain` (2), `value` (0.0) |
-
-`Terrain.Normals` takes a gradient. Given an `R2->R1` whose node exposes one, it resolves the gradient
-channel, so `Terrain.Normals{ input = base }` works for a noise handle.
-
-`Terrain.Gradient` measures a gradient by central differences, and it is the only op in the engine that
-is not analytic. Use it for a field that came out of blends, curves or erosion, where there is no closed
-form left to differentiate. For anything that has an analytic derivative, use that instead: a noise
-node's `.gradient` is exact and comes out of the same evaluation as its value.
-
-```lua
--- exact, same dispatch as the value
-Terrain.Normals{ input = base.gradient }
--- measured, radius 1, for terrain that has been through erosion
-Terrain.Normals{ input = Terrain.Gradient{ input = eroded } }
-```
-
-### Masks, Combine, Curves, Filters, Vec
-
-| Call | Keys |
-| --- | --- |
-| `Masks.Slope` | `input` (a gradient), `min` (0.0), `max` (1.0), `min < max` |
-| `Combine.Blend` | `a`, `b` (same mapping), `mask` (`Rn->R1`) |
-| `Combine.Min`, `Combine.Max` | `a`, `b` |
-| `Curves.Clamp` | `input`, `min` (0.0), `max` (1.0) |
-| `Curves.Remap` | `input`, `min` (0.0), `max` (1.0) |
-| `Curves.Power` | `input`, `exponent` (1.0, in [0, 64]) |
-| `Curves.Smoothstep` | `input`, `min` (0.0), `max` (1.0), `min < max` |
-| `Filters.Blur` | `input`, `radius` (1, in [1, 32]) |
-| `Vec.Combine` | a positional list of 2 to 4 scalars |
-
-### Erosion
-
-Iterative ops. The iteration count is not only a quality knob: material moves one cell per iteration, so
-the count **is** the influence radius, and therefore the halo every section computes beyond its own
-interior. 24 iterations on a 512 section means computing 560x560 samples instead of 512x512; 200 would
-mean 912x912. Chaining two iterative ops adds their radii, and the engine refuses a graph whose halo
-passes 255, which is what the kernel interface can carry:
+`Filters.Blur`, `Terrain.Gradient` and the two erosions are what put a halo on a graph: their radii
+propagate backwards to everything that feeds them, and they add along a chain. The engine refuses a
+graph whose halo passes 255, naming the node:
 
 ```
 terrain.lua:9: [compile] Noise would need a halo of 400, over the limit of 255; every op between here
 and an output adds its radius, and an iterative op contributes one per iteration
 ```
 
-| Call | Keys |
-| --- | --- |
-| `Erosion.Thermal` | `input`, `iterations` (16), `talus` (0.02), `strength` (0.25, in (0, 0.5]) |
-| `Erosion.Hydraulic` | `input`, `iterations` (32), `rain` (0.02), `evaporation` (0.05), `capacity` (4.0), `erosion_rate` (0.3), `deposition` (0.3), `flow_rate` (0.15, in (0, 0.25]) |
-
-Both take an `Rn -> R1` height. Thermal erosion slides material downhill wherever the slope passes the
-talus angle. Hydraulic erosion rains, routes water, carries sediment and evaporates.
-
-Hydraulic erosion has a second channel, `flow`, holding the water and the sediment as they stood after
-the last iteration — a wetness map and a sediment map, which is what a renderer wants for putting rock
-against silt:
-
-```lua
-local carved = Erosion.Hydraulic{ input = base.value, iterations = 32 }
-return {
-  height = { value = carved, range = { -200, 1800 } },
-  wet    = { value = carved.flow },   -- water on x, sediment on y
-}
-```
-
-Asking for it costs a second section buffer and the bandwidth to fill it, so a script that only wants a
-height pays for neither.
-
-The upper bounds are stability conditions, not style limits, and the error says which one was broken: a
-thermal `strength` above one half lets a cell overshoot its neighbour and oscillate instead of settling,
-and a hydraulic `flow_rate` above a quarter lets the four outflows of a cell exceed the water it has.
-
-`Filters.Blur`, `Terrain.Gradient` and the erosion ops are what put a halo on a graph: their radii
-propagate backwards to everything that feeds them.
+The upper bounds on `Erosion.Thermal`'s `strength` and `Erosion.Hydraulic`'s `flow_rate` are stability
+conditions, not style limits, and the error says which one was broken: a thermal `strength` above one
+half lets a cell overshoot its neighbour and oscillate instead of settling, and a hydraulic `flow_rate`
+above a quarter lets the four outflows of a cell exceed the water it has.
 
 ## Mappings
 
@@ -191,8 +124,13 @@ included.
 
 ## What a script cannot do
 
-Only `base`, `math`, `string` and `table` are opened. There is no `io`, no `os`, no `package` and no
-`require`, so a script cannot read files, start processes or load C modules.
+Only `base`, `math`, `string` and `table` are opened, so there is no `io`, no `os`, no `package`, no
+`require`, no `debug` and no `coroutine`: a script cannot start a process or load a C module.
+
+It **can** read and run other Lua files — `dofile`, `loadfile` and `load` come with `base` and nothing
+removes them. That is a gap rather than a decision, it is recorded in `docs/todo.md`, and it reaches
+beyond security: the metadata sidecar hashes the script *file*, so a chunk assembled with `load` is not
+described by its own hash.
 
 ## Errors
 

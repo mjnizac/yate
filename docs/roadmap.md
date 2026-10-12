@@ -2,12 +2,18 @@
 
 ## Near term
 
-Milestones 4 to 9 in order, as listed in `docs/status.md`. Each one ends with its acceptance
-criterion met and this file plus `status.md` and `todo.md` updated.
+The nine milestones are done. What comes next is not another milestone but the work in
+`docs/todo.md`, and the honest ordering is: CI first, then the checks that compare a result against
+something the engine did not produce itself, then the correctness items that change what a script
+means — erosion measured per metre rather than per cell, and `Terrain.Coords` in metres.
 
-The order is deliberate: the export path is the product, so it becomes real before the graph gets
-interesting, and the viewer comes last because it is a tool for iterating on an export path that
-already works.
+The reason that ordering is not negotiable is in `docs/decisions.md`: every defect this project has
+had reached acceptance with a green suite, because the suite only ever compared the engine against
+itself.
+
+Beyond that there is a choice to make, not yet made: `docs/terrain_standard.md` drafts a 25-op catalog
+with macros, file inputs and global operations. It is a large piece of work and it would be built on
+top of the open items above, not instead of them.
 
 ## Kernel fusion
 

@@ -3,8 +3,9 @@
 Every function the engine exposes to a script, with what each parameter does, what to set it to, what
 it costs, and a picture of the result.
 
-`docs/lua_api.md` is the short version: the shape of the API and its rules. This is the long one, and it
-is organised by what you are trying to build rather than by namespace.
+`docs/lua_api.md` is the index: the shape of the API, its rules and one line per op. This is the long
+one — every parameter with its default and valid range, what to set it to, what it costs and a picture
+of the result — organised by what you are trying to build rather than by namespace.
 
 ## How to read the pictures
 
@@ -758,6 +759,14 @@ An unknown key is an error, never silently ignored, and the message lists the ke
 
 ## 12. What a script cannot do
 
-Only `base`, `math`, `string` and `table` are opened. There is no `io`, no `os`, no `package` and no
-`require`, so a script cannot read files, start processes or load C modules. It also cannot branch on
-terrain data, because none exists while the script runs: a handle is a promise, not a value.
+Only `base`, `math`, `string` and `table` are opened, so there is no `io`, no `os`, no `package`, no
+`require`, no `debug` and no `coroutine`: a script cannot start a process or load a C module.
+
+It **can** read and run other Lua files. `dofile`, `loadfile` and `load` come with the `base` library
+and nothing removes them afterwards, which was measured by enumerating `_G` from a script rather than
+assumed. That is a gap rather than a decision, and it is recorded in `docs/todo.md`. It has a
+consequence beyond security worth knowing about: the metadata sidecar records a hash of the script
+*file*, so a script that assembles a chunk with `load` and runs it is not described by its own hash.
+
+What a script genuinely cannot do is branch on terrain data, because none exists while it runs: a
+handle is a promise, not a value.

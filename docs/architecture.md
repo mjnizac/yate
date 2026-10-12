@@ -3,7 +3,7 @@
 ## Layering
 
 ```
-executables        terrain_export (Headless)        terrain_viewer (Graphics, milestone 9)
+executables        terrain_export (Headless)        terrain_viewer (Graphics)                
                              |                                |
 engine public API    engine::init / shutdown, Application, Layer, Error, log macros
                              |
@@ -75,7 +75,7 @@ halo, the domain, a channel mask and a 10-word parameter block.
 
 Workgroup sizes are fixed project-wide and come from specialization constants 0..2, so one SPIR-V
 module serves both domains: 8x8x1 for `R2`, 4x4x4 for `R3`. Op variants use specialization ids 3
-and up. `assets/shaders/lib/kernel.glsl` implements the GLSL side and keeps the buffer load/store
+and up. `assets/shaders/lib/kernel.lib.glsl` implements the GLSL side and keeps the buffer load/store
 boilerplate separate from the math, so kernel fusion stays possible later.
 
 World positions are always derived from the integer section origin plus a local offset, which is

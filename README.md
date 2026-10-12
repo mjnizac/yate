@@ -12,11 +12,14 @@ allocation, buffer or compute pass invisible to the profiler.
 
 ## State
 
-Milestones 1 to 3 are done and verified on hardware: build system, instrumented memory system, and a
-headless Vulkan 1.4 context whose compute kernels write section buffers that read back correctly.
-Export, the graph compiler, the Lua bindings, streaming, erosion and the viewer are next.
+All nine milestones are done: build system, instrumented memory, a headless Vulkan 1.4 context, the
+export path, the graph compiler, the Lua bindings, sectioned streaming, iterative erosion kernels and
+an interactive viewer. Both configurations build warning-free and `ctest` passes 12 of 12 in each.
 
-`docs/status.md` is the authoritative list.
+A 16384x16384 export is byte-identical across repeated runs and across section sizes, which is the
+engine's one firm claim.
+
+`docs/status.md` is the authoritative state; `docs/todo.md` is what is still open, and there is plenty.
 
 ## Build
 
@@ -41,7 +44,9 @@ cd build/Debug && ctest --output-on-failure
 | [docs/architecture.md](docs/architecture.md) | Layering and runtime flow |
 | [docs/conventions.md](docs/conventions.md) | Code conventions |
 | [docs/commands.md](docs/commands.md) | Configure, build, run, test, profile |
-| [docs/lua_api.md](docs/lua_api.md) | Script API reference |
-| [docs/status.md](docs/status.md) | Current state, milestone by milestone |
+| [docs/lua_api.md](docs/lua_api.md) | Script API index |
+| [docs/lua_reference.md](docs/lua_reference.md) | Every op, parameter by parameter, with pictures |
+| [docs/status.md](docs/status.md) | Where the engine is right now |
+| [docs/decisions.md](docs/decisions.md) | Why it is the way it is, and what went wrong on the way |
 | [docs/roadmap.md](docs/roadmap.md) | Medium and long-term direction |
 | [docs/todo.md](docs/todo.md) | Concrete open tasks |
