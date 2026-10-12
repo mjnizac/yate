@@ -2,10 +2,10 @@
 
 ## Near term
 
-The nine milestones are done. What comes next is not another milestone but the work in
-`docs/todo.md`, and the honest ordering is: CI first, then the checks that compare a result against
-something the engine did not produce itself, then the correctness items that change what a script
-means — erosion measured per metre rather than per cell, and `Terrain.Coords` in metres.
+The eleven milestones are done: the nine of the spec, the viewer's water and shapes. What comes next is
+not another milestone but the work in `docs/todo.md`. CI has been written and has not run; the checks
+that compare a result against something the engine did not produce itself exist now, and the
+correctness item that remains is the erosion iteration count, which is still per cell.
 
 The reason that ordering is not negotiable is in `docs/decisions.md`: every defect this project has
 had reached acceptance with a green suite, because the suite only ever compared the engine against

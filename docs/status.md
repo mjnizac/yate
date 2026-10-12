@@ -15,6 +15,7 @@ way, is in `docs/decisions.md`; open work is in `docs/todo.md`.
 | 8 | Iterative kernels | **done**, accepted |
 | 9 | Viewer (Graphics mode) | **done**, visually reviewed |
 | 10 | Viewer water | **done**, visually reviewed |
+| 11 | Shapes, profiles and landforms | **done**, visually reviewed |
 
 ## What exists
 
@@ -23,10 +24,14 @@ vector maps and raw `f32` volumes with a metadata sidecar; `terrain_viewer` (Gra
 graph as a GPU-displaced grid with an orbit camera, a ring of streamed tiles, hot reload and
 `--screenshot`.
 
-Thirteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`,
-`Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`. The script API is `Noises.*`, `Terrain.*`,
-`Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec` and `Erosion.*`, documented with pictures in
+Fifteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`,
+`Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`. The script API is
+`Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`, `Erosion.*`,
+`Geometry.*`, and the Lua prelude's `Shapes.*` and `Landforms.*`, documented with pictures in
 `docs/lua_reference.md`.
+
+Four reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
+canyon, mesas), with previews in `docs/images/shapes/`.
 
 Eight sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
 crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the
@@ -34,10 +39,10 @@ reference's plates.
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 14 of 14 in each:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 15 of 15 in each:
 `test_allocators`, `test_mapping`, `test_errors`, `test_compiler`, `test_lua_errors`,
-`test_output_files`, `test_cli`, `test_compute_roundtrip`, `test_noise`, `test_kernels`, `test_seams`,
-`test_erosion`, `test_viewer`, `test_datasets`.
+`test_output_files`, `test_cli`, `test_geometry`, `test_compute_roundtrip`, `test_noise`,
+`test_kernels`, `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`.
 
 Three of those look at something the engine did not itself produce, which is the property the earlier
 suite lacked:
@@ -48,6 +53,9 @@ suite lacked:
 * `test_cli` runs `terrain_export` and `terrain_viewer` as a user would and checks exit codes, error
   text and the files left behind, including that a different section size does not change a byte of the
   heightmap. It is where the viewer was found to exit 0 on a missing script.
+* `test_geometry` exports scripts built from the public API with `--raw` and compares the floats with
+  closed-form values: circle, box, rotation about a pivot, a polygon whose vertices sit on samples, a
+  concave polygon, profiles, every landform, and that a prelude error names the script's line.
 * `test_viewer` captures a rendered frame and checks it holds terrain and changes when the camera moves.
   It fails when the depth buffer is cleared against the reversed-Z convention.
 

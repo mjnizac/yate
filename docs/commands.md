@@ -151,6 +151,14 @@ Left-drag turns, middle-drag pans, the wheel zooms. `F` switches between orbit a
 happens on its own about a quarter of a second after the file changes. `T` toggles wireframe, which is
 the only way to see which grid density and which level the distance rules actually chose.
 
+`--view yaw,pitch,distance` starts the orbit camera there (degrees, degrees, metres; yaw 0 looks along
++z and 90 along +x, a negative pitch looks down) and `--target x,y,z` is the point it orbits. Without
+them the ring is framed as before. They exist so a reference image can be regenerated from a command:
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --view 25,-32,4200 --screenshot out/canyon.png
+```
+
 `--water` draws water at the water level, which is off by default and costs no evaluation to change.
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
 surface; the panel has the same controls and a reload keeps them. Terrain below the level takes the

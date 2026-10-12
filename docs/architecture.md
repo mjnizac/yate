@@ -18,6 +18,21 @@ Everything a `.cpp` exposes beyond itself lives in a header under `include/engin
 declarations sit inside `#ifdef IS_ENGINE`, and `IS_ENGINE` is a PRIVATE compile definition of the
 engine target, so executables never see them. `src/` holds only `.cpp` files.
 
+## Shapes
+
+A shape is a function of a *position field*, an `R2 -> R2` value in metres, and its output is a signed
+distance. Nothing about a shape reads the world: `Terrain.Coords` is just the default position. That is
+what makes the shape ops pointwise, with a CPU reference, a halo of zero and bit-exact tiling for
+free, and it is why a warp is `Coords + noise` and needs no op of its own.
+
+Polygons are a chain of `Shape` nodes because a kernel has ten parameter words and no buffers. Each
+node folds two segments into an accumulator (distance so far in `x`, crossing parity in `y`) and a
+resolve node turns it into a signed distance. The count of segments in a node is a variant field, not a
+parameter word: the compiler writes words 8 and 9 of every node with the iteration count and index.
+
+The higher level, `Shapes.*` and `Landforms.*`, is Lua loaded before the script (`assets/lua/prelude/`,
+step 8 of the startup order). It composes the ops and adds none.
+
 ## Viewer water
 
 Water is a property of the viewer, not of the graph, and it is not a surface drawn over the terrain: the

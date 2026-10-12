@@ -337,6 +337,14 @@ Each allocator also exposes a `std::pmr::memory_resource` adapter, so `std::pmr`
   }
   ```
 
+* **Shapes, profiles and landforms:** geometry is built from the same graph and adds no second engine.
+  * A **shape** is a function of a *position field* (an `R2→R2` value in metres, `Terrain.Coords` by default) and evaluates to a **signed distance** in metres, negative inside. Because it reads no world coordinates itself it is pointwise: halo zero, a CPU reference, and bit-exact tiling with no extra work.
+  * `Terrain.Transform` maps a position field affinely (move, rotate, scale about a pivot); it is what places a shape and what lets one definition be reused.
+  * **Primitives** (`Geometry.Circle`, `Ellipse`, `Box`, `BoxChebyshev`, `Segments`) are in their own local space. Polygons and polylines are a chain of segment nodes holding a distance and a crossing parity; at most 128 segments.
+  * **Profiles** (`Curves.Profile`: linear, smooth, dome, gaussian, plateau) turn a distance into a factor in `[0, 1]`, and `Curves.Terrace` snaps a height to steps. They are `Curve` variants, not a second curve op.
+  * `Combine.SmoothMin` and `Combine.SmoothMax` round the corner of `Min` and `Max` over a width `k`.
+  * **Landforms** (`Landforms.*`) and **shape macros** (`Shapes.*`: placement, booleans, masks, splines, warp) are Lua the engine loads before the script from `assets/lua/prelude/`. They compose the ops above and add none. Their errors report the line of the script that called them, and the prelude's hash is recorded in the sidecar.
+  * A shape is one height per (x, z): caves, arches and overhangs are out of scope.
 * **Source locations:** when a node is created, the binding captures the calling script line with `debug.getinfo` and stores it in the node. Every validation or compilation error must report it.
 * **Entry point:** a script defines `main(params)`. `params` contains:
   * `seed`
@@ -648,6 +656,11 @@ Each milestone ends with its acceptance criterion met and `docs/status.md` updat
 10. **Viewer water.**
     Analytic water shading on the terrain, open water where no terrain covers the view, viewer flags and panel controls.
     *Accepted when:* a surface exactly at the water level renders as one colour, terrain above the level is unchanged, and enabling, moving or disabling the water evaluates no tile.
+
+
+11. **Shapes, profiles and landforms.**
+    `Transform` and `Shape` ops, distance profiles and terraces as `Curve` variants, smooth min and max, a Lua prelude with `Shapes.*` and `Landforms.*`, and four reference terrains.
+    *Accepted when:* every kernel matches its CPU reference, shapes and landforms match closed-form values through the exporter, a prelude error names the calling script's line, and the four terrains export and preview.
 
 ---
 

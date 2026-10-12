@@ -88,6 +88,12 @@ numbers drift, and this one is the index.
 | `Curves.Clamp`, `Remap`, `Power`, `Smoothstep` | the input's mapping | pointwise; `Remap` assumes a `[-1, 1]` input and `Power` only means what you want on a field in `[-1, 1]` |
 | `Filters.Blur` | the input's mapping | radius in **samples**, not metres; its radius becomes halo |
 | `Vec.Combine` | `Rn -> Rm` | a positional list of 2 to 4 scalars |
+| `Terrain.Transform` | `R2->R2` | moves, turns and scales a position field; what places a shape |
+| `Geometry.Circle`, `Ellipse`, `Box`, `BoxChebyshev`, `Segments` | `R2->R1` | signed distance in metres, negative inside, to a primitive in its own local space |
+| `Curves.Profile` | the input's mapping | a signed distance to a factor in `[0, 1]`: `linear`, `smooth`, `dome`, `gaussian`, `plateau` |
+| `Curves.Terrace` | the input's mapping | snaps a height to steps; `step` in metres, `sharpness` in `[0, 1]` |
+| `Combine.SmoothMin`, `Combine.SmoothMax` | the shared mapping | `Min` and `Max` with the corner rounded over `k` |
+| `Shapes.*`, `Landforms.*` | `R2->R1` | the prelude: placed shapes, booleans, masks, warps and heights built from them (see below) |
 | `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
 | `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
 
@@ -104,6 +110,23 @@ The upper bounds on `Erosion.Thermal`'s `strength` and `Erosion.Hydraulic`'s `fl
 conditions, not style limits, and the error says which one was broken: a thermal `strength` above one
 half lets a cell overshoot its neighbour and oscillate instead of settling, and a hydraulic `flow_rate`
 above a quarter lets the four outflows of a cell exceed the water it has.
+
+## The prelude
+
+`Shapes.*` and `Landforms.*` are not ops. They are Lua the engine runs before the script
+(`assets/lua/prelude/`), and every call in them is one of the ops above, so they add no kernel and no
+node type: a landform is a shape, a profile and a multiply.
+
+* They are Lua because that is what a script author reads and edits, and a landform is five calls.
+* Errors from inside them report the line of **your** script that called them, never a line of the
+  prelude, and an unknown key lists what is accepted, as in the C++ bindings.
+* The prelude is hashed into the sidecar as `prelude_hash`: the script's own hash does not describe the
+  terrain by itself, since `Landforms.Cone` is code the engine supplies.
+* It runs inside the same sandbox and time budget as the script. It captures `Geometry`, `Terrain`,
+  `Curves` and the rest into locals when it loads, so a script that reassigns one of those globals does
+  not change what `Shapes.Circle` means.
+
+The prelude is a closed list of files next to the executable, not a scan of a directory.
 
 ## Mappings
 

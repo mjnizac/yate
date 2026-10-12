@@ -992,5 +992,53 @@ The six kernels now read inputs through `InputIndex(slot, local)` and write thro
 `test_seams` has the case that was missing, one per kernel, and fails on all seven variants with the old
 kernels.
 
-The sample terrains and the plates in `docs/images/lua` were rendered before this and some of them
-used such a mask. They are not regenerated here.
+The plates in `docs/images/lua` were regenerated afterwards and came out byte-identical: none of the
+gallery's graphs had a pointwise op reading a value that also fed a wider-halo branch. The sample
+terrains were not re-rendered; a script that masks on a gradient while eroding the same noise is the
+shape that was affected.
+
+## Shapes, and what the audit changed
+
+The milestone was planned as new geometry ops plus a layer of landforms. The audit of the op registry
+and the kernels, done before writing any of it, shaped three things.
+
+**Almost nothing needed a new op.** Union and intersection of distances are `Combine.Min` and `Max`,
+subtraction is `Max` with a negation, a mask is a `Smoothstep`, a landform is a profile times a height.
+What had no equivalent was a position transform (eight nodes per shape otherwise), a distance to a
+shape (no `length`, `abs` or per-component `max` as ops), the polygon parity, the profile functions
+(`sqrt`, `exp`, `floor`) and the rounded min and max. Those are `Transform`, `Shape`, six `CurveOp`
+variants and two `ArithOp` variants. Profiles went into `Curve` rather than a new op because a profile
+*is* a pointwise curve, and the plan forbade a second `Curves`.
+
+**A shape is a function of a position field.** It is not evaluated at "the world position" but at an
+`R2 -> R2` input that defaults to `Coords`. That one decision gave the CPU reference, the zero halo and
+the exact tiling without extra work, made reuse a `Transform` rather than a copy, and made a domain
+warp `Coords + noise` with no op of its own. The alternative, shapes that read world coordinates
+themselves, would have needed each of those built separately.
+
+**The prelude is Lua, not C++.** The first plan put the macros in `lua.cpp` on the grounds that a Lua
+prelude would need `load`, removed in the sandbox, and would sit outside the sidecar's script hash.
+Neither held: the engine loads its own files without exposing `load` to scripts, and the prelude's hash
+goes into the sidecar. What did need care was error lines. A binding reads the line of its caller, which
+from inside the prelude is a prelude line; `CallerLocation` now skips frames whose chunk is
+`prelude/...`, and `fail` is passed to the prelude as an argument so a script cannot call it. The
+reward is that a landform is five readable lines a script author can open and copy.
+
+**What the audit found that was not about shapes.** Composing a pointwise op with a `Blur` over the same
+value showed that every pointwise kernel indexed its inputs with its own halo: 99.99% of the samples
+were wrong. That is its own section above, and it was fixed first, with the test that was missing.
+
+### Measured
+
+* Every new kernel agrees with its CPU reference to float precision on the first run (worst relative
+  error 3e-7).
+* A 40-gon against a circle of the same radius: worst error 0.308 m, which is exactly its sagitta,
+  `100 (1 - cos(pi / 40))`.
+* A polygon with vertices exactly on samples, a concave "U" and a 90 degree rotation about a corner
+  pivot all match closed-form values to 3e-5 m.
+
+### Not done, on purpose
+
+Caves, arches and overhangs (one height per x, z), shapes in `R3`, rivers and channel networks, and
+reading polygons from a file. A polygon is capped at 128 segments because each pair is a pass over
+every sample.

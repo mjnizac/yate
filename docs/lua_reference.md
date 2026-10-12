@@ -655,7 +655,283 @@ Their radii add: this chain has a halo of 48 before anything else in the graph i
 
 ---
 
-## 10. Recipes
+## 10. Shapes and landforms
+
+Noise gives texture and shapes give *intent*: a cone here, a gorge there, a mesa with a flat top. A
+landform is a **shape** (where the edge is) run through a **profile** (how the ground leaves it) and
+multiplied by a height. Everything below is built from ops the engine already evaluates on the GPU; Lua
+only wires them together.
+
+Two spaces, and keeping them apart is what makes the rest simple:
+
+| Space | Unit | What it is | Made by |
+| --- | --- | --- | --- |
+| **Distance** | metres, negative inside | how far a sample is from a shape's edge | `Shapes.*`, `Geometry.*` |
+| **Height** | metres | the terrain | `Landforms.*`, `Curves.Profile * height` |
+
+Booleans (union, subtract) are done in distance space, with `Combine.Min`, `Combine.Max` and their
+smooth versions; heights are combined as terrain, with `+`, `Combine.Max` or `Combine.SmoothMax`.
+
+**Every shape takes `position`**, the field it is evaluated at. It defaults to `Terrain.Coords{}`, the
+position in metres. Pass `Shapes.Warp{}` and the same cone is a hill instead of a drawing of one; pass
+`Coords` run through your own noise and you choose how it bends.
+
+### `Terrain.Transform`
+
+Moves, turns and scales a position field. It is what places a shape, so one shape definition serves any
+number of places.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `position` | `Terrain.Coords{}` | the field to transform |
+| `at` | `{ 0, 0 }` | where the shape's origin ends up, in metres |
+| `rotation` | `0` | degrees; positive turns +x towards +z |
+| `scale` | `1` | a number, or `{ sx, sz }` |
+| `pivot` | `{ 0, 0 }` | the point of the shape's own space that `at` places and that rotation and scale are about |
+
+The node it builds is the *inverse*: world positions to the shape's local space. Say where you want the
+shape and the binding does the arithmetic, in double precision.
+
+A scale of zero is an error. A non-uniform scale stops distances being distances (a circle scaled
+`{ 2, 1 }` is an ellipse whose distance is not the Euclidean one), which is fine for a mask and not for a
+profile that is meant to be a width in metres; use `Shapes.Ellipse` for that.
+
+```lua
+local function main(params)
+    -- The same box in two places: placing is moving the positions it is evaluated at.
+    local left  = Geometry.Box{ position = Terrain.Transform{ at = { -300, 0 }, rotation = 20 },
+                                size = { 400, 120 } }
+    local right = Geometry.Box{ position = Terrain.Transform{ at = { 300, 0 }, rotation = -35 },
+                                size = { 400, 120 } }
+    local both = Combine.Min{ a = left, b = right }
+    return { distance = { value = both, range = { -100, 400 } } }
+end
+return main
+```
+
+### `Geometry.*`: signed distance to a primitive
+
+The building blocks. Each is in its own local space (centred on the origin, unrotated) and returns the
+signed distance in metres. Most scripts reach for `Shapes.*` below, which adds placement.
+
+| Call | Keys | Distance |
+| --- | --- | --- |
+| `Geometry.Circle` | `radius` | `length(p) - radius`; radius 0 is a point |
+| `Geometry.Ellipse` | `radii = { rx, rz }` | a bound on the distance: exact on the axes, approximate away from the edge |
+| `Geometry.Box` | `size = { w, d }`, `rounding = 0` | exact, with rounded corners when `rounding > 0` |
+| `Geometry.BoxChebyshev` | `size = { w, d }` | `max(\|x\| - w/2, \|z\| - d/2)`: the distance of a square pyramid's faces |
+| `Geometry.Segments` | `points`, `closed = true` | a polygon (signed) or a polyline (unsigned) |
+
+`size` is the full width and depth, which is what "a 400 by 200 box" means. `rounding` must not exceed
+the smaller half-size.
+
+**Polygons** are built as a chain of segment nodes, two segments per node, because a kernel has ten
+parameter words and no buffers. The cost is real: a 40-gon is 20 passes over every sample. The limit is
+128 segments, and the error says so. Inside versus outside is decided by casting a ray towards +x with a
+half-open rule on z, so a vertex shared by two edges counts once and a sample exactly on a vertex is not
+misclassified. The distance beside a concave corner is the distance to the nearest edge, not the
+distance round it.
+
+### `Shapes.*`: placed shapes, booleans and masks
+
+Every constructor takes `at`, `rotation`, `scale`, `pivot` and `position`, as `Terrain.Transform` does.
+
+| Call | Keys | Notes |
+| --- | --- | --- |
+| `Shapes.Circle` | `radius` | |
+| `Shapes.Point` | `at` | a circle of radius 0: the distance to a point |
+| `Shapes.Ellipse` | `radii = { rx, rz }` | `rotation` turns it |
+| `Shapes.Rect` | `size`, `rounding`, `metric` | `metric = "chebyshev"` gives square faces; no rounding with it |
+| `Shapes.Polygon` | `points` | signed; points are in the shape's own space, so `at` moves the whole outline |
+| `Shapes.Polyline` | `points`, `closed` | unsigned; `closed` joins the last point to the first |
+| `Shapes.Spline` | `points`, `subdivisions = 8`, `closed`, `fill` | a smooth curve through the points |
+
+**`Shapes.Spline`** is a centripetal Catmull-Rom curve through your points, sampled `subdivisions` times
+per span. Centripetal because it does not loop or overshoot when hand-placed points are unevenly spaced.
+It is unsigned by default (the distance to the curve, which is what a ridge or a river needs); `fill =
+true` on a closed spline is the signed distance to the region it encloses. The segment limit applies to
+`spans * subdivisions`: ten points open at 8 subdivisions is 72 segments.
+
+| Boolean | Keys | Result |
+| --- | --- | --- |
+| `Shapes.Union{ a, b, c, ..., smooth = k }` | | where any of them is; `smooth` rounds the seam over `k` metres |
+| `Shapes.Intersect{ a, b, ..., smooth = k }` | | where all are |
+| `Shapes.Subtract{ a = ..., b = ..., smooth = k }` | | `a` with `b` cut out |
+| `Shapes.Mask{ shape, feather = 0 }` | | 1 inside and 0 outside, with a ramp `feather` metres each side; 0 is a hard edge |
+
+`Shapes.Union` takes a positional list; `smooth` is the only named key.
+
+**`Shapes.Warp{ amplitude = 60, frequency = 0.004, octaves = 3, seed = 0 }`** returns a position field
+bent by noise: pass it as `position =` to any shape or landform. `amplitude` is the largest shift on each
+axis in metres, and a distance is 1-Lipschitz, so a warped shape's edge never moves by more than
+`amplitude * sqrt(2)`.
+
+| Use | Recommended |
+| --- | --- |
+| An outline that reads as natural | `amplitude` 5-10% of the feature's size, `frequency` about 2 over its size |
+| A visible meander | `amplitude` 20-30% of the feature, `frequency` 1 over its size |
+| Do not | `frequency` higher than the sample spacing resolves: it aliases into a jagged edge |
+
+```lua
+local function main(params)
+    local position = Shapes.Warp{ amplitude = 60.0, frequency = 0.004, seed = params.seed }
+
+    local lake  = Shapes.Ellipse{ at = { 0, 0 }, radii = { 220, 140 }, rotation = 25, position = position }
+    local islet = Shapes.Circle{ at = { 40, 10 }, radius = 40, position = position }
+    local water = Shapes.Subtract{ a = lake, b = islet, smooth = 15.0 }
+
+    -- 1 over the lake with a 20 m shore ramp.
+    local mask = Shapes.Mask{ shape = water, feather = 20.0 }
+    return { lake = { value = mask, range = { 0, 1 } } }
+end
+return main
+```
+
+### `Curves.Profile`
+
+Turns a signed distance into a factor in `[0, 1]`: 0 outside and on the edge, 1 inside. Multiply it by a
+height and it is a landform.
+
+| `kind` | Keys | Shape of the cross-section |
+| --- | --- | --- |
+| `"linear"` | `width` | a straight ramp, 0 at the edge and 1 at `width` metres inside: a cone, a pyramid, a tent ridge |
+| `"smooth"` | `width` | the same ramp eased at both ends: a rounded hill |
+| `"dome"` | `width` | vertical at the edge and flat at the top: a dome, a crater wall |
+| `"gaussian"` | `sigma` | 1 inside and falling as a Gaussian outside, with no edge at all |
+| `"plateau"` | `edge = 0`, `falloff` | 1 from `edge` metres inside the outline, falling to 0 `falloff` metres outside it |
+
+Giving a key the kind does not use is an error that names the one it does take.
+
+`plateau` is the scarp: with `edge` and `falloff` small against the height, the wall is steep and the top
+is flat. `edge = 6, falloff = 60` on a 300 m mesa is a wall about 66 m across for 300 m of rise, which is
+a 78 degree face.
+
+| Want | Kind and values |
+| --- | --- |
+| A cone | `linear`, `width` = the radius |
+| A concave volcano flank | `linear`, then `Curves.Power{ exponent = 1.5 }` |
+| A rounded hill | `smooth`, `width` = the radius |
+| A crater or a dome | `dome`, `width` = the radius |
+| A mesa or a platform | `plateau`, `edge` 2-8 m, `falloff` 20-80 m |
+| A soft swell with no defined edge | `gaussian`, `sigma` about a third of the footprint |
+
+### `Curves.Terrace`
+
+Snaps a **height** to steps. Not a profile: it takes metres of altitude.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `step` | `10` | height of one stratum, metres, greater than zero |
+| `sharpness` | `0.5` | `0` eases the whole step, so the ground wavers up in S-curves; `1` is a hard riser between flat treads |
+
+For strata that read as rock, `step` 20-50 m and `sharpness` 0.5-0.7; at 1.0 the treads are flat and the
+risers vertical, which looks like a staircase. Apply it through a blend so only the walls step:
+`Combine.Blend{ a = land, b = Curves.Terrace{ input = land, ... }, mask = walls }`.
+
+### `Combine.SmoothMin` and `Combine.SmoothMax`
+
+`Combine.Min` and `Combine.Max` with the corner rounded over `k`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `a`, `b` | required | the operands |
+| `k` | `1` | blend width in the units of the operands, greater than zero |
+
+Where `a` and `b` differ by more than `k` the result is exactly `Min` or `Max`; inside it the corner is
+cut by at most `k / 4`. Both are symmetric in `a` and `b`. For heights `k` is metres of altitude, so
+`k = 100` rounds a seam between two 500 m ridges over a 100 m band of heights, which is a wide, soft
+shoulder. For distances it rounds the join of two shapes.
+
+| Use | `k` |
+| --- | --- |
+| Joining two landforms so the seam is not a crease | 5-15% of the lower one's height |
+| Rounding the corner where two shapes touch | 5-10% of their size |
+| A crater lip against a ceiling | 20-40 m |
+
+### `Landforms.*`: heights from shapes
+
+Each returns a height in metres over `R2 -> R1`. `height` and `depth` may be a number or a field, so a
+landform can be scaled by a mask. All take `at`, `rotation` and `position`; the round ones have no use for
+`rotation`.
+
+| Call | Keys | What it is |
+| --- | --- | --- |
+| `Landforms.Cone` | `radius`, `height`, `profile = "linear"` | `height` at the centre falling to 0 at `radius` |
+| `Landforms.Dome` | `radius`, `height`, `profile = "dome"` | steep at the foot, flat on top |
+| `Landforms.Bowl` | `radius`, `depth`, `profile = "smooth"` | a round depression |
+| `Landforms.Cylinder` | `radius`, `height`, `edge = 2` | a flat-topped rise with a wall `edge` metres either side of `radius` |
+| `Landforms.Plateau` | `size`, `height`, `edge = 2`, `falloff = 20`, `rounding` | a flat-topped, rotated rectangle with a scarp |
+| `Landforms.Pyramid` | `size`, `height` | square faces; a rectangle gives a ridge at the top |
+| `Landforms.Ridge` | `points`, `width`, `height`, `profile = "smooth"`, `subdivisions = 8`, `closed` | a raised band along a spline |
+| `Landforms.Trench` | `points`, `width`, `depth`, `profile = "smooth"`, `subdivisions = 8`, `closed` | the same, cut |
+
+`profile` is one of `linear`, `smooth`, `dome`, `gaussian` for the ones that take it. For a ridge the
+cross-section is the profile of the distance to the spline minus half the width, so `width` is the full
+width of the band at its base and the crest runs along the spline.
+
+| Want | Call |
+| --- | --- |
+| A volcano with a crater | `Landforms.Cone` raised to a power, cut with `Shapes.Mask` and `Combine.SmoothMin` (see `volcanic_island.lua`) |
+| A mountain range | several `Landforms.Ridge`, joined with `Combine.SmoothMax`, peaks as `Cone`s on the crest |
+| A river valley or a gorge | `Landforms.Trench`, or `Curves.Profile{ kind = "plateau" }` on a spline for vertical walls |
+| A mesa field | `Landforms.Plateau`, several sizes and bearings, with `Pyramid` and `Dome` buttes |
+| A crater | `Landforms.Bowl` with `profile = "dome"`, or `Landforms.Cylinder` with a negative `height` |
+
+**Combines with.** `Combine.SmoothMax` to merge relief; `+` to stack a landform on a base; `Noises.*`
+for what shapes cannot give (grain, scatter); `Erosion.Thermal` with a high talus to drop scree at the
+foot of a scarp without rounding the top; `Filters.Blur{ radius = 1 }` after hydraulic erosion.
+
+```lua
+local function main(params)
+    local position = Shapes.Warp{ amplitude = 80.0, frequency = 0.0025, seed = params.seed }
+
+    local hill  = Landforms.Dome{ at = { -150, 0 }, radius = 260, height = 90, position = position }
+    local mesa  = Landforms.Plateau{ at = { 160, 40 }, size = { 300, 200 }, height = 140,
+                                     rotation = 20, edge = 4, falloff = 40, position = position }
+    local ridge = Landforms.Ridge{ points = { { -400, -200 }, { 0, -260 }, { 400, -180 } },
+                                   width = 160, height = 100, position = position }
+    local gorge = Landforms.Trench{ points = { { -400, 220 }, { 0, 180 }, { 400, 260 } },
+                                    width = 90, depth = 60, position = position }
+
+    local land = Combine.SmoothMax{ a = Combine.SmoothMax{ a = hill, b = mesa, k = 20.0 },
+                                    b = ridge, k = 20.0 } + gorge
+    return { height = { value = land, range = { -100, 250 } } }
+end
+return main
+```
+
+### The reference terrains
+
+Four complete terrains in `assets/scripts/shapes/`. Each runs, exports and previews, has its parameters
+at the top as `params.*` with defaults, and is also exercised by `test_geometry`. The pictures are
+`terrain_viewer` output.
+
+| Terrain | What it demonstrates | Preview command |
+| --- | --- | --- |
+| `volcanic_island.lua` | a concave cone sized so the crater rim lands on `peak`; a crater cut with a mask and a smooth minimum; a parasitic cone; gullies kept to the flanks | `--water` |
+| `mountain_range.lua` | ridges along splines joined with smooth maxima, peaks on the crest, a valley cut afterwards, relief masked to the massif | `--view 20,-24,4600` |
+| `canyon.lua` | a gorge and a side canyon from splines through a plateau profile; strata by `Curves.Terrace` blended in on the walls only | `--view 25,-32,4200` |
+| `mesas.lua` | rotated plateaus of several sizes, a pyramid and two domes, strata over everything, scree from a high-talus thermal pass | `--view 35,-24,3300` |
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/shapes/volcanic_island.lua --water
+build/Release/bin/terrain_viewer --script assets/scripts/shapes/mountain_range.lua --view 20,-24,4600
+```
+
+![Volcanic island](images/shapes/volcanic_island.png)
+
+![Mountain range](images/shapes/mountain_range.png)
+
+![Canyon](images/shapes/canyon.png)
+
+![Mesas and badlands](images/shapes/mesas.png)
+
+**The limit of all of this is the heightfield.** One height per (x, z): no caves, arches, overhangs or
+stacked surfaces. A scarp can be vertical, never undercut.
+
+---
+
+## 11. Recipes
 
 ### A complete terrain
 
@@ -740,7 +1016,7 @@ return { warped = { value = ramp, range = { 0, 4 } } }
 
 ---
 
-## 11. Errors
+## 12. Errors
 
 Every binding reads the calling line out of the Lua stack before it touches the graph, so a failure is
 reported where it was written.
@@ -758,7 +1034,7 @@ terrain.lua:14: [validation] Normals expects R2->R2 input, got R2->R1
 
 An unknown key is an error, never silently ignored, and the message lists the keys the op does accept.
 
-## 12. What a script cannot do
+## 13. What a script cannot do
 
 Only `base`, `math`, `string` and `table` are opened, so there is no `io`, no `os`, no `package`, no
 `require`, no `debug` and no `coroutine`: a script cannot start a process or load a C module.
