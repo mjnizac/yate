@@ -181,6 +181,16 @@ b8_t Ui::Draw(Panels& panels) {
         ImGui::Text("eye %.0f, %.0f, %.0f", static_cast<f64_t>(panels.eye[0]),
                     static_cast<f64_t>(panels.eye[1]), static_cast<f64_t>(panels.eye[2]));
 
+        // Water is a property of the viewer, not of the script, so its controls are always here and
+        // changing one never asks for a reload.
+        ImGui::Separator();
+        ImGui::Checkbox("Water", &panels.waterEnabled);
+        if (panels.waterEnabled) {
+            ImGui::DragFloat("Level (m)", &panels.waterLevel, 1.0f);
+            ImGui::ColorEdit3("Colour", panels.waterColour.data());
+            ImGui::SliderFloat("Opacity", &panels.waterOpacity, 0.0f, 1.0f);
+        }
+
         // The parameter list is generated from whatever the script was given, which is the whole of
         // "auto-generated": the engine does not know what a parameter means, only its name and its text,
         // so a numeric one gets a drag field and anything else gets a text box.

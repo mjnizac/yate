@@ -6,9 +6,33 @@
 
 #version 460
 
-// No push constants here on purpose. Everything this stage needs is interpolated, and declaring the
-// block again would mean keeping two copies of it in step; the pipeline layout exposes the range to the
-// vertex stage only.
+#extension GL_EXT_scalar_block_layout : require
+
+#include "lib/water.lib.glsl"
+
+// The same block the vertex stage declares, member for member under scalar layout. The two 64-bit
+// addresses are `uvec2` here because this stage never dereferences them.
+layout(push_constant, scalar) uniform Push {
+    mat4  viewProjection;
+    vec3  tileOrigin;
+    float resolution;
+    uint  samples;
+    uint  gridVertices;
+    float waterLevel;
+    uint  waterColour;
+    uvec2 heights;
+    uvec2 normals;
+    vec3  eye;
+    uint  pad;
+}
+pc;
+
+// Metres of water over which the terrain fades into the water colour. Short enough that a few metres of
+// depth already reads as water, long enough that a deep basin does not go flat.
+const float kExtinction = 30.0;
+// Half-width of the shoreline band in metres, and its colour.
+const float kShoreWidth = 1.5;
+const vec3  kShoreColor = vec3(0.86, 0.88, 0.84);
 
 layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
@@ -45,6 +69,42 @@ void main() {
     float sky = 0.5 + 0.5 * normal.y;
 
     vec3 lit = albedo * (kSunColor * sun + kSkyColor * sky * 0.35);
+
+    // Water, computed from the eye and this fragment rather than drawn: alpha zero means none.
+    vec4 water = unpackUnorm4x8(pc.waterColour);
+    if (water.a > 0.0) {
+        vec3  toFragment = vWorldPosition - pc.eye;
+        float distance_  = length(toFragment);
+        vec3  direction  = toFragment / max(distance_, 1e-4);
+
+        // Where along eye -> fragment, as a fraction, the ray is below the level. `y(t)` is linear in t,
+        // so the submerged part is one interval and one expression covers camera and fragment each on
+        // either side of the surface: it begins at 0 if the eye is under and at the crossing if not, and
+        // ends at 1 if the fragment is under and at the crossing if not.
+        float dy       = toFragment.y;
+        float crossing = abs(dy) > 1e-6 ? clamp((pc.waterLevel - pc.eye.y) / dy, 0.0, 1.0)
+                                        : (pc.eye.y < pc.waterLevel ? 1.0 : 0.0);
+        float begin    = pc.eye.y < pc.waterLevel ? 0.0 : crossing;
+        float end      = vWorldPosition.y < pc.waterLevel ? 1.0 : crossing;
+        float path     = max(end - begin, 0.0) * distance_;
+
+        float cover = water.a * (1.0 - exp(-path / kExtinction));
+        lit         = mix(lit, water.rgb, cover);
+
+        // The surface is in front of this fragment only when the eye and the fragment are on opposite
+        // sides of it. Then what the pixel shows is the surface, and a surface reflects.
+        if ((pc.eye.y - pc.waterLevel) * (vWorldPosition.y - pc.waterLevel) < 0.0) {
+            lit = mix(lit, WaterSurface(lit, direction), water.a);
+        }
+
+        // A pale band where the terrain meets the level. Its width follows the pixel footprint, so
+        // it stays a line at a distance instead of shimmering as it shrinks below a pixel.
+        float band = max(kShoreWidth, fwidth(vWorldPosition.y) * 1.5);
+        lit        = mix(lit, kShoreColor, water.a * 0.6
+                                               * (1.0 - smoothstep(0.0, band,
+                                                                   abs(vWorldPosition.y
+                                                                       - pc.waterLevel))));
+    }
 
     outColor = vec4(lit, 1.0);
 }

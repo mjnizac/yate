@@ -34,6 +34,10 @@ void PrintUsage() {
                "  --section <n>          samples per tile side (default 128)\n"
                "  --grid <n>             drawn vertices per tile side (default 128)\n"
                "  --param key=value      script parameter, repeatable\n"
+               "  --water                draw water at the water level (off by default)\n"
+               "  --water-level <m>      height of the water surface (default 0)\n"
+               "  --water-color r,g,b    water colour, each 0 to 1 (default 0.10,0.28,0.38)\n"
+               "  --water-opacity <f>    0 to 1, how much the water replaces the terrain (default 0.75)\n"
                "  --width <n>            window width in pixels (default 1600)\n"
                "  --height <n>           window height in pixels (default 900)\n"
                "  --frames <n>           present n frames and exit; 0 runs until closed\n"
@@ -63,6 +67,33 @@ struct Options {
     std::string_view screenshot;
 };
 
+/// Parses `r,g,b`, each a finite number in `[0, 1]`.
+[[nodiscard]] Result<std::array<f32_t, 3>> ParseColour(std::string_view option,
+                                                       std::string_view text) {
+    std::array<f32_t, 3> colour{};
+    for (usize_t i = 0; i < colour.size(); ++i) {
+        const usize_t        comma = text.find(',');
+        const std::string_view part = text.substr(0, comma);
+        if ((comma == std::string_view::npos) != (i + 1 == colour.size())) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                        "{} expects r,g,b, got {}", option, text);
+        }
+        Result<f64_t> value = cli::ParseFinite(option, part);
+        if (!value) {
+            return std::unexpected(value.error());
+        }
+        if (*value < 0.0 || *value > 1.0) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                        "{} components are in [0, 1], got {}", option, part);
+        }
+        colour[i] = static_cast<f32_t>(*value);
+        if (comma != std::string_view::npos) {
+            text.remove_prefix(comma + 1);
+        }
+    }
+    return colour;
+}
+
 /// Parses a whole number into `target`, rejecting trailing text and anything over `maximum`.
 template <typename T>
 [[nodiscard]] Status ParseInto(std::string_view option, std::string_view text, T& target,
@@ -84,6 +115,11 @@ template <typename T>
         if (argument == "--help" || argument == "-h") {
             PrintUsage();
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "usage requested");
+        }
+        // The only option that is a switch rather than a pair: water is off unless asked for.
+        if (argument == "--water") {
+            options.viewer.water.enabled = true;
+            continue;
         }
         if (i + 1 >= argc) {
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} needs a value", argument);
@@ -139,6 +175,28 @@ template <typename T>
             if (Status ok = ParseInto(argument, value, options.frames, ~0ull); !ok) {
                 return std::unexpected(ok.error());
             }
+        } else if (argument == "--water-level") {
+            Result<f64_t> level = cli::ParseFinite(argument, value);
+            if (!level) {
+                return std::unexpected(level.error());
+            }
+            options.viewer.water.level = static_cast<f32_t>(*level);
+        } else if (argument == "--water-color") {
+            Result<std::array<f32_t, 3>> colour = ParseColour(argument, value);
+            if (!colour) {
+                return std::unexpected(colour.error());
+            }
+            options.viewer.water.colour = *colour;
+        } else if (argument == "--water-opacity") {
+            Result<f64_t> opacity = cli::ParseFinite(argument, value);
+            if (!opacity) {
+                return std::unexpected(opacity.error());
+            }
+            if (*opacity < 0.0 || *opacity > 1.0) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--water-opacity is in [0, 1], got {}", value);
+            }
+            options.viewer.water.opacity = static_cast<f32_t>(*opacity);
         } else if (argument == "--screenshot") {
             options.screenshot = value;
         } else if (argument == "--device") {

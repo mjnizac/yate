@@ -8,6 +8,7 @@
 #    include <engine/vulkan/vk.hpp>
 
 #    include <array>
+#    include <cstddef>
 #    include <string_view>
 
 namespace engine::vulkan {
@@ -197,19 +198,57 @@ struct TerrainPushConstants {
     u32_t samples = 0;
     /// Vertices per side of the rendered grid, which may be coarser than `samples`.
     u32_t gridVertices = 0;
-    u32_t pad0         = 0;
-    u32_t pad1         = 0;
-    VkDeviceAddress heights = 0;
-    VkDeviceAddress normals = 0;
+    /// Height of the water surface in metres. Read by the fragment stage, which shades the water
+    /// analytically instead of drawing a plane over the terrain (see `viewer/terrain.frag.glsl`).
+    f32_t waterLevel = 0.0f;
+    /// Water colour as RGBA8, red in the low byte. Alpha is the opacity, and zero means no water.
+    u32_t           waterColour = 0;
+    VkDeviceAddress heights     = 0;
+    VkDeviceAddress normals     = 0;
+    /// World position of the camera, for the length of the ray that runs under the water.
+    std::array<f32_t, 3> eye{};
+    u32_t                pad = 0;
 };
 
-// Two 64-bit addresses at the end, so the block is padded to an 8-byte multiple either way; asserting
-// the number keeps the C++ and the GLSL from drifting apart silently.
-static_assert(sizeof(TerrainPushConstants) == 112,
-              "TerrainPushConstants must match viewer/terrain.vert.glsl");
+// 128 bytes is the minimum a device must offer, so this fits everywhere. Every offset is asserted:
+// a field out of place does not raise a validation error, it draws garbage.
+static_assert(sizeof(TerrainPushConstants) == 128,
+              "TerrainPushConstants must match viewer/terrain.vert.glsl and terrain.frag.glsl");
+static_assert(offsetof(TerrainPushConstants, tileOrigin) == 64);
+static_assert(offsetof(TerrainPushConstants, resolution) == 76);
+static_assert(offsetof(TerrainPushConstants, samples) == 80);
+static_assert(offsetof(TerrainPushConstants, gridVertices) == 84);
+static_assert(offsetof(TerrainPushConstants, waterLevel) == 88);
+static_assert(offsetof(TerrainPushConstants, waterColour) == 92);
+static_assert(offsetof(TerrainPushConstants, heights) == 96);
+static_assert(offsetof(TerrainPushConstants, normals) == 104);
+static_assert(offsetof(TerrainPushConstants, eye) == 112);
 
-/// How the terrain pipeline rasterizes. Line mode is the viewer's wireframe.
-enum class PolygonMode : u32_t { Fill = 0, Line };
+/// What the open-sea quad reads. Must match `viewer/water.vert.glsl` and `water.frag.glsl`.
+struct SeaPushConstants {
+    std::array<std::array<f32_t, 4>, 4> viewProjection{};
+    std::array<f32_t, 3>                eye{};
+    f32_t                               level = 0.0f;
+    /// Horizontal centre of the quad and its half extent, in metres.
+    std::array<f32_t, 2> centre{};
+    std::array<f32_t, 2> halfExtent{};
+    u32_t                colour = 0;
+};
+
+static_assert(sizeof(SeaPushConstants) == 100);
+static_assert(sizeof(SeaPushConstants) <= sizeof(TerrainPushConstants),
+              "both blocks share one push range");
+
+/// The pipelines the viewer builds. A closed set rather than a builder with setters: each one is a
+/// fixed state explained where it is set, and no other combination is drawn.
+enum class PipelineKind : u32_t {
+    /// Opaque terrain, filled.
+    Terrain = 0,
+    /// The same terrain in line mode.
+    TerrainWire,
+    /// Open water where no terrain covers the view. See `viewer/water.vert.glsl`.
+    Sea,
+};
 
 /// One graphics pipeline for the terrain preview, built against the viewer's render pass.
 ///
@@ -230,7 +269,7 @@ public:
                                                         std::string_view vertexSpirv,
                                                         std::string_view fragmentSpirv,
                                                         VkPipelineCache  cache,
-                                                        PolygonMode mode = PolygonMode::Fill);
+                                                        PipelineKind kind = PipelineKind::Terrain);
 
     [[nodiscard]] VkPipeline       Handle() const noexcept { return m_pipeline; }
     [[nodiscard]] VkPipelineLayout Layout() const noexcept { return m_layout; }
@@ -243,7 +282,12 @@ public:
     /// Uploads `constants` without rebinding, for the second and later tiles of a frame.
     void Push(VkCommandBuffer commands, const TerrainPushConstants& constants) const;
 
+    /// Binds the open-sea pipeline and uploads its block.
+    void Bind(VkCommandBuffer commands, VkExtent2D extent, const SeaPushConstants& constants) const;
+
 private:
+    void BindRaw(VkCommandBuffer commands, VkExtent2D extent, const void* data, u32_t size) const;
+
     VkDevice         m_device   = VK_NULL_HANDLE;
     VkPipelineLayout m_layout   = VK_NULL_HANDLE;
     VkPipeline       m_pipeline = VK_NULL_HANDLE;

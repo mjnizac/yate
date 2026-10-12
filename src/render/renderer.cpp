@@ -540,6 +540,16 @@ struct Reload {
     return std::chrono::duration<f64_t>(time.time_since_epoch()).count();
 }
 
+/// Water colour and opacity as RGBA8 in the byte order `unpackUnorm4x8` reads. Opacity is the alpha,
+/// and an alpha of zero is how the shaders know there is no water.
+[[nodiscard]] u32_t PackWater(const ViewerLayer::Water& water) noexcept {
+    const auto byte = [](f32_t value) {
+        return static_cast<u32_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    return byte(water.colour[0]) | (byte(water.colour[1]) << 8) | (byte(water.colour[2]) << 16)
+           | (byte(water.opacity) << 24);
+}
+
 } // namespace
 
 struct ViewerLayer::State {
@@ -557,6 +567,8 @@ struct ViewerLayer::State {
     /// The same pipeline in line mode. Worth having: it is the only way to see what the distance LOD
     /// actually chose, which is otherwise invisible in a filled image.
     vulkan::GraphicsPipeline wirePipeline;
+    /// Open water for the pixels no terrain covers. Only drawn when water is on.
+    vulkan::GraphicsPipeline seaPipeline;
     b8_t                     wireframe = false;
     Camera                   camera;
     Input                    input;
@@ -709,11 +721,21 @@ void ViewerLayer::OnAttach() {
     } else if (Result<vulkan::GraphicsPipeline> wire = vulkan::GraphicsPipeline::Create(
             m_state->context->Device(), m_state->swapchain->Pass().Handle(),
             "viewer/terrain.vert.spv", "viewer/terrain.frag.spv",
-            m_state->context->Pipelines().Handle(), vulkan::PolygonMode::Line);
+            m_state->context->Pipelines().Handle(), vulkan::PipelineKind::TerrainWire);
                wire) {
         m_state->wirePipeline = std::move(*wire);
     } else {
         LOG_WARN("wireframe is unavailable: {}", wire.error().Format().data());
+    }
+
+    if (Result<vulkan::GraphicsPipeline> sea = vulkan::GraphicsPipeline::Create(
+            m_state->context->Device(), m_state->swapchain->Pass().Handle(),
+            "viewer/water.vert.spv", "viewer/water.frag.spv",
+            m_state->context->Pipelines().Handle(), vulkan::PipelineKind::Sea);
+        sea) {
+        m_state->seaPipeline = std::move(*sea);
+    } else {
+        LOG_WARN("open water is unavailable: {}", sea.error().Format().data());
     }
 
     // The camera is framed and the level chosen *before* the script runs, because the script is given
@@ -823,6 +845,7 @@ void ViewerLayer::OnDetach() {
     }
     m_state->pipeline     = vulkan::GraphicsPipeline{};
     m_state->wirePipeline = vulkan::GraphicsPipeline{};
+    m_state->seaPipeline  = vulkan::GraphicsPipeline{};
 }
 
 void ViewerLayer::OnUpdate() {
@@ -939,6 +962,10 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.frameMilliseconds = state.frameMilliseconds;
     panels.eye               = {eye.x, eye.y, eye.z};
     panels.params            = &state.params;
+    panels.waterEnabled      = state.settings.water.enabled;
+    panels.waterLevel        = state.settings.water.level;
+    panels.waterColour       = state.settings.water.colour;
+    panels.waterOpacity      = state.settings.water.opacity;
 
     // Editing a parameter reloads: the script is what turns a parameter into terrain, so there is no
     // shortcut that updates push constants instead. The spec's "only numeric parameters changed, so no
@@ -947,6 +974,10 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     if (state.ui.Draw(panels)) {
         RequestReload();
     }
+    state.settings.water.enabled = panels.waterEnabled;
+    state.settings.water.level   = panels.waterLevel;
+    state.settings.water.colour  = panels.waterColour;
+    state.settings.water.opacity = panels.waterOpacity;
 
     state.ui.Record(commands);
 }
@@ -1056,9 +1087,18 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     const Mat4    viewProjection = state.camera.ViewProjection(aspect);
     const Frustum frustum        = FrustumOf(viewProjection);
 
+    // Water is shaded by the terrain fragments themselves (see `terrain.frag.glsl`). A wireframe draws
+    // none: its fragments are lines, and a tinted line says nothing about where the surface is.
+    const ViewerLayer::Water& water = state.settings.water;
+    const b8_t shadeWater           = water.enabled && !state.wireframe;
+    const Vec3 eye                  = state.camera.Position();
+
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
     constants.samples        = state.terrain.samples;
+    constants.eye            = {eye.x, eye.y, eye.z};
+    constants.waterLevel     = water.level;
+    constants.waterColour    = shadeWater ? PackWater(water) : 0u;
 
     const vulkan::GraphicsPipeline& pipeline =
         state.wireframe && state.wirePipeline.IsValid() ? state.wirePipeline : state.pipeline;
@@ -1103,6 +1143,33 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
         ++drawn;
     }
     state.tilesDrawn = drawn;
+
+    // Open water covers the ring where no terrain was drawn: holes while streaming, and the part of a
+    // tile the height range culled. One quad over the footprint of every resident tile, drawn after the
+    // terrain; the depth test, not the draw order, is what keeps it behind the terrain (see
+    // `viewer/water.vert.glsl`).
+    if (shadeWater && state.seaPipeline.IsValid()) {
+        f32_t minX = std::numeric_limits<f32_t>::max();
+        f32_t minZ = minX;
+        f32_t maxX = std::numeric_limits<f32_t>::lowest();
+        f32_t maxZ = maxX;
+        for (const Tile& tile : state.cache.tiles) {
+            const f32_t side = static_cast<f32_t>(tile.samples - 1) * tile.spacing;
+            minX             = std::min(minX, tile.origin[0]);
+            minZ             = std::min(minZ, tile.origin[2]);
+            maxX             = std::max(maxX, tile.origin[0] + side);
+            maxZ             = std::max(maxZ, tile.origin[2] + side);
+        }
+        vulkan::SeaPushConstants sea{};
+        sea.viewProjection = viewProjection.m;
+        sea.eye            = constants.eye;
+        sea.level          = water.level;
+        sea.centre         = {(minX + maxX) * 0.5f, (minZ + maxZ) * 0.5f};
+        sea.halfExtent     = {(maxX - minX) * 0.5f, (maxZ - minZ) * 0.5f};
+        sea.colour         = constants.waterColour;
+        state.seaPipeline.Bind(frame.commands, frame.extent, sea);
+        vkCmdDraw(frame.commands, 6, 1, 0, 0);
+    }
 
     // Panels last, so they sit on top of the terrain. Same render pass, no depth test in the UI
     // pipeline, so ordering inside the pass is all that is needed.
@@ -1277,6 +1344,12 @@ std::string_view ViewerLayer::LastError() const noexcept {
 void ViewerLayer::MoveCameraTo(f32_t x, f32_t y, f32_t z) noexcept {
     if (m_state != nullptr) {
         m_state->camera.PlaceAt(Vec3{x, y, z});
+    }
+}
+
+void ViewerLayer::SetWater(const Water& water) noexcept {
+    if (m_state != nullptr) {
+        m_state->settings.water = water;
     }
 }
 

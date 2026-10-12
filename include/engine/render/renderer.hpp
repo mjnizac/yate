@@ -23,6 +23,20 @@ namespace engine {
 /// produced is drawn where it lies.
 class ENGINE_API ViewerLayer final : public Layer {
 public:
+    /// Water for the preview. Lives in the viewer, not in the graph: the terrain defines an elevation
+    /// and the viewer draws a level over it, so changing any of this never re-evaluates a tile and a
+    /// reload keeps it.
+    struct Water {
+        /// Off by default, so a script that has never been shown with water looks as it always did.
+        b8_t enabled = false;
+        /// Height of the surface in world metres. Sea level is zero.
+        f32_t level = 0.0f;
+        /// Linear RGB of the water body.
+        std::array<f32_t, 3> colour{0.10f, 0.28f, 0.38f};
+        /// How much of the terrain's own colour the water replaces at depth, in `[0, 1]`.
+        f32_t opacity = 0.75f;
+    };
+
     struct Settings {
         /// Script to evaluate. Reloaded when its modification time changes.
         std::string_view script;
@@ -47,6 +61,7 @@ public:
         u32_t gridVertices = 128;
         /// User parameters the script receives, as `--param` does for the exporter.
         const terrain::Params* params = nullptr;
+        Water                  water;
     };
 
     ViewerLayer(Application& application, const Settings& settings);
@@ -90,6 +105,9 @@ public:
 
     /// Switches between fly and orbit without moving the eye. The `F` key does the same thing.
     void SetFlyMode(b8_t fly) noexcept;
+
+    /// Replaces the water settings. Takes effect on the next frame and costs no evaluation.
+    void SetWater(const Water& water) noexcept;
 
     /// Blocks until a reload in flight has finished. For tests, which cannot wait on a frame count.
     void WaitForReload();

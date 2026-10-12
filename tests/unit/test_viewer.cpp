@@ -108,6 +108,69 @@ constexpr std::array<int, 3> kClearSrgb{63, 69, 85};
     return total / static_cast<f64_t>(a.rgb.size());
 }
 
+/// The part of the frame the panels never reach: the right of `kClearOfPanelsX` and below
+/// `kClearOfPanelsY`, as fractions. The panels sit at the top left and their water section changes with
+/// the water settings, so a comparison of what the *terrain* did has to look past them.
+constexpr f64_t kClearOfPanelsX = 0.72;
+constexpr f64_t kClearOfPanelsY = 0.62;
+
+/// Like `MeanDifference`, over the part of the frame the panels do not cover.
+[[nodiscard]] f64_t MeanDifferenceClear(const Frame& a, const Frame& b) {
+    if (a.rgb.size() != b.rgb.size() || a.rgb.empty()) {
+        return 0.0;
+    }
+    const u32_t first = static_cast<u32_t>(static_cast<f64_t>(a.width) * kClearOfPanelsX);
+    const u32_t top   = static_cast<u32_t>(static_cast<f64_t>(a.height) * kClearOfPanelsY);
+    f64_t       total = 0.0;
+    usize_t     count = 0;
+    for (u32_t y = top; y < a.height; ++y) {
+        for (u32_t x = first; x < a.width; ++x) {
+            for (usize_t c = 0; c < 3; ++c) {
+                const usize_t i = (static_cast<usize_t>(y) * a.width + x) * 3 + c;
+                total += std::abs(static_cast<int>(a.rgb[i]) - static_cast<int>(b.rgb[i]));
+                ++count;
+            }
+        }
+    }
+    return count == 0 ? 0.0 : total / static_cast<f64_t>(count);
+}
+
+/// Largest spread of any channel among the pixels clear of the panels that are not the clear colour, and how many such pixels there were. A flat surface lit by one sun is one colour, so
+/// a spread above a few codes means something is not constant: two surfaces fighting for the pixel, or
+/// a pattern.
+struct Spread {
+    int     widest = 0;
+    usize_t pixels = 0;
+};
+
+[[nodiscard]] Spread ClearSpread(const Frame& frame) {
+    Spread               out;
+    std::array<int, 3>   low{255, 255, 255};
+    std::array<int, 3>   high{0, 0, 0};
+    const u32_t first = static_cast<u32_t>(static_cast<f64_t>(frame.width) * kClearOfPanelsX);
+    const u32_t top   = static_cast<u32_t>(static_cast<f64_t>(frame.height) * kClearOfPanelsY);
+    for (u32_t y = top; y < frame.height; ++y) {
+        for (u32_t x = first; x < frame.width; ++x) {
+            const usize_t i = (static_cast<usize_t>(y) * frame.width + x) * 3;
+            int           worst = 0;
+            for (usize_t c = 0; c < 3; ++c) {
+                worst = std::max(worst, std::abs(static_cast<int>(frame.rgb[i + c]) - kClearSrgb[c]));
+            }
+            if (worst <= 6) {
+                continue;
+            }
+            ++out.pixels;
+            for (usize_t c = 0; c < 3; ++c) {
+                low[c]  = std::min(low[c], static_cast<int>(frame.rgb[i + c]));
+                high[c] = std::max(high[c], static_cast<int>(frame.rgb[i + c]));
+            }
+        }
+    }
+    for (usize_t c = 0; c < 3; ++c) {
+        out.widest = std::max(out.widest, high[c] - low[c]);
+    }
+    return out;
+}
 
 /// Matches `SKIP_RETURN_CODE` in tests/CMakeLists.txt.
 constexpr int kSkip = 77;
@@ -378,6 +441,112 @@ int main() {
                         1u << viewer.Level());
             CHECK(viewer.Level() > 0);
             CHECK_EQ(viewer.MissingTiles(), u32_t{0});
+
+            test::Section("water is shaded on the terrain, by the terrain, and costs no evaluation");
+            {
+                const auto flat = [&](f64_t height) {
+                    return WriteFile(scriptPath,
+                                     "local function main()\n"
+                                     "    return { height = { value = Terrain.Const{ value = "
+                                         + std::to_string(height)
+                                         + " }, range = { -100, 100 } } }\n"
+                                           "end\nreturn main\n");
+                };
+                const auto reloadFlat = [&](f64_t height) {
+                    CHECK(flat(height));
+                    viewer.RequestReload();
+                    window.StopAfter(window.FramesPresented() + 2);
+                    (*application)->Run();
+                    viewer.WaitForReload();
+                    CHECK(viewer.LastError().empty());
+                };
+                const auto shoot = [&](const char* name) {
+                    const std::string path = std::string(kDirectory) + "/" + name + ".png";
+                    CHECK(window.CaptureNextFrame(path.c_str()));
+                    window.StopAfter(window.FramesPresented() + 3);
+                    (*application)->Run();
+                    return DecodeFrame(path);
+                };
+
+                reloadFlat(-50.0);
+                viewer.SetFlyMode(true);
+                viewer.MoveCameraTo(0.0f, 120.0f, -400.0f);
+                window.StopAfter(window.FramesPresented() + 40);
+                (*application)->Run();
+
+                const u64_t evaluated = viewer.TilesEvaluated();
+                ViewerLayer::Water water;
+                water.enabled = false;
+                viewer.SetWater(water);
+                const Frame dry = shoot("water_dry");
+                water.enabled = true;
+                viewer.SetWater(water);
+                const Frame wet = shoot("water_wet");
+                CHECK(dry.width > 0);
+                CHECK(wet.width > 0);
+
+                // Everything below the level is tinted, and the tint is far from the noise floor.
+                const f64_t tint = MeanDifferenceClear(dry, wet);
+                std::printf("     terrain 50 m under the level: %.2f codes of tint\n", tint);
+                CHECK(tint > 8.0);
+
+                // The level moved, not the terrain: water well below the floor leaves the frame as it was.
+                water.level = -500.0f;
+                viewer.SetWater(water);
+                const Frame deep = shoot("water_low_level");
+                const f64_t gone = MeanDifferenceClear(dry, deep);
+                std::printf("     level 450 m below the terrain: %.3f codes of change\n", gone);
+                CHECK(gone < 0.5);
+
+                // Switching it on, off and moving it evaluated nothing.
+                CHECK_EQ(viewer.TilesEvaluated(), evaluated);
+
+                test::Section("a surface exactly at the water level does not fight it");
+                // The case a drawn plane fails: terrain and water at the same depth over every pixel. With
+                // the water shaded by the terrain there is one surface, so the frame is one colour.
+                reloadFlat(0.0);
+                water.level = 0.0f;
+                viewer.SetWater(water);
+
+                const Frame levelA = shoot("water_at_level_a");
+                const Spread spread = ClearSpread(levelA);
+                std::printf("     at the level: %zu pixel(s), widest channel spread %d code(s)\n",
+                            spread.pixels, spread.widest);
+                CHECK(spread.pixels > 1000);
+                CHECK(spread.widest <= 3);
+
+                // And it stays that way when the camera moves a centimetre, which is what makes a z-fight
+                // flicker rather than sit still.
+                viewer.MoveCameraTo(0.01f, 120.0f, -400.0f);
+                const Frame levelB = shoot("water_at_level_b");
+                const f64_t flicker = MeanDifferenceClear(levelA, levelB);
+                std::printf("     moved 1 cm: %.3f codes of change\n", flicker);
+                CHECK(flicker < 0.5);
+                CHECK(ClearSpread(levelB).widest <= 3);
+
+                test::Section("terrain above the level is left alone");
+                reloadFlat(50.0);
+                water.level = 0.0f;
+                viewer.SetWater(water);
+                const Frame highWet = shoot("water_high_wet");
+                water.enabled = false;
+                viewer.SetWater(water);
+                const Frame highDry = shoot("water_high_dry");
+                const f64_t same = MeanDifferenceClear(highDry, highWet);
+                std::printf("     terrain 50 m over the level: %.3f codes of change\n", same);
+                CHECK(same < 0.5);
+
+                test::Section("a camera under the surface sees the terrain through it");
+                reloadFlat(-50.0);
+                water.enabled = true;
+                water.level   = 2000.0f;
+                viewer.SetWater(water);
+                const Frame under = shoot("water_camera_under");
+                CHECK(under.width > 0);
+                // Tinted all over rather than a colour from nowhere: still terrain, still covering the frame.
+                CHECK(CoveredFraction(under) > 0.5);
+                CHECK(MeanDifferenceClear(dry, under) > 8.0);
+            }
         }
 
         // The whole point: none of the above may have produced a validation error.

@@ -171,6 +171,19 @@ void TestViewerExitCodes() {
              {"--ring", "at most"});
     MustFail(TERRAIN_VIEWER_EXE, "viewer_width_trailing", "--script \"" + kGood + "\" --width 12x",
              {"--width", "whole number"});
+
+    // Water: every value is validated at the boundary, and the option that names the problem is in
+    // the message.
+    MustFail(TERRAIN_VIEWER_EXE, "viewer_water_level_text",
+             "--script \"" + kGood + "\" --water-level abc", {"--water-level"});
+    MustFail(TERRAIN_VIEWER_EXE, "viewer_water_level_nan",
+             "--script \"" + kGood + "\" --water-level nan", {"--water-level"});
+    MustFail(TERRAIN_VIEWER_EXE, "viewer_water_opacity_high",
+             "--script \"" + kGood + "\" --water-opacity 2", {"--water-opacity", "[0, 1]"});
+    MustFail(TERRAIN_VIEWER_EXE, "viewer_water_colour_short",
+             "--script \"" + kGood + "\" --water-color 1,2", {"--water-color", "r,g,b"});
+    MustFail(TERRAIN_VIEWER_EXE, "viewer_water_colour_range",
+             "--script \"" + kGood + "\" --water-color 0.1,0.2,1.5", {"--water-color", "[0, 1]"});
 }
 
 void TestSuccessIsReproducible() {

@@ -296,7 +296,7 @@ namespace {
 Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass renderPass,
                                                   std::string_view vertexSpirv,
                                                   std::string_view fragmentSpirv,
-                                                  VkPipelineCache cache, PolygonMode mode) {
+                                                  VkPipelineCache cache, PipelineKind kind) {
     Result<VkShaderModule> vertex = LoadModule(device, vertexSpirv);
     if (!vertex) {
         return std::unexpected(vertex.error());
@@ -314,9 +314,10 @@ Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass 
     GraphicsPipeline pipeline;
     pipeline.m_device = device;
 
-    // Vertex stage only: the fragment stage reads nothing but its interpolated inputs, and granting it
-    // the range would mean keeping a second copy of the block in step with the first.
-    const VkPushConstantRange pushRange{.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+    // Both stages: the fragment stage shades the water, so it reads the level, the colour and the eye
+    // from the same block the vertex stage reads its tile from.
+    const VkPushConstantRange pushRange{.stageFlags = VK_SHADER_STAGE_VERTEX_BIT
+                                                      | VK_SHADER_STAGE_FRAGMENT_BIT,
                                         .offset     = 0,
                                         .size       = sizeof(TerrainPushConstants)};
     const VkPipelineLayoutCreateInfo layoutInfo{
@@ -366,12 +367,15 @@ Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass 
     // Back faces culled with a counter-clockwise front face, which matches the winding the vertex shader
     // emits when the terrain is seen from above. The underside of the terrain is never meant to be
     // visible, and culling it halves the fragment work.
+    const b8_t wire = kind == PipelineKind::TerrainWire;
+    const b8_t sea  = kind == PipelineKind::Sea;
     const VkPipelineRasterizationStateCreateInfo rasterization{
         .sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .polygonMode = mode == PolygonMode::Line ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL,
+        .polygonMode = wire ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL,
         // Lines are not culled: a wireframe is for seeing the grid, including the far side of a ridge.
-        .cullMode  = static_cast<VkCullModeFlags>(mode == PolygonMode::Line ? VK_CULL_MODE_NONE
-                                                                            : VK_CULL_MODE_BACK_BIT),
+        // The sea is not culled either: it is seen from below when the camera goes under the surface.
+        .cullMode  = static_cast<VkCullModeFlags>(wire || sea ? VK_CULL_MODE_NONE
+                                                              : VK_CULL_MODE_BACK_BIT),
         .frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .lineWidth   = 1.0f};
     const VkPipelineMultisampleStateCreateInfo multisample{
@@ -383,8 +387,10 @@ Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass 
     // precision where the geometry is close, which is what stops the horizon z-fighting.
     const VkPipelineDepthStencilStateCreateInfo depthStencil{
         .sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable  = VK_TRUE,
-        .depthWriteEnable = VK_TRUE,
+        .depthTestEnable = VK_TRUE,
+        // The sea writes nothing: it is drawn at the cleared depth, so it can only pass where nothing
+        // else was drawn, and leaving the buffer alone keeps that true for whatever follows.
+        .depthWriteEnable = sea ? VK_FALSE : VK_TRUE,
         .depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL};
 
     const VkPipelineColorBlendAttachmentState blendAttachment{
@@ -454,6 +460,16 @@ GraphicsPipeline& GraphicsPipeline::operator=(GraphicsPipeline&& other) noexcept
 
 void GraphicsPipeline::Bind(VkCommandBuffer commands, VkExtent2D extent,
                             const TerrainPushConstants& constants) const {
+    BindRaw(commands, extent, &constants, sizeof(constants));
+}
+
+void GraphicsPipeline::Bind(VkCommandBuffer commands, VkExtent2D extent,
+                            const SeaPushConstants& constants) const {
+    BindRaw(commands, extent, &constants, sizeof(constants));
+}
+
+void GraphicsPipeline::BindRaw(VkCommandBuffer commands, VkExtent2D extent, const void* data,
+                               u32_t size) const {
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
 
     const VkViewport viewport{.x        = 0.0f,
@@ -467,12 +483,14 @@ void GraphicsPipeline::Bind(VkCommandBuffer commands, VkExtent2D extent,
     const VkRect2D scissor{.offset = {0, 0}, .extent = extent};
     vkCmdSetScissor(commands, 0, 1, &scissor);
 
-    Push(commands, constants);
+    vkCmdPushConstants(commands, m_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, data);
 }
 
 void GraphicsPipeline::Push(VkCommandBuffer             commands,
                             const TerrainPushConstants& constants) const {
-    vkCmdPushConstants(commands, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+    vkCmdPushConstants(commands, m_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(TerrainPushConstants), &constants);
 }
 

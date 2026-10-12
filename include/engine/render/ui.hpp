@@ -53,6 +53,11 @@ public:
         f32_t       framesPerSecond   = 0.0f;
         f32_t       frameMilliseconds = 0.0f;
         std::array<f32_t, 3> eye{};
+        /// Edited in place by the water section; the caller reads them back after `Draw`.
+        b8_t                 waterEnabled = false;
+        f32_t                waterLevel   = 0.0f;
+        std::array<f32_t, 3> waterColour{};
+        f32_t                waterOpacity = 0.75f;
         /// Edited in place when the user drags a value. Null hides the section.
         terrain::Params* params = nullptr;
     };

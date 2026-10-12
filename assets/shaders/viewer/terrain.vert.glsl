@@ -28,10 +28,13 @@ layout(push_constant, scalar) uniform Push {
     uint samples;
     // Vertices per side of the rendered grid, which may be coarser than `samples`.
     uint gridVertices;
-    uint pad0;
-    uint pad1;
+    // Read by the fragment stage only; declared here so the block is the same one in both.
+    float waterLevel;
+    uint  waterColour;
     FloatBuffer heights;
     FloatBuffer normals;
+    vec3 eye;
+    uint pad;
 }
 pc;
 

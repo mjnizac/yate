@@ -151,6 +151,15 @@ Left-drag turns, middle-drag pans, the wheel zooms. `F` switches between orbit a
 happens on its own about a quarter of a second after the file changes. `T` toggles wireframe, which is
 the only way to see which grid density and which level the distance rules actually chose.
 
+`--water` draws water at the water level, which is off by default and costs no evaluation to change.
+`--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
+surface; the panel has the same controls and a reload keeps them. Terrain below the level takes the
+water colour in proportion to the water in front of it, with a pale band where it meets the surface:
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/island.lua --water --screenshot out/island.png
+```
+
 `--resolution` is metres per sample at the finest level and `--section` is samples per tile, so the two
 decide how much world one tile covers. `--ring` is how many tiles are kept on each side of the camera, so
 3 is a 7x7 ring of 49 tiles: at 128 samples and 2 m that is about 1.8 km across and takes roughly 45 ms

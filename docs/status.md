@@ -14,6 +14,7 @@ way, is in `docs/decisions.md`; open work is in `docs/todo.md`.
 | 7 | Sections and streaming | **done**, accepted |
 | 8 | Iterative kernels | **done**, accepted |
 | 9 | Viewer (Graphics mode) | **done**, visually reviewed |
+| 10 | Viewer water | **done**, visually reviewed |
 
 ## What exists
 

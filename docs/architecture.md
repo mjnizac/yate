@@ -18,6 +18,14 @@ Everything a `.cpp` exposes beyond itself lives in a header under `include/engin
 declarations sit inside `#ifdef IS_ENGINE`, and `IS_ENGINE` is a PRIVATE compile definition of the
 engine target, so executables never see them. `src/` holds only `.cpp` files.
 
+## Viewer water
+
+Water is a property of the viewer, not of the graph, and it is not a surface drawn over the terrain: the
+terrain fragment shader works out the water in front of itself from the eye position, its own position
+and the level, which pass in the terrain push block. A second plane at nearly the same depth would
+z-fight along every shoreline. A single quad at the cleared depth covers only the pixels no terrain
+reached. `docs/spec.md` section 12 has the contract.
+
 ## Run modes
 
 The mode is chosen once, in `AppInfo::mode`:
