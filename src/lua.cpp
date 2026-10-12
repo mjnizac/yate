@@ -418,11 +418,24 @@ void Bind(sol::state& state, Graph& graph) {
                 return wrap(*selected);
             }
 
+            // A two-component value over `R2` is `(x, z)`: the plane's own axes, since the height lives
+            // in a third dimension that is not there. So `.z` on one means its second component, which
+            // is what every script that wrote `Terrain.Coords{ domain = 2 }.z` meant. Accepted rather
+            // than refused with "component 2 was requested", an error about indices for what was a
+            // question about an axis. `.y` keeps meaning component 1, so both spellings work.
+            //
+            // Not extended to `R2 -> R3`: there `.z` is a third component, and a normal's `z` is not
+            // the plane's z axis.
+            const terrain::Mapping mapping = self.value.mapping;
+            if (key == "z" && mapping.domain == terrain::Domain::R2 && mapping.components == 2) {
+                return wrap(Unwrap(graph.AddExtract(self.value, 1, location)));
+            }
             for (u8_t component = 0; component < 4; ++component) {
                 if (key == std::string_view{"xyzw"}.substr(component, 1)) {
                     return wrap(Unwrap(graph.AddExtract(self.value, component, location)));
                 }
             }
+
             Fail(location, "a {} value has no '{}'; it offers {} and the components .x, .y, .z, .w",
                  ToString(kind), key, terrain::ChannelNamesOf(kind).data());
         },
@@ -664,7 +677,7 @@ void Bind(sol::state& state, Graph& graph) {
 
         Graph::ThermalParams params;
         params.iterations = args.Count("iterations", 16, 1, terrain::kMaxHalo);
-        params.talus      = args.Float("talus", 0.02);
+        params.talus      = args.Float("talus", 0.7);
         params.strength   = args.Float("strength", 0.25);
         args.Finish();
 

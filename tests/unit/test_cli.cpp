@@ -14,6 +14,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
@@ -210,6 +211,38 @@ void TestSuccessIsReproducible() {
     CHECK(ReadFile(dirC + "/height.png") == heightA);
 }
 
+/// `Terrain.Coords` returns metres, not the sample index, at any resolution. Checked through an `R3`
+/// export because its `.raw` output is plain little-endian floats, which a test can read without a PNG
+/// decoder: the x of sample `i` at 2 m per sample is `2 * i`.
+void TestCoordsAreMetres() {
+    test::Section("Terrain.Coords is in metres at any sample spacing");
+
+    const std::string script = WriteScript(
+        "coords", "local function main()\n"
+                  "  return { x = { value = Terrain.Coords{ domain = 3 }.x, range = { 0, 64 } } }\n"
+                  "end\nreturn main\n");
+    const std::string dir = std::string(kDirectory) + "/coords";
+    const Run run = Execute(TERRAIN_EXPORT_EXE,
+                            "--script \"" + script + "\" --min 0,0,0 --max 16,16,16 --resolution 2 "
+                            "--section 8 --out \"" + dir + "\"");
+    Expect(run.exitCode == 0, "coords_export", "the export exits 0", run);
+    if (run.exitCode != 0) {
+        return;
+    }
+
+    const std::string raw = ReadFile(dir + "/x.raw");
+    // 8 x 8 x 8 samples of 4 bytes.
+    CHECK_EQ(raw.size(), std::size_t{8 * 8 * 8 * 4});
+    if (raw.size() < 8 * 4) {
+        return;
+    }
+    float first[8];
+    std::memcpy(first, raw.data(), sizeof(first));
+    for (int i = 0; i < 8; ++i) {
+        CHECK_EQ(first[i], static_cast<float>(2 * i));
+    }
+}
+
 } // namespace
 
 int main() {
@@ -233,6 +266,7 @@ int main() {
     TestScripts();
     TestViewerExitCodes();
     TestSuccessIsReproducible();
+    TestCoordsAreMetres();
 
     return test::Summary("test_cli");
 }

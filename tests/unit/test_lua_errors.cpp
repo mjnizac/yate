@@ -383,6 +383,43 @@ return main
 )", 0, {"attempt to call a nil value", "pcall"}, ErrorStage::Script, 0.3);
 }
 
+// --- The z axis of a plane --------------------------------------------------------------------
+//
+// An `R2 -> R2` value is `(x, z)`: the plane's own axes. `.z` on one used to be an error about
+// "component 2" that did not exist, for what was a question about an axis.
+
+void TestPlaneAxis() {
+    test::Section("`.z` is the second component of a value over R2");
+
+    const std::string good = WriteScript("plane_z", R"(local function main()
+    local p = Terrain.Coords{ domain = 2 }
+    local n = Noises.fBm{ frequency = 0.01, octaves = 2, amplitude = 100.0 }
+    return {
+        a = { value = p.z, range = { 0, 4096 } },
+        b = { value = p.y, range = { 0, 4096 } },
+        -- on a three-component value `.z` stays the third component, not the plane's z
+        c = { value = Terrain.Normals{ input = n.gradient }.z, range = { -1, 1 } },
+    }
+end
+return main
+)");
+    Graph                  graph;
+    lua::ScriptEnvironment environment;
+    environment.maxX       = 256.0;
+    environment.maxZ       = 256.0;
+    environment.resolution = 1.0;
+    REQUIRE_OK_VOID(lua::RunScript(graph, good, environment));
+    CHECK_EQ(graph.OutputCount(), usize_t{3});
+
+    // On a scalar there is no second axis to mean: still an error, and still names what it offers.
+    CheckFailure("plane_z_on_scalar", R"(local function main()
+    local n = Noises.fBm{ frequency = 0.01, octaves = 2 }
+    return { height = { value = n.value.z, range = { -1, 1 } } }
+end
+return main
+)", 3, {"component 2", "R2->R1"}, ErrorStage::Validation);
+}
+
 /// A script that is fine must stay fine. Without this the suite would pass if `RunScript` simply
 /// failed on everything.
 void TestGoodScriptPasses() {
@@ -436,6 +473,7 @@ int main() {
     TestParameterErrors();
     TestScriptErrors();
     TestSandbox();
+    TestPlaneAxis();
     TestGoodScriptPasses();
 
     // Every state is created and destroyed inside RunScript, so nothing may be left behind.
