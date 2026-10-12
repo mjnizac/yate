@@ -4,6 +4,7 @@
 // (spec section 6). Everything it does lives in the engine.
 
 #include <engine/application.hpp>
+#include <engine/cli_parse.hpp>
 #include <engine/engine.hpp>
 #include <engine/log.hpp>
 #include <engine/render/renderer.hpp>
@@ -62,6 +63,18 @@ struct Options {
     std::string_view screenshot;
 };
 
+/// Parses a whole number into `target`, rejecting trailing text and anything over `maximum`.
+template <typename T>
+[[nodiscard]] Status ParseInto(std::string_view option, std::string_view text, T& target,
+                               u64_t maximum = 0xFFFFFFFFull) {
+    Result<u64_t> value = cli::ParseUnsigned(option, text, maximum);
+    if (!value) {
+        return std::unexpected(value.error());
+    }
+    target = static_cast<T>(*value);
+    return {};
+}
+
 [[nodiscard]] Result<Options> ParseArguments(int argc, char** argv) {
     Options options;
     options.window.title = "YATE terrain viewer";
@@ -80,34 +93,52 @@ struct Options {
         if (argument == "--script") {
             options.viewer.script = value;
         } else if (argument == "--seed") {
-            options.viewer.seed = std::strtoull(value.data(), nullptr, 10);
+            if (Status ok = ParseInto(argument, value, options.viewer.seed, ~0ull); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--ring") {
-            options.viewer.ringRadius =
-                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.viewer.ringRadius, 16); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--max-level") {
-            options.viewer.maxLevel = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.viewer.maxLevel, 16); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--tiles-per-frame") {
-            options.viewer.tilesPerFrame =
-                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.viewer.tilesPerFrame, 4096); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--resolution") {
-            options.viewer.resolution = std::strtod(value.data(), nullptr);
+            Result<f64_t> resolution = cli::ParsePositive(argument, value);
+            if (!resolution) {
+                return std::unexpected(resolution.error());
+            }
+            options.viewer.resolution = *resolution;
         } else if (argument == "--section") {
-            options.viewer.sectionSize =
-                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.viewer.sectionSize, 1u << 16); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--grid") {
-            options.viewer.gridVertices =
-                static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.viewer.gridVertices, 1u << 16); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--param") {
             if (!options.params.Assign(value)) {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--param expects key=value, got {}", value);
             }
         } else if (argument == "--width") {
-            options.window.width = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.window.width, 16384); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--height") {
-            options.window.height = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            if (Status ok = ParseInto(argument, value, options.window.height, 16384); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--frames") {
-            options.frames = std::strtoull(value.data(), nullptr, 10);
+            if (Status ok = ParseInto(argument, value, options.frames, ~0ull); !ok) {
+                return std::unexpected(ok.error());
+            }
         } else if (argument == "--screenshot") {
             options.screenshot = value;
         } else if (argument == "--device") {

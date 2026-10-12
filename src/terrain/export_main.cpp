@@ -1,5 +1,6 @@
 // terrain_export: batch evaluation in Headless mode. Must run on a machine with no display.
 
+#include <engine/cli_parse.hpp>
 #include <engine/prelude.hpp>
 #include <engine/terrain/export.hpp>
 
@@ -23,6 +24,7 @@ void PrintUsage() {
         "  --max <x>[,<y>],<z>    world-space maximum (default 1024,1024)\n"
         "  --resolution <meters>  meters per pixel (default 1.0)\n"
         "  --section <n>          section size in samples, a power of two (default 512)\n"
+        "  --max-samples <n>      refuse a job over this many samples (default 2^40)\n"
         "  --out <dir>            output directory (default out/)\n"
         "  --tiles                write one file per tile instead of one stitched image\n"
         "  --png-level <0-9>      zlib level for PNG outputs (default 2)\n"
@@ -40,23 +42,26 @@ void PrintUsage() {
 }
 
 /// Parses `<x>,<z>` or `<x>,<y>,<z>`. The three-component form is what an `R3` export needs, and the
-/// two-component form stays exactly as the spec documents it.
-[[nodiscard]] b8_t ParseBound(std::string_view text, f64_t& x, f64_t& y, f64_t& z) {
+/// two-component form stays exactly as the spec documents it. Every component must be a finite number
+/// and the whole token must be consumed, so `1,2,3,4`, `1,` and `1e400,0` are all errors.
+[[nodiscard]] Status ParseBound(std::string_view option, std::string_view text, f64_t& x, f64_t& y,
+                                f64_t& z) {
     std::array<f64_t, 3> values{};
     usize_t              count = 0;
     usize_t              start = 0;
-    while (count < 3) {
+    while (true) {
+        if (count == 3) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                        "{} expects <x>,<z> or <x>,<y>,<z>, got {}", option, text);
+        }
         const usize_t    comma = text.find(',', start);
         std::string_view part =
             comma == std::string_view::npos ? text.substr(start) : text.substr(start, comma - start);
-        std::array<char, 64> buffer{};
-        detail::CopyBounded(buffer, part);
-        char* end        = nullptr;
-        values[count]    = std::strtod(buffer.data(), &end);
-        if (end == buffer.data()) {
-            return false;
+        Result<f64_t> value = cli::ParseFinite(option, part);
+        if (!value) {
+            return std::unexpected(value.error());
         }
-        ++count;
+        values[count++] = *value;
         if (comma == std::string_view::npos) {
             break;
         }
@@ -65,15 +70,16 @@ void PrintUsage() {
     if (count == 2) {
         x = values[0];
         z = values[1];
-        return true;
+        return {};
     }
     if (count == 3) {
         x = values[0];
         y = values[1];
         z = values[2];
-        return true;
+        return {};
     }
-    return false;
+    ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                "{} expects <x>,<z> or <x>,<y>,<z>, got {}", option, text);
 }
 
 struct Options {
@@ -106,20 +112,40 @@ struct Options {
         } else if (argument == "--device") {
             options.deviceUuid = value;
         } else if (argument == "--seed") {
-            options.job.seed = std::strtoull(value.data(), nullptr, 10);
+            Result<u64_t> seed = cli::ParseUnsigned(argument, value);
+            if (!seed) {
+                return std::unexpected(seed.error());
+            }
+            options.job.seed = *seed;
         } else if (argument == "--resolution") {
-            options.job.resolution = std::strtod(value.data(), nullptr);
+            Result<f64_t> resolution = cli::ParsePositive(argument, value);
+            if (!resolution) {
+                return std::unexpected(resolution.error());
+            }
+            options.job.resolution = *resolution;
         } else if (argument == "--section") {
-            options.job.sectionSize = static_cast<u32_t>(std::strtoul(value.data(), nullptr, 10));
+            Result<u64_t> section = cli::ParseUnsigned(argument, value, 1u << 16);
+            if (!section) {
+                return std::unexpected(section.error());
+            }
+            options.job.sectionSize = static_cast<u32_t>(*section);
+        } else if (argument == "--max-samples") {
+            Result<u64_t> samples = cli::ParseUnsigned(argument, value);
+            if (!samples) {
+                return std::unexpected(samples.error());
+            }
+            options.job.maxSamples = *samples;
         } else if (argument == "--min") {
-            if (!ParseBound(value, options.job.minX, options.job.minY, options.job.minZ)) {
-                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                            "--min expects <x>,<z> or <x>,<y>,<z>, got {}", value);
+            if (Status bound = ParseBound(argument, value, options.job.minX, options.job.minY,
+                                          options.job.minZ);
+                !bound) {
+                return std::unexpected(bound.error());
             }
         } else if (argument == "--max") {
-            if (!ParseBound(value, options.job.maxX, options.job.maxY, options.job.maxZ)) {
-                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                            "--max expects <x>,<z> or <x>,<y>,<z>, got {}", value);
+            if (Status bound = ParseBound(argument, value, options.job.maxX, options.job.maxY,
+                                          options.job.maxZ);
+                !bound) {
+                return std::unexpected(bound.error());
             }
         } else if (argument == "--param") {
             if (!options.job.params.Assign(value)) {
@@ -127,12 +153,11 @@ struct Options {
                             "--param expects key=value, got {}", value);
             }
         } else if (argument == "--png-level") {
-            const unsigned long level = std::strtoul(value.data(), nullptr, 10);
-            if (level > 9) {
-                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
-                            "--png-level expects 0 to 9, got {}", value);
+            Result<u64_t> level = cli::ParseUnsigned(argument, value, 9);
+            if (!level) {
+                return std::unexpected(level.error());
             }
-            options.job.png.level = static_cast<u32_t>(level);
+            options.job.png.level = static_cast<u32_t>(*level);
         } else if (argument == "--png-filter") {
             Result<terrain::PngFilter> filter = terrain::ParsePngFilter(value);
             if (!filter) {

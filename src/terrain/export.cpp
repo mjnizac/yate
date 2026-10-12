@@ -137,9 +137,18 @@ struct Grid {
 };
 
 [[nodiscard]] Result<Grid> MakeGrid(const ExportJob& job, Domain domain) {
-    if (job.resolution <= 0.0) {
+    if (!(job.resolution > 0.0) || !std::isfinite(job.resolution)) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
-                    "resolution must be positive, got {}", job.resolution);
+                    "resolution must be a finite number greater than zero, got {}", job.resolution);
+    }
+    // `llround` of a value outside the range of `i64_t` is undefined behaviour, and a bound that is not
+    // finite never had a meaning. Both are checked before anything is converted.
+    for (const f64_t bound : {job.minX, job.minY, job.minZ, job.maxX, job.maxY, job.maxZ}) {
+        if (!std::isfinite(bound) || std::fabs(bound / job.resolution) > 4.0e18) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                        "a bound of {} is not representable at resolution {}", bound,
+                        job.resolution);
+        }
     }
     const auto samples = [&](f64_t world) {
         return static_cast<i64_t>(std::llround(world / job.resolution));
@@ -156,6 +165,23 @@ struct Grid {
     if (job.sectionSize == 0 || !IsPowerOfTwo(job.sectionSize)) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
                     "section size must be a power of two, got {}", job.sectionSize);
+    }
+
+    // The grid stores its extents as `u32_t`, so a span past that would wrap silently into a small,
+    // valid-looking job. Checked in 64 bits first, then against the job's own sample budget.
+    const u64_t spanX = static_cast<u64_t>(maxX - minX);
+    const u64_t spanZ = static_cast<u64_t>(maxZ - minZ);
+    if (spanX > 0xFFFFFFFFull || spanZ > 0xFFFFFFFFull) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the job spans {} x {} samples and a side may not pass {}", spanX, spanZ,
+                    0xFFFFFFFFull);
+    }
+    const f64_t totalSamples = static_cast<f64_t>(spanX) * static_cast<f64_t>(spanZ);
+    if (totalSamples > static_cast<f64_t>(job.maxSamples)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Export,
+                    "the job is {} x {} samples ({:.3g} in total), over the limit of {}; raise "
+                    "--max-samples if that is what you meant",
+                    spanX, spanZ, totalSamples, job.maxSamples);
     }
 
     Grid grid;

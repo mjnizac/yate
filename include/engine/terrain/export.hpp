@@ -61,6 +61,11 @@ struct ExportJob {
     f64_t maxY = 256.0;
     f64_t            resolution      = 1.0;
     u32_t            sectionSize     = 512;
+    /// Refuses a job that asks for more samples than this, before anything is allocated. A bounds
+    /// typo such as `--max 1e9,1e9` is otherwise accepted and starts an export of billions of
+    /// sections; the default is far past anything that finishes in a sitting, so it only ever
+    /// triggers on a mistake, and the message says how many samples the job computed.
+    u64_t            maxSamples      = 1ull << 40;
     /// One file per tile instead of one stitched image.
     b8_t tiles = false;
     /// Encoder effort for PNG outputs. See `PngCompression` for why the defaults are what they are.
