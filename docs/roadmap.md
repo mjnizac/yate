@@ -11,9 +11,9 @@ The reason that ordering is not negotiable is in `docs/decisions.md`: every defe
 had reached acceptance with a green suite, because the suite only ever compared the engine against
 itself.
 
-Beyond that there is a choice to make, not yet made: `docs/terrain_standard.md` drafts a 25-op catalog
-with macros, file inputs and global operations. It is a large piece of work and it would be built on
-top of the open items above, not instead of them.
+Beyond that there is a choice to make, not yet made: a 25-op catalogue draft with macros, file inputs and
+global operations is kept outside the repository, on the Desktop as `terrain_engine_spec_terrain_standard.md`.
+It is a large piece of work and it would be built on top of the open items above, not instead of them.
 
 ## Kernel fusion
 

@@ -21,8 +21,8 @@ way, is in `docs/decisions.md`; open work is in `docs/todo.md`.
 
 Two executables over one engine: `terrain_export` (Headless) writes 16-bit PNG heightmaps, 16-bit RGB
 vector maps and raw `f32` volumes with a metadata sidecar; `terrain_viewer` (Graphics) draws the same
-graph as a GPU-displaced grid with an orbit camera, a ring of streamed tiles, hot reload and
-`--screenshot`.
+graph as a GPU-displaced grid with an orbit camera (`--view`, `--target`), a ring of streamed tiles,
+hot reload, `--screenshot`, and the analytic sea level (`--water`, off by default).
 
 Fifteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`,
 `Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`. The script API is
@@ -31,7 +31,9 @@ Fifteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `
 `docs/lua_reference.md`.
 
 Four reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
-canyon, mesas), with previews in `docs/images/shapes/`.
+canyon, mesas), with previews in `docs/images/shapes/`. The shape layer is `Geometry.*` (C++ ops), plus
+`Shapes.*` and `Landforms.*`, which are Lua in `assets/lua/prelude/` that the engine loads before every
+script.
 
 Eight sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
 crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the
@@ -71,27 +73,32 @@ timings, paths and `section_size`. The command is in `docs/commands.md`, and the
 
 ## What the numbers say
 
+Measured in the session that closed milestone 11, on the GTX 1070, unless the row says otherwise.
+
 | | |
 | --- | --- |
-| 16k export, erosion-heavy | 50.0 s total — GPU 2.31 s (5%), readback 3.32 s, encoder stall 43.1 s (86%) |
-| Viewer | 0.6–0.7 ms a frame at 1600x900, 49 tiles; a tile costs 954 µs to stream, a full ring 47 ms |
-| Peak VRAM per section | 1.8 MiB at section 512 for `basic.lua` |
-| Noise far from the origin | worst derivative error 4.9% (`R2`) and 19.8% (`R3`) at 5·10⁵ m |
-| Resolution independence | noise is bit-identical at 8 m and 16 m; with erosion it differs by 8.0 m on average |
+| 8192 square, `basic.lua`, section 512 | PNG 23.3 s total; `--raw` 13.0 s total, about three times the bytes |
+| 16384 square, `basic.lua`, section 512 | 96 to 110 s per run, three runs; height and normals byte-identical across section sizes 512 and 1024 |
+| Viewer | 0.7 to 0.9 ms a frame at 1280x720, 37 to 49 tiles on screen |
+| Resolution independence, thermal only | 8 m against 16 m differs by 0.02 m on average |
+| Resolution independence, `basic.lua` | 8 m against 16 m differs by 5.45 m on average and 44.3 m at worst |
+| Peak VRAM per section | 1.8 MiB at section 512 for `basic.lua` (earlier measurement) |
+| Noise far from the origin | worst derivative error 4.9% (`R2`) and 19.8% (`R3`) at 5·10⁵ m (earlier measurement) |
 
-The encoder figure is why the exporter evaluates one section at a time: overlapping them would hide
-work already hidden behind the wait for deflate.
+The encoder is why the exporter evaluates one section at a time: overlapping them would hide work already
+hidden behind the wait for deflate.
 
 ## Known defects
 
 Open, with the measurements, in `docs/todo.md`:
 
-* **Erosion iterations are per cell**, so the amount of erosion still depends on the sample spacing:
-  8 m against 16 m on `basic.lua` differs by 5.45 m on average and 44.3 m at worst. The slope units are
-  fixed; the propagation distance is not.
+* **Erosion iterations are per cell**, so the amount of erosion still depends on the sample spacing
+  (the numbers above). The slope units are fixed; the iteration count and so the propagation distance are
+  not.
 * **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
   it. Adding diagonal neighbours was tried and measured worse.
-* **The CI workflow has never run**, and Linux has never been built.
+* **The CI workflow was pushed with milestone 11 and its first run has not been reviewed.** The Linux job
+  has never been compiled. Expect that job to need fixes.
 * **One GPU, one vendor, one OS.**
 
 Vulkan 1.4 is the target on purpose (spec section 5), though no 1.4-only feature is used: the 1.4
@@ -100,5 +107,6 @@ is one constant and the shader target environment, and it is a product decision 
 
 ## Next
 
-No milestone is in progress. `docs/todo.md` is the work queue, and `docs/terrain_standard.md` is a
-draft of where the op catalog would go next if that direction is taken.
+No milestone is in progress. Milestones 1 to 11 are done. `docs/todo.md` is the work queue. The op
+catalogue draft (`terrain_engine_spec_terrain_standard.md`) lives on the Desktop, outside the repository,
+and is not a repo document: nothing in the code depends on it.

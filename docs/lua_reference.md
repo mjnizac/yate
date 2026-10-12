@@ -1008,10 +1008,19 @@ return { snow = { value = snow, range = { 0, 1 } } }
 ```lua
 local p    = Terrain.Coords{ domain = 2 }
 local wx   = Noises.fBm{ frequency = 0.0005, amplitude = 300.0, seed = 7 }
--- There is no node that samples a field at displaced coordinates, so a warp is built by feeding
--- displaced coordinates into something that is already a function of position. This warps a ramp.
+-- A position field is bent by feeding displaced coordinates into something that is a function of
+-- position. For a ramp that is just arithmetic; for a shape it is `position =`, which `Shapes.Warp`
+-- builds for you from two noise fields.
 local ramp = (p.x + wx.value) * 0.001
 return { warped = { value = ramp, range = { 0, 4 } } }
+```
+
+For shapes, pass the warp as the shape's `position`:
+
+```lua
+local position = Shapes.Warp{ amplitude = 60.0, frequency = 0.004, seed = 7 }
+local outline  = Shapes.Circle{ radius = 200, position = position }
+return { mask = { value = Shapes.Mask{ shape = outline, feather = 20 }, range = { 0, 1 } } }
 ```
 
 ---

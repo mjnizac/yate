@@ -39,7 +39,7 @@ full history is in the git log.
 
 ## Not yet decided
 
-- [ ] **The standard's catalog.** `docs/terrain_standard.md` drafts a 25-node catalog with macros, file
+- [ ] **The standard's catalog.** The draft `terrain_engine_spec_terrain_standard.md` (on the Desktop, not in the repo) describes a 25-node catalog with macros, file
       inputs and global operations. It would be built on the items above rather than instead of them,
       and its first phase is already mostly done: per-metre erosion, a pixel check and a file-bytes
       check were its "make the current engine honest" list. Whether to take the rest is open.
