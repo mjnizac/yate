@@ -16,7 +16,7 @@
   ],
   "tolerance": 0,
   "performance": {
-    "passes": 3,
+    "passes": 6,
     "warn_slower": 0.1,
     "fail_slower": 0.25
   }
