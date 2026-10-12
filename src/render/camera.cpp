@@ -65,6 +65,16 @@ void Camera::SetMode(CameraMode mode) noexcept {
     }
 }
 
+void Camera::SetView(Vec3 target, f32_t yawRadians, f32_t pitchRadians, f32_t distance) noexcept {
+    m_target   = target;
+    m_yaw      = yawRadians;
+    m_pitch    = std::clamp(pitchRadians, -1.55f, 1.55f);
+    m_distance = std::clamp(distance, kMinDistance, kMaxDistance);
+    // The same scaling `Frame` applies, for the same reasons.
+    SetClipPlanes(std::max(m_distance * 0.001f, 0.05f), std::max(m_distance * 20.0f, 1000.0f));
+    m_speed = std::clamp(m_distance * 0.5f, kMinSpeed, kMaxSpeed);
+}
+
 void Camera::Frame(Vec3 centre, f32_t radius) noexcept {
     m_target = centre;
     // Far enough that a sphere of `radius` fits in the vertical field of view, with a little margin.

@@ -165,6 +165,11 @@ public:
     /// Frames a region: centres the target on it and pulls back far enough to see all of it.
     void Frame(Vec3 centre, f32_t radius) noexcept;
 
+    /// Sets the orbit directly: the point it looks at, the direction and the distance. `yaw` is 0 when
+    /// looking along +z and grows towards +x; a negative `pitch` looks down. For reproducible images and
+    /// for tests, which otherwise have only a drag to aim with.
+    void SetView(Vec3 target, f32_t yawRadians, f32_t pitchRadians, f32_t distance) noexcept;
+
     /// Puts the eye exactly here, keeping the orientation. Works in either mode.
     void PlaceAt(Vec3 eye) noexcept;
 

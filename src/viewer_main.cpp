@@ -34,6 +34,8 @@ void PrintUsage() {
                "  --section <n>          samples per tile side (default 128)\n"
                "  --grid <n>             drawn vertices per tile side (default 128)\n"
                "  --param key=value      script parameter, repeatable\n"
+               "  --view yaw,pitch,dist  start the orbit camera here: degrees, degrees, metres\n"
+               "  --target x,y,z         the point the camera orbits (default 0,0,0)\n"
                "  --water                draw water at the water level (off by default)\n"
                "  --water-level <m>      height of the water surface (default 0)\n"
                "  --water-color r,g,b    water colour, each 0 to 1 (default 0.10,0.28,0.38)\n"
@@ -66,6 +68,29 @@ struct Options {
     /// Where the last frame is written as a PNG. Empty means no screenshot.
     std::string_view screenshot;
 };
+
+/// Parses `a,b,c`, three finite numbers.
+[[nodiscard]] Result<std::array<f32_t, 3>> ParseTriple(std::string_view option,
+                                                       std::string_view text) {
+    std::array<f32_t, 3> out{};
+    for (usize_t i = 0; i < out.size(); ++i) {
+        const usize_t          comma = text.find(',');
+        const std::string_view part  = text.substr(0, comma);
+        if ((comma == std::string_view::npos) != (i + 1 == out.size())) {
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} expects three numbers "
+                        "separated by commas, got {}", option, text);
+        }
+        Result<f64_t> value = cli::ParseFinite(option, part);
+        if (!value) {
+            return std::unexpected(value.error());
+        }
+        out[i] = static_cast<f32_t>(*value);
+        if (comma != std::string_view::npos) {
+            text.remove_prefix(comma + 1);
+        }
+    }
+    return out;
+}
 
 /// Parses `r,g,b`, each a finite number in `[0, 1]`.
 [[nodiscard]] Result<std::array<f32_t, 3>> ParseColour(std::string_view option,
@@ -175,6 +200,25 @@ template <typename T>
             if (Status ok = ParseInto(argument, value, options.frames, ~0ull); !ok) {
                 return std::unexpected(ok.error());
             }
+        } else if (argument == "--view") {
+            Result<std::array<f32_t, 3>> view = ParseTriple(argument, value);
+            if (!view) {
+                return std::unexpected(view.error());
+            }
+            if (!((*view)[2] > 0.0f)) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--view needs a distance greater than zero, got {}", value);
+            }
+            options.viewer.view.enabled  = true;
+            options.viewer.view.yaw      = (*view)[0];
+            options.viewer.view.pitch    = (*view)[1];
+            options.viewer.view.distance = (*view)[2];
+        } else if (argument == "--target") {
+            Result<std::array<f32_t, 3>> target = ParseTriple(argument, value);
+            if (!target) {
+                return std::unexpected(target.error());
+            }
+            options.viewer.view.target = *target;
         } else if (argument == "--water-level") {
             Result<f64_t> level = cli::ParseFinite(argument, value);
             if (!level) {

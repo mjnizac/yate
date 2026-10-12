@@ -37,6 +37,16 @@ public:
         f32_t opacity = 0.75f;
     };
 
+    /// Where the orbit camera starts. Off by default, which frames the ring as before.
+    struct View {
+        b8_t                 enabled = false;
+        /// Degrees. 0 looks along +z and 90 along +x; a negative pitch looks down.
+        f32_t                yaw   = 0.0f;
+        f32_t                pitch = -35.0f;
+        f32_t                distance = 4000.0f;
+        std::array<f32_t, 3> target{};
+    };
+
     struct Settings {
         /// Script to evaluate. Reloaded when its modification time changes.
         std::string_view script;
@@ -62,6 +72,7 @@ public:
         /// User parameters the script receives, as `--param` does for the exporter.
         const terrain::Params* params = nullptr;
         Water                  water;
+        View                   view;
     };
 
     ViewerLayer(Application& application, const Settings& settings);

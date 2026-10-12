@@ -751,6 +751,11 @@ void ViewerLayer::OnAttach() {
                               * static_cast<f32_t>(m_state->settings.resolution)
                               * static_cast<f32_t>(m_state->settings.ringRadius + 1);
     m_state->camera.Frame(Vec3{0.0f, 0.0f, 0.0f}, startRadius);
+    if (const ViewerLayer::View& view = m_state->settings.view; view.enabled) {
+        constexpr f32_t kDegrees = 3.14159265358979f / 180.0f;
+        m_state->camera.SetView(Vec3{view.target[0], view.target[1], view.target[2]},
+                                view.yaw * kDegrees, view.pitch * kDegrees, view.distance);
+    }
     m_state->level = IdealLevel(m_state->camera.ViewDistance(0.0f), m_state->settings.sectionSize,
                                 m_state->settings.resolution, m_state->settings.maxLevel);
 
