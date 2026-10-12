@@ -62,9 +62,20 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      # On failure the end of the output is also published as an annotation. A job's log needs admin
+      # rights to download, an annotation does not, and the first thing anyone needs is which suite broke.
       - name: Tests that need no device
         working-directory: build
-        run: ctest --output-on-failure -R "$env:CPU_TESTS"
+        shell: pwsh
+        run: |
+          $out = ctest --output-on-failure -R "$env:CPU_TESTS" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0) {
+            $tail = ($out -split "`r?`n" | Select-Object -Last 70) -join "%0A"
+            Write-Host "::error title=ctest failed::$tail"
+          }
+          exit $code
 
   linux:
     name: Linux / ${{ matrix.compiler }} / ${{ matrix.sanitizer }}
@@ -104,8 +115,20 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_C_FLAGS="${{ matrix.flags }}" -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
 
+      # The compiler's errors, published as an annotation for the same reason as above. `-k 0` keeps going
+      # past the first failure so one run reports every file that does not compile.
       - name: Build
-        run: cmake --build build
+        shell: bash
+        run: |
+          set +e
+          cmake --build build -- -k 0 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            msg=$(grep -E "error:|Error |FAILED:|undefined reference|fatal" build.log | head -30 | sed ':a;N;$!ba;s/
+/%0A/g')
+            echo "::error title=build failed::${msg}"
+          fi
+          exit $code
 
       - name: Tests that need no device
         working-directory: build
