@@ -27,6 +27,7 @@ void PrintUsage() {
         "  --max-samples <n>      refuse a job over this many samples (default 2^40)\n"
         "  --out <dir>            output directory (default out/)\n"
         "  --tiles                write one file per tile instead of one stitched image\n"
+        "  --raw                  write raw f32 instead of PNG: no normalisation, no compression\n"
         "  --png-level <0-9>      zlib level for PNG outputs (default 2)\n"
         "  --png-filter <f>       PNG row filter: none, up or all (default up)\n"
         "  --param key=value      script parameter, repeatable\n"
@@ -98,6 +99,10 @@ struct Options {
         }
         if (argument == "--tiles") {
             options.job.tiles = true;
+            continue;
+        }
+        if (argument == "--raw") {
+            options.job.raw = true;
             continue;
         }
         if (i + 1 >= argc) {

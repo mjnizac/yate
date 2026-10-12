@@ -344,6 +344,10 @@ struct OutputChannel {
     std::array<char, OutputRequest::kMaxName> name{};
     BandEncoder                               encoder;
     RawVolumeWriter                           raw;
+    /// A raw `R2` output assembles a band of full rows here and appends it in one write, instead of
+    /// seeking to every row of every tile.
+    BandBuffer                                rawBand;
+    b8_t                                      rawBanded = false;
     b8_t                                      isVolume   = false;
     u32_t                                     buffer     = kInvalidBuffer;
     u32_t                                     components = 1;
@@ -588,9 +592,11 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         if (!format) {
             return std::unexpected(format.error());
         }
-        out.format   = *format;
-        out.isVolume = *format == OutputFormat::RawF32;
-        if (out.isVolume != (domain == Domain::R3)) {
+        // `--raw` turns an `R2` output into the same raw volume an `R3` one always is, with a depth
+        // of one. The volume writer already does everything that needs doing.
+        out.format   = job.raw ? OutputFormat::RawF32 : *format;
+        out.isVolume = out.format == OutputFormat::RawF32;
+        if (!job.raw && out.isVolume != (domain == Domain::R3)) {
             ENGINE_FAIL(ErrorCode::Unsupported, ErrorStage::Export,
                         "output {} is {} but the job domain is {}", info.name.data(),
                         ToString(info.mapping), domain == Domain::R3 ? "R3" : "R2");
@@ -599,13 +605,13 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
         // that exists, and no writer is opened until a section has been evaluated. A tile needs no
         // band and no stitching: its rows are already contiguous in the readback buffer.
         if (job.tiles) {
-            MakeTilePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(*format),
+            MakeTilePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(out.format),
                          out.isVolume, 0, 0, 0);
             detail::CopyBounded(summary.files[summary.fileCount++], out.path.data());
             continue;
         }
 
-        MakePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(*format));
+        MakePath(out.path, job.outputDirectory, info.name.data(), ExtensionFor(out.format));
 
         if (out.isVolume) {
             Result<RawVolumeWriter> writer = RawVolumeWriter::Create(
@@ -614,6 +620,13 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                 return std::unexpected(writer.error());
             }
             out.raw = std::move(*writer);
+            if (domain == Domain::R2) {
+                if (Status created = out.rawBand.Create(grid->width, section, out.components);
+                    !created) {
+                    return std::unexpected(created.error());
+                }
+                out.rawBanded = true;
+            }
         } else {
             Result<PngWriter> writer =
                 PngWriter::Create(out.path.data(), grid->width, grid->height, info.mapping,
@@ -746,6 +759,8 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                             return std::unexpected(written.error());
                         }
                         encodeMs += MillisecondsSince(writeStart);
+                    } else if (outputs[i].rawBanded) {
+                        outputs[i].rawBand.Absorb(samples, padded, tileX0, bandRows, tileColumns);
                     } else if (outputs[i].isVolume) {
                         const Clock::time_point writeStart = Clock::now();
                         if (Status written = outputs[i].raw.WriteBrick(
@@ -773,6 +788,16 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             }
             const Clock::time_point handoffStart = Clock::now();
             for (usize_t i = 0; i < outputCount; ++i) {
+                if (outputs[i].rawBanded) {
+                    const Clock::time_point writeStart = Clock::now();
+                    if (Status appended =
+                            outputs[i].raw.AppendRows(outputs[i].rawBand.Row(0), bandRows);
+                        !appended) {
+                        return std::unexpected(appended.error());
+                    }
+                    encodeMs += MillisecondsSince(writeStart);
+                    continue;
+                }
                 if (outputs[i].isVolume) {
                     continue;
                 }

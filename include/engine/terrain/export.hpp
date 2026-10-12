@@ -61,6 +61,13 @@ struct ExportJob {
     f64_t maxY = 256.0;
     f64_t            resolution      = 1.0;
     u32_t            sectionSize     = 512;
+    /// Writes every output as raw little-endian `f32` instead of a PNG, `R2` included.
+    ///
+    /// The values are the evaluated ones, unnormalised and uncompressed, so there is no range to
+    /// declare, nothing to clamp and no deflate stream to wait for. On a large erosion-heavy export the
+    /// PNG encoder is most of the wall time (43 s of 50 on 16384 squared), and this is the format that
+    /// takes it off the critical path. PNG stays the interchange format.
+    b8_t raw = false;
     /// Refuses a job that asks for more samples than this, before anything is allocated. A bounds
     /// typo such as `--max 1e9,1e9` is otherwise accepted and starts an export of billions of
     /// sections; the default is far past anything that finishes in a sitting, so it only ever

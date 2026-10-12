@@ -434,6 +434,11 @@ Result<RawVolumeWriter> RawVolumeWriter::Create(std::string_view path, u32_t wid
         ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "could not open {} for writing", path);
     }
 
+    // A large stream buffer. The default is 4 KiB, and the CRT then turns a multi-megabyte band into
+    // a stream of 4 KiB writes: measured, an 8192 square map took 38 s to write 930 MB that a plain
+    // sequential write puts down in under a second.
+    (void)std::setvbuf(file, nullptr, _IOFBF, 1u << 20);
+
     RawVolumeWriter writer;
     writer.m_file       = file;
     writer.m_width      = width;
@@ -471,6 +476,34 @@ RawVolumeWriter& RawVolumeWriter::operator=(RawVolumeWriter&& other) noexcept {
     return *this;
 }
 
+Status RawVolumeWriter::AppendRows(const f32_t* rows, u32_t rowCount) {
+    if (m_file == nullptr) {
+        ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Export, "writing to a closed volume");
+    }
+    const usize_t samples = static_cast<usize_t>(rowCount) * m_width * m_components;
+    // Written in pieces. One multi-megabyte `fwrite` is pathologically slow with this CRT where a
+    // stream of 4 MiB ones is not: measured per call on an 8192 square map, 8 MiB appends ran at
+    // 2 GiB/s and 24 MiB ones at 25 to 80 MiB/s, and split into 4 MiB pieces the same 24 MiB went at
+    // 1.7 GiB/s. It cost 38 s of a 40 s export.
+    constexpr usize_t kPiece = (4u << 20) / sizeof(f32_t);
+    usize_t written = 0;
+    while (written < samples) {
+        const usize_t take = samples - written < kPiece ? samples - written : kPiece;
+        const usize_t done = std::fwrite(rows + written, sizeof(f32_t), take,
+                                         static_cast<std::FILE*>(m_file));
+        written += done;
+        if (done != take) {
+            break;
+        }
+    }
+    if (written != samples) {
+        ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export, "wrote {} of {} samples of a band",
+                    written, samples);
+    }
+    m_samplesWritten += static_cast<u64_t>(rowCount) * m_width;
+    return {};
+}
+
 Status RawVolumeWriter::WriteBrick(std::array<u32_t, 3> origin, std::array<u32_t, 3> extent,
                                   std::array<u32_t, 3> sourceStride, const f32_t* brick) {
     if (m_file == nullptr) {
@@ -498,7 +531,14 @@ Status RawVolumeWriter::WriteBrick(std::array<u32_t, 3> origin, std::array<u32_t
             const u64_t destSample =
                 ((volumeY * m_depth) + volumeZ) * m_width + origin[0];
             const u64_t destOffset = destSample * m_components * sizeof(f32_t);
-            if (std::fseek(file, static_cast<long>(destOffset), SEEK_SET) != 0) {
+            // 64-bit seek: `long` is 32 bits on Windows, so the cast that was here wrapped at 2 GiB
+            // and a volume past that wrote its later rows over its earlier ones.
+#ifdef _WIN32
+            const int seeked = _fseeki64(file, static_cast<__int64>(destOffset), SEEK_SET);
+#else
+            const int seeked = fseeko(file, static_cast<off_t>(destOffset), SEEK_SET);
+#endif
+            if (seeked != 0) {
                 ENGINE_FAIL(ErrorCode::IoError, ErrorStage::Export,
                             "could not seek to offset {} in the volume", destOffset);
             }

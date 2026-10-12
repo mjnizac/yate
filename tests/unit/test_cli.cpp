@@ -20,6 +20,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef TERRAIN_EXPORT_EXE
 #    error "TERRAIN_EXPORT_EXE is set by tests/CMakeLists.txt"
@@ -243,6 +244,57 @@ void TestCoordsAreMetres() {
     }
 }
 
+/// `--raw` writes the evaluated floats of an `R2` output with no PNG around them. Checked against a
+/// field whose values are known without running anything: the world x of a sample, in metres.
+void TestRawR2Output() {
+    test::Section("--raw writes the evaluated floats of an R2 output");
+
+    const std::string script = WriteScript(
+        "raw_r2", "local function main()\n"
+                  "  local p = Terrain.Coords{ domain = 2 }\n"
+                  "  return { x = { value = p.x, range = { 0, 100 } },\n"
+                  "           z = { value = p.z, range = { 0, 100 } } }\n"
+                  "end\nreturn main\n");
+    const std::string dir = std::string(kDirectory) + "/raw_r2";
+    // 64 x 32 samples at 2 m, in sections of 16: several bands and several tiles per band, which is
+    // what the banded writer has to reassemble into rows.
+    const Run run = Execute(TERRAIN_EXPORT_EXE,
+                            "--script \"" + script + "\" --min 0,0 --max 128,64 --resolution 2 "
+                            "--section 16 --raw --out \"" + dir + "\"");
+    Expect(run.exitCode == 0, "raw_export", "the export exits 0", run);
+    if (run.exitCode != 0) {
+        return;
+    }
+
+    constexpr std::size_t kWidth = 64;
+    constexpr std::size_t kRows  = 32;
+    const std::string     x      = ReadFile(dir + "/x.raw");
+    const std::string     z      = ReadFile(dir + "/z.raw");
+    CHECK_EQ(x.size(), kWidth * kRows * 4);
+    CHECK_EQ(z.size(), kWidth * kRows * 4);
+    if (x.size() != kWidth * kRows * 4 || z.size() != kWidth * kRows * 4) {
+        return;
+    }
+
+    std::vector<float> xs(kWidth * kRows);
+    std::vector<float> zs(kWidth * kRows);
+    std::memcpy(xs.data(), x.data(), x.size());
+    std::memcpy(zs.data(), z.data(), z.size());
+
+    // Row-major, z the row: every sample's x is its column times 2 m and its z is its row times 2 m.
+    std::size_t wrong = 0;
+    for (std::size_t row = 0; row < kRows; ++row) {
+        for (std::size_t column = 0; column < kWidth; ++column) {
+            wrong += xs[row * kWidth + column] != static_cast<float>(2 * column) ? 1 : 0;
+            wrong += zs[row * kWidth + column] != static_cast<float>(2 * row) ? 1 : 0;
+        }
+    }
+    CHECK_EQ(wrong, std::size_t{0});
+
+    // A PNG would have normalised to [0, 100] and clamped; the raw file holds the metres themselves.
+    CHECK(xs[kWidth - 1] == 126.0f);
+}
+
 } // namespace
 
 int main() {
@@ -267,6 +319,7 @@ int main() {
     TestViewerExitCodes();
     TestSuccessIsReproducible();
     TestCoordsAreMetres();
+    TestRawR2Output();
 
     return test::Summary("test_cli");
 }

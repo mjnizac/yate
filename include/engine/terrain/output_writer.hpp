@@ -148,6 +148,13 @@ public:
     [[nodiscard]] Status WriteBrick(std::array<u32_t, 3> origin, std::array<u32_t, 3> extent,
                                    std::array<u32_t, 3> sourceStride, const f32_t* brick);
 
+    /// Appends `rowCount` complete rows at the current position, with no seek.
+    ///
+    /// For a 2D output whose bands arrive in order. `WriteBrick` pays one seek and one write of a few
+    /// kilobytes per row of a brick, which is the right trade for a volume and 2x slower than a PNG on
+    /// an 8192 square map; a band is one contiguous run, so it is one write.
+    [[nodiscard]] Status AppendRows(const f32_t* rows, u32_t rowCount);
+
     [[nodiscard]] Status Finish();
 
     [[nodiscard]] u64_t SamplesWritten() const noexcept { return m_samplesWritten; }
