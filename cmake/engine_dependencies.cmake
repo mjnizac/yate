@@ -10,9 +10,14 @@ set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
 set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "" FORCE)
+# Every dependency is pinned by commit, with the release it corresponds to in the comment. A tag is a
+# movable name: the same `GIT_TAG v1.15.1` can resolve to different code next year, which is the one
+# thing a project that claims byte-identical exports cannot afford. The commit is what was built, and
+# `git ls-remote <repo> refs/tags/<tag>^{}` reproduces it when a dependency is bumped.
+
 FetchContent_Declare(spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG        v1.15.1
+    GIT_TAG        f355b3d58f7067eee1706ff3c801c2361011f3d5 # v1.15.1
     GIT_SHALLOW    TRUE
 )
 
@@ -25,7 +30,7 @@ set(TRACY_ON_DEMAND OFF CACHE BOOL "" FORCE)   # Memory graphs need every event 
 set(TRACY_CALLSTACK ${ENGINE_TRACY_CALLSTACKS} CACHE BOOL "" FORCE)
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-    GIT_TAG        v0.14.1
+    GIT_TAG        30997d5ca6bb632cc10807a1da8a6d3de0aeeb3c # v0.14.1
     GIT_SHALLOW    TRUE
 )
 
@@ -40,7 +45,7 @@ set(MI_OVERRIDE OFF CACHE BOOL "" FORCE)
 set(MI_INSTALL_TOPLEVEL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(mimalloc
     GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
-    GIT_TAG        v2.1.9
+    GIT_TAG        a3070dc57fa03a43cae9079a2a879a66cec8f715 # v2.1.9
     GIT_SHALLOW    TRUE
 )
 
@@ -50,7 +55,7 @@ set(VMA_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 set(VMA_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(vma
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-    GIT_TAG        v3.2.1
+    GIT_TAG        c788c52156f3ef7bc7ab769cb03c110a53ac8fcb # v3.2.1
     GIT_SHALLOW    TRUE
 )
 
@@ -73,7 +78,7 @@ set(WITH_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(zlib
     GIT_REPOSITORY https://github.com/zlib-ng/zlib-ng.git
-    GIT_TAG        2.2.2
+    GIT_TAG        c939498c7f2a1d645833a98251365e2c814fd736 # 2.2.2
     GIT_SHALLOW    TRUE
     OVERRIDE_FIND_PACKAGE
 )
@@ -108,7 +113,7 @@ set(SPNG_STATIC ON CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(spng
     GIT_REPOSITORY https://github.com/randy408/libspng.git
-    GIT_TAG        v0.7.4
+    GIT_TAG        fb768002d4288590083a476af628e51c3f1d47cd # v0.7.4
     GIT_SHALLOW    TRUE
 )
 
@@ -126,7 +131,7 @@ set(CMAKE_SKIP_INSTALL_RULES OFF)
 
 FetchContent_Declare(lua
     GIT_REPOSITORY https://github.com/lua/lua.git
-    GIT_TAG        v5.4.7
+    GIT_TAG        1ab3208a1fceb12fca8f24ba57d6e13c5bff15e3 # v5.4.7
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(lua)
@@ -155,7 +160,7 @@ set(SOL2_BUILD_LUA OFF CACHE BOOL "" FORCE)
 set(SOL2_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(sol2
     GIT_REPOSITORY https://github.com/ThePhD/sol2.git
-    GIT_TAG        v3.3.0
+    GIT_TAG        eba86625b707e3c8c99bbfc4624e51f42dc9e561 # v3.3.0
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(sol2)
@@ -171,7 +176,7 @@ set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 set(GLFW_VULKAN_STATIC OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
+    GIT_TAG        7b6aead9fb88b3623e3b3725ebb42670cbe4c579 # 3.4
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(glfw)
@@ -193,7 +198,7 @@ FetchContent_MakeAvailable(glfw)
 
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        v1.91.5
+    GIT_TAG        f401021d5a5d56fe2304056c391e78f81c8d4b8f # v1.91.5
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(imgui)
