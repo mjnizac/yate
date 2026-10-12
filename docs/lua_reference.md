@@ -7,6 +7,25 @@ it costs, and a picture of the result.
 one — every parameter with its default and valid range, what to set it to, what it costs and a picture
 of the result — organised by what you are trying to build rather than by namespace.
 
+## Start here: from a kind of terrain to a script
+
+Copy the closest example, run it in the viewer, change one thing at a time.
+
+| You want | Start from | The part to change |
+| --- | --- | --- |
+| Rolling hills, farmland | `terrains/rolling.lua` | fBm `amplitude` and `frequency` |
+| Alpine ridges | `terrains/alpine.lua` | ridged noise, thermal `talus` |
+| Eroded rock, gullies | `terrains/badlands.lua` | hydraulic `iterations`, `erosion_rate` |
+| River valleys | `terrains/riverlands.lua` | hydraulic `rain`, `capacity` |
+| Sand | `terrains/dunes.lua` | the warp and the ridge frequency |
+| Flat-topped hills | `terrains/mesa.lua`, `shapes/mesas.lua` | terrace `steps`, shape size |
+| A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
+| A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
+
+**Judge erosion at the finest level.** Iterations are written for 2 m and scaled to the spacing in use
+(§9), so the default 8 m view shows little of it by design. Look at it with `--max-level 0`, or zoom in
+until the level changes, before adding iterations.
+
 ## How to read the pictures
 
 Every image on this page is the same 2048 m square at 4 m per sample, exported with the same command and
