@@ -14,7 +14,7 @@ Copy the closest example, run it in the viewer, change one thing at a time.
 | You want | Start from | The part to change |
 | --- | --- | --- |
 | Rolling hills, farmland | `terrains/rolling.lua` | fBm `amplitude` and `frequency` |
-| Alpine ridges | `terrains/alpine.lua` | ridged noise, thermal `talus` |
+| Alpine massif | `terrains/alpine.lua` | the ridge `points`, `height`, `warp` |
 | Eroded rock, gullies | `terrains/badlands.lua` | hydraulic `iterations`, `erosion_rate` |
 | River valleys | `terrains/riverlands.lua` | hydraulic `rain`, `capacity` |
 | Sand | `terrains/dunes.lua` | the warp and the ridge frequency |
