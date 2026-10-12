@@ -79,7 +79,7 @@ numbers drift, and this one is the index.
 | --- | --- | --- |
 | `Noises.fBm`, `Noises.Ridged`, `Noises.Billow` | `Rn -> R1` value, `Rn -> Rn` gradient | fractal noise with its exact analytic gradient, both out of one evaluation; `fBm{ kind = ... }` is the same op |
 | `Terrain.Const` | `Rn -> R1` | a constant; usually unnecessary, since a bare number works wherever a field does |
-| `Terrain.Coords` | `Rn -> Rn` | the integer **sample coordinate**, not metres, and on an `R2->R2` world z is `.y` |
+| `Terrain.Coords` | `Rn -> Rn` | the world position **in metres**; on an `R2->R2` world z is `.z` (the second component) |
 | `Terrain.Normals` | `R2->R3` | takes a **gradient**, not a height |
 | `Terrain.Gradient` | `Rn -> Rn` | central differences, **radius 1**; the only op that is not analytic |
 | `Masks.Slope` | `R2->R1` in `[0, 1]` | takes a gradient; feed it a low-octave one or the mask flickers |
@@ -88,8 +88,8 @@ numbers drift, and this one is the index.
 | `Curves.Clamp`, `Remap`, `Power`, `Smoothstep` | the input's mapping | pointwise; `Remap` assumes a `[-1, 1]` input and `Power` only means what you want on a field in `[-1, 1]` |
 | `Filters.Blur` | the input's mapping | radius in **samples**, not metres; its radius becomes halo |
 | `Vec.Combine` | `Rn -> Rm` | a positional list of 2 to 4 scalars |
-| `Erosion.Thermal` | `Rn -> R1` | material slides past the talus; `iterations` **is** the influence radius |
-| `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `flow` carries water on `x` and sediment on `y` |
+| `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
+| `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
 
 `Filters.Blur`, `Terrain.Gradient` and the two erosions are what put a halo on a graph: their radii
 propagate backwards to everything that feeds them, and they add along a chain. The engine refuses a

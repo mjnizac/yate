@@ -6,7 +6,6 @@
 --   terrain_viewer --script assets/scripts/terrains/badlands.lua
 
 local function main(params)
-    local r = params.resolution
 
     local base = Noises.Billow{
         frequency = 0.0011, octaves = 6, persistence = 0.5, amplitude = 190.0, seed = params.seed,
@@ -28,7 +27,7 @@ local function main(params)
     local smoothed = Filters.Blur{ input = carved, radius = 1 }
     -- A low talus rounds everything that is left, which is what makes the ridges read as soft rock.
     local settled = Erosion.Thermal{
-        input = smoothed, iterations = 12, talus = r * math.tan(math.rad(26.0)), strength = 0.35,
+        input = smoothed, iterations = 12, talus = math.tan(math.rad(26.0)), strength = 0.35,
     }
 
     return {

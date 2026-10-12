@@ -37,7 +37,10 @@ constexpr OpInfo kOps[] = {
      .nodeClass      = NodeClass::Pointwise,
      .maxInputs      = 0,
      .maxChannels    = 1,
-     .resolutionWord = kMaxNodeParams,
+     // Word 0 carries the spacing, so the op returns *metres*. It returned the integer sample index,
+     // which made every positional script -- an island falloff, a region mask, a warp -- describe
+     // different terrain at every resolution unless it multiplied by `params.resolution` by hand.
+     .resolutionWord = 0,
      .hasReference   = false, // Depends on world position, so it is not foldable.
      .specFieldCount = 0},
     {.kind           = OpKind::Noise,
@@ -133,7 +136,10 @@ constexpr OpInfo kOps[] = {
      .nodeClass      = NodeClass::Iterative,
      .maxInputs      = 1,
      .maxChannels    = 1,
-     .resolutionWord = kMaxNodeParams,
+     // Word 2 carries the sample spacing, so the talus can be a slope (rise over run) rather than a
+     // height difference per cell. With a per-cell talus the same script described different terrain
+     // at every sample spacing: 8 m against 16 m differed by 8 m on average and 95 m at worst.
+     .resolutionWord = 2,
      // No CPU reference: it is iterative, so folding it would mean running the whole scheme on the
      // host, and it can never have constant inputs in practice anyway.
      .hasReference   = false,
@@ -147,7 +153,8 @@ constexpr OpInfo kOps[] = {
      // against silt. Written only when something asks for it, through the channel mask.
      .maxChannels    = 2,
      .channelNames   = {"value", "flow"},
-     .resolutionWord = kMaxNodeParams,
+     // Word 6: the carrying capacity depends on slope, which is a height difference over a distance.
+     .resolutionWord = 6,
      .hasReference   = false,
      .specFieldCount = 0},
 };

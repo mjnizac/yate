@@ -260,32 +260,28 @@ sides must be handles.
 | --- | --- | --- |
 | `domain` | `2` | 2 or 3 |
 
-The **integer sample coordinate** of each sample, as `Rn -> Rn`. This is how a script builds anything
+The **world position, in metres**, of each sample, as `Rn -> Rn`. This is how a script builds anything
 positional — an island falloff, a linear gradient, a region mask.
 
-Two traps, and both bite the first time:
+It is metres at any sample spacing, so a script that places a feature at 1024 m places it there whether it
+is exported at 1 m or previewed at 8 m. (It used to return the integer sample *index*, which made every
+positional script describe different terrain at every resolution unless it multiplied by
+`params.resolution` by hand.)
 
-* **It is in samples, not metres.** A sample at world x = 2048 m with `--resolution 4` comes out as 512.
-  Multiply by `params.resolution` to work in metres, and do it explicitly, because a script that forgets
-  describes different terrain at every resolution.
-* **On an `R2->R2`, world z is `.y`.** The component accessors are positional — `.x` is component 0,
-  `.y` is component 1 — and an `R2->R2` has only two components. `Terrain.Coords{ domain = 2 }.z` is an
-  error that says `R2->R2 has 2 component(s), component 2 was requested`. In `R3` the three components
-  are `.x`, `.y`, `.z` as you would expect.
+On an `R2->R2` the two components are the plane's own axes, `x` and `z`: **`.z` is the second component**,
+and `.y` is the same one by position, so both spellings work. In `R3` the three components are `.x`, `.y`,
+`.z` as you would expect.
 
 ![coords](images/lua/terrain_coords.png)
-*`Terrain.Coords{}.x` over `[0, 512]` at 4 m per sample across a 2048 m square: 0 on the left, 511 on
-the right. Sample indices, not metres.*
+*`Terrain.Coords{}.x` over `[0, 2048]` across a 2048 m square: 0 m on the left, 2048 m on the right.*
 
 #### Example: a circular island falloff
 
 ```lua
-local r      = params.resolution
-local p      = Terrain.Coords{ domain = 2 }
--- Samples to metres, and `.y` for world z: an R2->R2 has two components, so `.z` would be an error.
+local p      = Terrain.Coords{ domain = 2 }       -- metres, at any resolution
 local centre = 1024.0
-local dx     = p.x * r - centre
-local dz     = p.y * r - centre
+local dx     = p.x - centre
+local dz     = p.z - centre
 local dist2  = dx * dx + dz * dz                   -- squared metres from the centre
 
 -- Squared, because `^` is not one of the overloaded operators and there is no square-root op. Work
@@ -527,7 +523,7 @@ Takes a positional list of 2 to 4 scalars and builds an `Rn -> Rm`.
 
 ```lua
 local p    = Terrain.Coords{ domain = 2 }
-local warp = Vec.Combine{ p.x * 0.5, p.y * 0.5 }   -- `.y` is world z on an R2->R2
+local warp = Vec.Combine{ p.x * 0.5, p.z * 0.5 }
 ```
 
 Component access is the other direction: `h.x`, `h.y`, `h.z`, `h.w` pull one component out as `Rn -> R1`.
@@ -538,11 +534,15 @@ Component access is the other direction: `h.x`, `h.y`, `h.z`, `h.w` pull one com
 
 Both are iterative, and both charge their iteration count as halo. Both take an `Rn -> R1` height.
 
-> **Note on units.** Both ops currently measure slope as a height difference **per cell**, not per
-> metre, so `talus` and the hydraulic capacity term mean different things at different sample spacings.
-> Measured on the sample script at 8 m and 16 m over the same world positions, the noise alone is
-> bit-identical and the eroded result differs by 8.0 m on average. Until that is fixed, derive `talus`
-> from the resolution: `talus = params.resolution * math.tan(math.rad(angle))`.
+> **Units.** Slope is rise over run in both ops, so a script means one thing at any sample spacing:
+> `talus = 0.7` is about 35° at 1 m and at 16 m. (Both used to be a height difference *per cell*, which
+> made the same value a steeper slope at a finer spacing. Measured on a thermal-only graph at 8 m and
+> 16 m over the same world positions, the difference went from 8.0 m on average to 0.02 m.)
+>
+> What is **not** resolution-independent is the iteration count: one iteration moves material one *cell*,
+> so 24 iterations reach 192 m at 8 m and 384 m at 16 m. Hydraulic erosion on top of the above still
+> differs by about 5 m on average between 8 m and 16 m for the sample script. That is inherent to a
+> per-cell simulation; the way to compare two resolutions is to scale `iterations` with the spacing.
 
 ### `Erosion.Thermal`
 
@@ -553,24 +553,24 @@ gives away, its neighbours receive.
 | --- | --- | --- | --- |
 | `input` | required | | `Rn -> R1` |
 | `iterations` | `16` | ≥ 1 | passes, and the influence radius |
-| `talus` | `0.02` | ≥ 0 | drop per cell below which nothing moves |
+| `talus` | `0.7` | ≥ 0 | slope (rise over run, `tan` of the angle) below which nothing moves |
 | `strength` | `0.25` | `(0, 0.5]` | fraction of the excess moved per iteration |
 
 | No erosion | 8 iterations | 32 | 96 |
 | --- | --- | --- | --- |
 | ![none](images/lua/erosion_none.png) | ![t8](images/lua/erosion_thermal_8.png) | ![t32](images/lua/erosion_thermal_32.png) | ![t96](images/lua/erosion_thermal_96.png) |
 
-All three at `talus = 4 × tan(35°) = 2.80` and `strength = 0.3`, at 4 m per sample.
+All three at `talus = tan(35°) = 0.70` and `strength = 0.3`, at 4 m per sample.
 
 `strength` above 0.5 is rejected, and the reason is stability rather than taste: a cell can overshoot its
 neighbour and the field oscillates instead of settling.
 
-| Use case | `iterations` | `talus` (at spacing `r`) | `strength` |
+| Use case | `iterations` | `talus` | `strength` |
 | --- | --- | --- | --- |
-| Take the edge off noise, cheaply | 4–8 | `r × tan(40°)` | 0.3 |
-| Talus slopes and scree below cliffs | 24–48 | `r × tan(33°)` | 0.3 |
-| Settle the spoil left by hydraulic erosion | 8–16 | `r × tan(35°)` | 0.25 |
-| A heavily weathered, rounded landscape | 64–128 | `r × tan(25°)` | 0.4 |
+| Take the edge off noise, cheaply | 4–8 | `tan(40°)` = 0.84 | 0.3 |
+| Talus slopes and scree below cliffs | 24–48 | `tan(33°)` = 0.65 | 0.3 |
+| Settle the spoil left by hydraulic erosion | 8–16 | `tan(35°)` = 0.70 | 0.25 |
+| A heavily weathered, rounded landscape | 64–128 | `tan(25°)` = 0.47 | 0.4 |
 
 A lower talus erodes more, because more of the terrain is above the threshold. A high iteration count
 with a high talus does almost nothing; a low talus with few iterations rounds only the sharpest edges.
@@ -585,7 +585,7 @@ Rain, flow, sediment transport, evaporation. Carves channels and deposits fans.
 | `iterations` | `32` | ≥ 1 | passes, and the influence radius |
 | `rain` | `0.02` | ≥ 0 | water added per cell per iteration |
 | `evaporation` | `0.05` | `[0, 1)` | fraction of water lost per iteration |
-| `capacity` | `4.0` | ≥ 0 | sediment a unit of flow holds per unit of slope |
+| `capacity` | `4.0` | ≥ 0 | sediment a unit of flow holds per unit of slope (rise over run) |
 | `erosion_rate` | `0.3` | `(0, 1]` | how fast a shortfall is taken from the bed |
 | `deposition` | `0.3` | `(0, 1]` | how fast an excess is laid back down |
 | `flow_rate` | `0.15` | `(0, 0.25]` | fraction of a surface drop that moves per iteration |
@@ -613,10 +613,13 @@ scheme stops being stable.
 
 | Use case | `iterations` | `rain` | `capacity` | Notes |
 | --- | --- | --- | --- | --- |
-| A hint of drainage, cheap | 8–12 | 0.3 | 4 | halo 12 is affordable on any section |
-| Visible valleys and fans | 24–32 | 0.5 | 6 | the general-purpose setting |
-| Deep, mature channels | 48–64 | 0.5 | 8–12 | halo 64 is 29% more work on a 512 section |
-| Arid, little deposition | 24 | 0.3 | 3 | raise `evaporation` to 0.15 |
+| A hint of drainage, cheap | 8–12 | 0.3 | 16 | halo 12 is affordable on any section |
+| Visible valleys and fans | 24–32 | 0.5 | 24–48 | the general-purpose setting |
+| Deep, mature channels | 48–64 | 0.5 | 32–64 | halo 64 is 29% more work on a 512 section |
+| Arid, little deposition | 24 | 0.3 | 12 | raise `evaporation` to 0.15 |
+
+The capacities are per unit slope now, so they are roughly four to eight times what they were when the
+term was a drop per cell and these were tuned at 4–8 m. A given value means the same at any spacing.
 
 #### The `flow` channel
 
@@ -661,7 +664,6 @@ local function main(params)
     local amplitude = params.amplitude or 400.0
     local sea       = params.sea_level or 0.0
     local wear      = params.erosion or 24
-    local r         = params.resolution
 
     -- Base: wavelength ten times the amplitude, so the slopes are terrain and not spikes.
     local base = Noises.fBm{
@@ -683,14 +685,14 @@ local function main(params)
         mask = Masks.Slope{ input = shape.gradient, min = 0.3, max = 1.1 },
     }
 
-    -- Water cuts, then thermal settles the spoil. Talus from the resolution, so the same script
-    -- describes the same terrain at any sample spacing.
+    -- Water cuts, then thermal settles the spoil. Both are slopes, so the same script describes the
+    -- same terrain at any sample spacing.
     local carved = Erosion.Hydraulic{
         input = blended, iterations = wear, rain = 0.5, capacity = 6.0,
     }
     local settled = Erosion.Thermal{
         input = carved, iterations = wear // 2,
-        talus = r * math.tan(math.rad(35.0)), strength = 0.3,
+        talus = math.tan(math.rad(35.0)), strength = 0.3,
     }
 
     local low, high = sea - amplitude * 1.5, sea + amplitude * 2.0
@@ -728,12 +730,11 @@ return { snow = { value = snow, range = { 0, 1 } } }
 ### A domain warp
 
 ```lua
-local r    = params.resolution
 local p    = Terrain.Coords{ domain = 2 }
 local wx   = Noises.fBm{ frequency = 0.0005, amplitude = 300.0, seed = 7 }
 -- There is no node that samples a field at displaced coordinates, so a warp is built by feeding
 -- displaced coordinates into something that is already a function of position. This warps a ramp.
-local ramp = (p.x * r + wx.value) * 0.001
+local ramp = (p.x + wx.value) * 0.001
 return { warped = { value = ramp, range = { 0, 4 } } }
 ```
 

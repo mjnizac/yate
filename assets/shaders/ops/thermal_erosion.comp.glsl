@@ -20,7 +20,8 @@
 // reads real neighbours out of the halo rather than a clamped copy of itself.
 //
 // Parameters:
-//   0  talus, as a height difference per cell
+//   0  talus, as a slope: rise over run, so tan of the angle (0.7 is about 35 degrees)
+//   2  sample spacing in metres, written by the compiler from the job resolution
 //   1  strength, the fraction of the excess moved per iteration
 //   9  iteration index, written by the evaluator (unused here, reserved by the interface)
 
@@ -41,7 +42,12 @@ void main() {
         return;
     }
 
-    float talus    = ParamFloat(0);
+    // The talus is a slope, so the height difference a cell may hold against its neighbour is the
+    // slope times the distance to it. Every neighbour here is an axis neighbour, one sample away.
+    // Taking the talus as a drop per cell instead made the same script describe different terrain at
+    // different sample spacings, which is what the viewer changes with the camera.
+    float spacing  = max(ParamFloat(2), 1e-6);
+    float talus    = ParamFloat(0) * spacing;
     float strength = ParamFloat(1);
 
     FloatBuffer source = FloatBuffer(pc.inputs[0]);

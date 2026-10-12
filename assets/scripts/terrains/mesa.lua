@@ -9,7 +9,6 @@
 --   terrain_viewer --script assets/scripts/terrains/mesa.lua
 
 local function main(params)
-    local r    = params.resolution
     local deck = params.deck or 190.0
 
     -- The plateau regions. Three octaves: enough for an irregular outline, few enough that the edge
@@ -43,7 +42,7 @@ local function main(params)
 
     -- A high talus: scree gathers at the foot of the cliffs without rounding their tops off.
     local settled = Erosion.Thermal{
-        input = cut, iterations = 10, talus = r * math.tan(math.rad(58.0)), strength = 0.25,
+        input = cut, iterations = 10, talus = math.tan(math.rad(58.0)), strength = 0.25,
     }
 
     return {

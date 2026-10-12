@@ -32,6 +32,7 @@
 //   3  erosion rate, how fast a deficit in sediment is taken from the bed
 //   4  deposition rate, how fast an excess is laid back down
 //   5  flow rate, the fraction of a surface drop that moves per iteration
+//   6  sample spacing in metres, written by the compiler from the job resolution
 //   8  iteration count, written by the evaluator
 //   9  iteration index, written by the evaluator
 
@@ -64,6 +65,7 @@ void main() {
     float erosionRate = ParamFloat(3);
     float deposition  = ParamFloat(4);
     float flowRate    = ParamFloat(5);
+    float spacing     = max(ParamFloat(6), 1e-6);
 
     uint  iterations = ParamUint(8);
     uint  iteration  = ParamUint(9);
@@ -125,7 +127,9 @@ void main() {
             // there, digging a pit, which steepens the drop into it, which erodes harder. That feedback
             // is what made the op diverge for any rainfall large enough to do visible work, so the only
             // settings that stayed stable were the ones that did nothing.
-            steepest = max(steepest, centre.height - neighbour.height);
+            // Per metre, not per cell: the carrying capacity is a function of slope, and a drop of
+            // one metre between samples 8 m apart is a different slope from the same drop across 1 m.
+            steepest = max(steepest, (centre.height - neighbour.height) / spacing);
             // Sediment travels at the concentration of the water that carries it.
             sedimentOut += moved * centre.sediment / max(centre.water, kMinimumWater);
         } else if (down < 0.0) {

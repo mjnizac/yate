@@ -7,7 +7,6 @@
 --   terrain_viewer --script assets/scripts/terrains/dunes.lua
 
 local function main(params)
-    local r = params.resolution
 
     local field = Noises.Billow{
         frequency = 0.0009, octaves = 2, lacunarity = 2.3, persistence = 0.35,
@@ -30,7 +29,7 @@ local function main(params)
 
     -- Sand stands at a low angle: a low talus and plenty of iterations is what a dune is.
     local settled = Erosion.Thermal{
-        input = sand, iterations = 24, talus = r * math.tan(math.rad(18.0)), strength = 0.4,
+        input = sand, iterations = 24, talus = math.tan(math.rad(18.0)), strength = 0.4,
     }
 
     return {

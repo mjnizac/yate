@@ -70,7 +70,7 @@ cases.terrain_gradient = function()
     return { height = { value = Terrain.Gradient{ input = b.value } } }
 end
 cases.terrain_coords = function()
-    return { height = { value = Terrain.Coords{ domain = 2 }.x, range = { 0, 512 } } }
+    return { height = { value = Terrain.Coords{ domain = 2 }.x, range = { 0, 2048 } } }
 end
 
 -- Slope mask. The thresholds bracket the base's measured slope distribution: p10 0.27, p50 0.69,
@@ -135,8 +135,9 @@ for _, r in ipairs{ 1, 8, 32 } do
     end
 end
 
--- Erosion. talus is a drop per cell, so it is quoted here as spacing * tan(angle).
-local function talus_for(degrees) return SPACING * math.tan(math.rad(degrees)) end
+-- Erosion. talus is a slope, so it is simply tan of the angle at any spacing; the hydraulic capacity
+-- is per unit slope, so what read as 6 per cell at 4 m is 24 here.
+local function talus_for(degrees) return math.tan(math.rad(degrees)) end
 
 cases.erosion_none = function()
     return { height = { value = height().value, range = { -400, 400 } } }
@@ -151,16 +152,16 @@ end
 for _, n in ipairs{ 8, 32 } do
     cases["erosion_hydraulic_" .. n] = function()
         return { height = { value = Erosion.Hydraulic{ input = height().value, iterations = n,
-                                                       rain = 0.5, capacity = 6.0 },
+                                                       rain = 0.5, capacity = 24.0 },
                             range = { -400, 400 } } }
     end
 end
 cases.erosion_flow = function()
-    local carved = Erosion.Hydraulic{ input = height().value, iterations = 32, rain = 0.5, capacity = 6.0 }
+    local carved = Erosion.Hydraulic{ input = height().value, iterations = 32, rain = 0.5, capacity = 24.0 }
     return { height = { value = carved.flow } }
 end
 cases.erosion_combined = function()
-    local carved = Erosion.Hydraulic{ input = height().value, iterations = 32, rain = 0.5, capacity = 6.0 }
+    local carved = Erosion.Hydraulic{ input = height().value, iterations = 32, rain = 0.5, capacity = 24.0 }
     local settled = Erosion.Thermal{ input = carved, iterations = 16, talus = talus_for(35), strength = 0.3 }
     return { height = { value = settled, range = { -400, 400 } } }
 end

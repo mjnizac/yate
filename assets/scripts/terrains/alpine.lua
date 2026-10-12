@@ -3,7 +3,6 @@
 --   terrain_viewer --script assets/scripts/terrains/alpine.lua
 
 local function main(params)
-    local r         = params.resolution
     local amplitude = params.amplitude or 380.0
 
     -- Base wavelength about ten times the amplitude, so the slopes are terrain and not spikes.
@@ -34,7 +33,7 @@ local function main(params)
     -- it for one unit of halo and leaves the valleys alone.
     local smoothed = Filters.Blur{ input = carved, radius = 1 }
     local settled = Erosion.Thermal{
-        input = smoothed, iterations = 14, talus = r * math.tan(math.rad(34.0)), strength = 0.3,
+        input = smoothed, iterations = 14, talus = math.tan(math.rad(34.0)), strength = 0.3,
     }
 
     return {

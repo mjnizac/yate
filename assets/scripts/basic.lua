@@ -68,6 +68,10 @@ local function main(params)
 
     -- Water first, cutting channels, then thermal erosion to settle the spoil into talus slopes.
     --
+    -- `talus` is a slope (rise over run), so 0.5 is about 27 degrees at any sample spacing, and
+    -- `capacity` is sediment per unit of flow per unit of slope. Both used to be per *cell*, which made
+    -- this script a different terrain at every resolution.
+    --
     -- Rain is half a metre per iteration, not the two centimetres this started with: the total rainfall
     -- is what sets how much work the water can do, and 24 iterations of 0.02 m moved about one metre of
     -- bed across 400 m of relief, which is nothing. At 0.5 the relief drops from 391 m to 338 and the
@@ -77,13 +81,13 @@ local function main(params)
         input      = blended,
         iterations = wear,
         rain       = 0.5,
-        capacity   = 6.0,
+        capacity   = 48.0,
     }
 
     local settled = Erosion.Thermal{
         input      = carved,
         iterations = wear // 2,
-        talus      = amplitude * 0.004,
+        talus      = 0.5,
         strength   = 0.35,
     }
 

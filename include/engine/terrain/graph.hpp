@@ -262,8 +262,11 @@ public:
     struct ThermalParams {
         /// Iterations to run. Also the influence radius, and therefore the halo.
         u32_t iterations = 16;
-        /// Slope, as a height difference per cell, below which nothing moves. The talus angle.
-        f32_t talus = 0.02f;
+        /// Slope, as rise over run, below which nothing moves: `tan` of the talus angle, so 0.7 is
+        /// about 35 degrees and 1.0 is 45. It used to be a height difference per cell, which made the
+        /// same value mean a steeper slope at a finer spacing and the terrain depend on the sample
+        /// spacing it was evaluated at. Dimensionless now, so a script means one thing at any resolution.
+        f32_t talus = 0.7f;
         /// Fraction of the excess height moved per iteration, in (0, 0.5]. Above 0.5 the scheme
         /// oscillates instead of settling, because a cell can overshoot its neighbour.
         f32_t strength = 0.25f;

@@ -6,7 +6,6 @@
 --   terrain_viewer --script assets/scripts/terrains/riverlands.lua
 
 local function main(params)
-    local r = params.resolution
 
     local base = Noises.fBm{
         frequency = 0.0005, octaves = 6, persistence = 0.42, amplitude = 210.0, seed = params.seed,
@@ -24,7 +23,7 @@ local function main(params)
     -- it for one unit of halo and leaves the valleys alone.
     local smoothed = Filters.Blur{ input = carved, radius = 1 }
     local settled = Erosion.Thermal{
-        input = smoothed, iterations = 10, talus = r * math.tan(math.rad(28.0)), strength = 0.3,
+        input = smoothed, iterations = 10, talus = math.tan(math.rad(28.0)), strength = 0.3,
     }
 
     return {

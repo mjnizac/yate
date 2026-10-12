@@ -3,7 +3,6 @@
 --   terrain_viewer --script assets/scripts/terrains/rolling.lua
 
 local function main(params)
-    local r         = params.resolution
     local amplitude = params.amplitude or 150.0
 
     -- Low persistence keeps the fine octaves quiet, which is what makes ground read as pasture
@@ -20,7 +19,7 @@ local function main(params)
 
     local ground = base.value + swell.value
     local settled = Erosion.Thermal{
-        input = ground, iterations = 10, talus = r * math.tan(math.rad(22.0)), strength = 0.35,
+        input = ground, iterations = 10, talus = math.tan(math.rad(22.0)), strength = 0.35,
     }
 
     return {
