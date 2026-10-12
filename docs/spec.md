@@ -506,6 +506,28 @@ terrain_export --script terrain.lua --seed 1234 \
 * Auto-generated UI for user parameters.
 * Evaluation is restricted to visible sections at a resolution appropriate to camera distance.
 
+#### Water
+
+A horizontal water surface at a configurable height, drawn by the viewer and independent of the graph:
+the terrain defines an elevation, the viewer draws a level over it, and no sample of any section depends
+on it. Changing it never re-evaluates a tile.
+
+* **Off by default.** `--water` turns it on, with `--water-level <m>` (default `0`), `--water-color
+  r,g,b` and `--water-opacity <0-1>`. Every value is validated at the boundary. The panel exposes the
+  same four, and a reload keeps them.
+* **The level is world metres**, the same space the height output is in, so it does not depend on the
+  script's `range`.
+* **No surface is rasterized over the terrain.** Two surfaces at nearly the same depth z-fight along the
+  whole shoreline and over any flat area near the level, and a bias only moves that. Instead the terrain
+  fragment computes the water in front of itself from the eye, its own position and the level: the part
+  of the ray from the eye to the fragment that lies below the level gives the tint, the fragment's
+  distance to the level gives the shoreline band, and a ray that crosses the surface gets a Fresnel
+  reflection. One expression covers the camera and the fragment on either side of the surface.
+* **Open water** is one quad over the footprint of the resident tiles, drawn at the cleared depth with
+  depth writes off, so it can only appear where no terrain was drawn (a ring still streaming).
+* Wireframe draws no water. Out of scope: waves, refraction, caustics, rivers and a water level in the
+  export or its sidecar.
+
 ---
 
 ## 13. Profiling (Tracy)
@@ -622,6 +644,10 @@ Each milestone ends with its acceptance criterion met and `docs/status.md` updat
 
 9. **Viewer (Graphics mode).**
    Graphics-first device selection, window layer, swapchain, render pass and framebuffers, displaced-grid rendering, camera, input, parameter UI, hot reload.
+
+10. **Viewer water.**
+    Analytic water shading on the terrain, open water where no terrain covers the view, viewer flags and panel controls.
+    *Accepted when:* a surface exactly at the water level renders as one colour, terrain above the level is unchanged, and enabling, moving or disabling the water evaluates no tile.
 
 ---
 
