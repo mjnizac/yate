@@ -77,7 +77,7 @@ numbers drift, and this one is the index.
 
 | Call | Produces | Notes |
 | --- | --- | --- |
-| `Noises.fBm`, `Noises.Ridged`, `Noises.Billow` | `Rn -> R1` value, `Rn -> Rn` gradient | fractal noise with its exact analytic gradient, both out of one evaluation; `fBm{ kind = ... }` is the same op |
+| `Noises.fBm`, `Noises.Ridged`, `Noises.Billow` | `Rn -> R1` value, `Rn -> Rn` gradient | fractal noise with its exact analytic gradient, both out of one evaluation; `fBm{ kind = ... }` is the same op. `position = Shapes.Warp{}` (any `R2->R2` field in metres) samples it elsewhere, which curves ridges; the gradient is then the noise's at that position, without the warp's Jacobian |
 | `Terrain.Const` | `Rn -> R1` | a constant; usually unnecessary, since a bare number works wherever a field does |
 | `Terrain.Coords` | `Rn -> Rn` | the world position **in metres**; on an `R2->R2` world z is `.z` (the second component) |
 | `Terrain.Normals` | `R2->R3` | takes a **gradient**, not a height |
