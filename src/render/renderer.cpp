@@ -657,12 +657,14 @@ ViewerLayer::~ViewerLayer() {
 
 void ViewerLayer::OnAttach() {
     if (m_state == nullptr) {
+        App().AddExit(ExitCode::FailedToInitializeEngine);
         App().Stop();
         return;
     }
     ApplicationState& state = StateOf(App());
     if (state.window == nullptr || state.swapchain == nullptr) {
         LOG_ERROR("ViewerLayer needs a window; push a WindowLayer first");
+        App().AddExit(ExitCode::FailedToInitializeEngine);
         App().Stop();
         return;
     }
@@ -683,6 +685,7 @@ void ViewerLayer::OnAttach() {
     }
     if (m_state->windowLayer == nullptr) {
         LOG_ERROR("ViewerLayer found no WindowLayer below it");
+        App().AddExit(ExitCode::FailedToInitializeEngine);
         App().Stop();
         return;
     }
@@ -692,6 +695,7 @@ void ViewerLayer::OnAttach() {
         "viewer/terrain.frag.spv", m_state->context->Pipelines().Handle());
     if (!pipeline) {
         LOG_ERROR("could not create the terrain pipeline: {}", pipeline.error().Format().data());
+        App().AddExit(ExitCode::FailedToInitializeEngine);
         App().Stop();
         return;
     }
@@ -730,6 +734,7 @@ void ViewerLayer::OnAttach() {
         detail::CopyBounded(m_state->lastError, std::string_view{loaded.error().Format().data()});
         m_state->hasError = true;
         LOG_ERROR("{}", m_state->lastError.data());
+        App().AddExit(ExitCode::FailedToLoadScript);
         App().Stop();
         return;
     }
@@ -739,6 +744,7 @@ void ViewerLayer::OnAttach() {
         detail::CopyBounded(m_state->lastError, std::string_view{terrain.error().Format().data()});
         m_state->hasError = true;
         LOG_ERROR("{}", m_state->lastError.data());
+        App().AddExit(ExitCode::FailedToCompileGraph);
         App().Stop();
         return;
     }
