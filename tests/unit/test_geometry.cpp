@@ -27,6 +27,9 @@
 #ifndef TERRAIN_EXPORT_EXE
 #    error "TERRAIN_EXPORT_EXE is set by tests/CMakeLists.txt"
 #endif
+#ifndef ENGINE_SOURCE_ROOT
+#    error "ENGINE_SOURCE_ROOT is set by tests/CMakeLists.txt"
+#endif
 
 namespace {
 
@@ -517,6 +520,53 @@ void TestPreludeHash() {
     CHECK(recorded == std::string(expected.data(), 64));
 }
 
+/// The four reference terrains are documentation, and documentation that does not run is a lie. Each is
+/// exported over its own world at a coarse spacing, and what comes back has to have relief: a script
+/// that quietly produced a flat field would pass an "exits 0" check.
+void TestReferenceTerrains() {
+    test::Section("the reference terrains run and have relief");
+
+    const char* const scripts[] = {"volcanic_island", "mountain_range", "canyon", "mesas"};
+    for (const char* name : scripts) {
+        const std::string directory = std::string(kDirectory) + "/ref_" + name;
+        const std::string capture   = std::string(kDirectory) + "/capture.txt";
+        std::string       command =
+            std::string("\"") + TERRAIN_EXPORT_EXE + "\" --script \"" + ENGINE_SOURCE_ROOT
+            + "/assets/scripts/shapes/" + name
+            + ".lua\" --min -2048,-2048 --max 2048,2048 --resolution 32 --section 64 --raw --out \""
+            + directory + "\" > \"" + capture + "\" 2>&1";
+#ifdef _WIN32
+        command = "\"" + command + "\"";
+#endif
+        const int code = std::system(command.c_str());
+        ++test::g_checks;
+        if (code != 0) {
+            ++test::g_failures;
+            std::printf("FAIL %s: exit %d: %.300s\n", name, code, ReadFile(capture).c_str());
+            continue;
+        }
+        const std::string bytes = ReadFile(directory + "/height.raw");
+        ++test::g_checks;
+        if (bytes.size() != 128 * 128 * sizeof(float)) {
+            ++test::g_failures;
+            std::printf("FAIL %s: height.raw is %zu bytes\n", name, bytes.size());
+            continue;
+        }
+        std::vector<float> heights(128 * 128);
+        std::memcpy(heights.data(), bytes.data(), bytes.size());
+        const auto [low, high] = std::minmax_element(heights.begin(), heights.end());
+        bool finite = true;
+        for (const float value : heights) {
+            finite = finite && std::isfinite(value);
+        }
+        std::printf("     %-18s heights %.1f to %.1f m\n", name, static_cast<double>(*low),
+                    static_cast<double>(*high));
+        CHECK(finite);
+        // More than a hundred metres of relief over four kilometres: a flat field fails this.
+        CHECK(*high - *low > 100.0f);
+    }
+}
+
 void TestErrors() {
     test::Section("bad geometry is refused with the line");
 
@@ -578,6 +628,7 @@ int main() {
     TestLandforms();
     TestPreludeErrors();
     TestPreludeHash();
+    TestReferenceTerrains();
 
     return test::Summary("test_geometry");
 }

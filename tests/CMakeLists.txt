@@ -38,7 +38,8 @@ add_dependencies(test_cli terrain_export terrain_viewer engine_shaders)
 # Shapes, transforms and profiles against closed-form values, through the exporter.
 engine_add_unit_test(test_geometry)
 target_compile_definitions(test_geometry PRIVATE
-    "TERRAIN_EXPORT_EXE=\"$<TARGET_FILE:terrain_export>\"")
+    "TERRAIN_EXPORT_EXE=\"$<TARGET_FILE:terrain_export>\""
+    "ENGINE_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
 add_dependencies(test_geometry terrain_export engine_shaders)
 
 # Needs a Vulkan 1.4 device and the compiled shaders.
