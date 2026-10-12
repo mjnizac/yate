@@ -24,8 +24,8 @@
 #include <engine/window_layer.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdio>
-#include <array>
 #include <cmath>
 #include <fstream>
 #include <iterator>
@@ -481,6 +481,23 @@ int main() {
                     (*application)->Run();
                     viewer.WaitForReload();
                     CHECK(viewer.LastError().empty());
+                    // Writing the script also trips the viewer's file watcher, which reloads on its own
+                    // a debounce and a poll interval later, by the clock rather than by frames. A Debug
+                    // build runs few enough frames in that time for the second reload to land inside a
+                    // measurement, so let it happen here: wait until the load count has been still for
+                    // longer than the watcher can take.
+                    using Clock       = std::chrono::steady_clock;
+                    u64_t        loads = viewer.LoadCount();
+                    Clock::time_point quiet = Clock::now();
+                    while (Clock::now() - quiet < std::chrono::milliseconds(900)) {
+                        window.StopAfter(window.FramesPresented() + 4);
+                        (*application)->Run();
+                        viewer.WaitForReload();
+                        if (viewer.LoadCount() != loads) {
+                            loads = viewer.LoadCount();
+                            quiet = Clock::now();
+                        }
+                    }
                 };
                 const auto shoot = [&](const char* name) {
                     const std::string path = std::string(kDirectory) + "/" + name + ".png";
@@ -495,6 +512,12 @@ int main() {
                 viewer.MoveCameraTo(0.0f, 120.0f, -400.0f);
                 window.StopAfter(window.FramesPresented() + 40);
                 (*application)->Run();
+                // Streaming has to have finished before the count is taken, or the check below would
+                // be measuring the ring catching up. A Debug build is slow enough to be mid-way here.
+                for (int round = 0; round < 40 && viewer.MissingTiles() != 0; ++round) {
+                    window.StopAfter(window.FramesPresented() + 10);
+                    (*application)->Run();
+                }
 
                 const u64_t evaluated = viewer.TilesEvaluated();
                 ViewerLayer::Water water;
