@@ -69,9 +69,12 @@ jobs:
       - name: Put the Vulkan loader beside the test executables
         shell: pwsh
         run: |
-          $dll = Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"
-          if (-not (Test-Path $dll)) { throw "no vulkan-1.dll in the SDK at $dll" }
-          Get-ChildItem build -Recurse -Filter "*.exe" | ForEach-Object { Copy-Item $dll $_.DirectoryName -Force }
+          $dll = Get-ChildItem $env:VULKAN_SDK -Recurse -Filter vulkan-1.dll -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch "Bin32|Lib32|x86" } | Select-Object -First 1
+          if (-not $dll) { $dll = Get-Item "$env:SystemRoot\System32\vulkan-1.dll" -ErrorAction SilentlyContinue }
+          if (-not $dll) { Write-Host "::error title=no vulkan-1.dll::VULKAN_SDK=$env:VULKAN_SDK"; exit 1 }
+          Write-Host "using $($dll.FullName)"
+          Get-ChildItem build -Recurse -Filter "*.exe" | ForEach-Object { Copy-Item $dll.FullName $_.DirectoryName -Force }
 
       # On failure the end of the output is also published as an annotation. A job's log needs admin
       # rights to download, an annotation does not, and the first thing anyone needs is which suite broke.
@@ -149,7 +152,16 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=0
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ctest --output-on-failure -R "$CPU_TESTS"
+        shell: bash
+        run: |
+          set +e
+          ctest --output-on-failure -R "$CPU_TESTS" 2>&1 | tee ctest.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            msg=$(tail -n 60 ctest.log | awk '{printf "%s%%0A", $0}')
+            echo "::error title=ctest failed::${msg}"
+          fi
+          exit $code
 
   gpu:
     name: GPU suites (self-hosted)

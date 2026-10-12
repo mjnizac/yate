@@ -4,7 +4,11 @@
 #include <engine/error.hpp>
 
 #include <charconv>
+#include <cctype>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -36,10 +40,17 @@ namespace engine::cli {
 /// A finite floating-point number. `nan`, `inf` and anything that overflows a double are rejected,
 /// because each of them would otherwise reach an integer conversion that is undefined behaviour.
 [[nodiscard]] inline Result<f64_t> ParseFinite(std::string_view option, std::string_view text) {
-    f64_t      value = 0.0;
-    const auto [end, code] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (text.empty() || code != std::errc{} || end != text.data() + text.size()
-        || !std::isfinite(value)) {
+    // `strtod` rather than `from_chars`: libc++ 18 has no floating-point `from_chars`. It also
+    // accepts a leading `+`, leading whitespace and hexadecimal, which `from_chars` does not, so those are refused
+    // by hand to keep the grammar the same.
+    const std::string owned(text);
+    char*             end   = nullptr;
+    errno                   = 0;
+    const f64_t value       = std::strtod(owned.c_str(), &end);
+    const bool  plainNumber = !text.empty() && text.front() != '+'
+                              && !std::isspace(static_cast<unsigned char>(text.front()))
+                              && text.find_first_of("xX") == text.npos;
+    if (!plainNumber || errno != 0 || end != owned.c_str() + owned.size() || !std::isfinite(value)) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                     "{} expects a finite number, got '{}'", option, text);
     }
