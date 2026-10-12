@@ -858,3 +858,88 @@ suite checks the step before the one that was wrong. It verifies that the noise 
 reference, and the file was written wrong. It verifies that tiles are evaluated, cleared the frustum and
 were recorded as draws, and the fragments were discarded. It compares PNGs the engine wrote against PNGs
 the engine wrote. The gap is listed in `docs/todo.md`.
+
+## A pass over the open items
+
+What was done with each item of the todo, in the order it was worked, including what was tried and
+thrown away. The measurements are the reason this section exists: three of the nine items turned out not
+to be what they were written down as.
+
+### The Lua sandbox, and an error that was not catchable
+
+`dofile`, `loadfile`, `load`, `collectgarbage`, `pcall` and `xpcall` are removed from `base` after it
+opens, and a script has a wall-clock budget of 10 s checked from a count hook. `load` mattered most: the
+sidecar hashes the script *file*, so a chunk assembled at run time was not described by its own hash.
+
+The first version of the budget did not work and the test written for it said so. The hook can only
+*raise* an error, and `while true do pcall(function() while true do end end) end` catches every one of
+them: it ran until it was killed from outside, 40 s. Lua has no uncatchable error, so the fix is that a
+script cannot catch: `pcall` and `xpcall` are removed. Nothing in a graph builder needs to, since every
+failure it can hit is a validation error that should reach the user with its line.
+
+The same work found that an error raised by the Lua VM itself (`attempt to call a nil value`) reported
+line 0 and carried a traceback, because only the bindings record the calling line. The line is now read
+back out of the message.
+
+### Command-line numbers
+
+Every numeric option goes through `from_chars` and must consume the whole token and be finite:
+`--resolution 123abc`, `--section 200abc`, `--resolution nan`, `-1`, `--min 1e400,0` and `--seed -3` were
+all accepted before, the first two as 123 and 200. A job also has a sample budget now. `--max 1e9,1e9`
+used to start an export of 1953125 x 1953125 sections.
+
+The black-box suite built for this found a defect no in-process test could reach: `terrain_viewer`
+exited 0 when its script did not exist, because the exit code is assembled in `main`.
+
+### Provenance
+
+The sidecar records SHA-256 of the script, of the compiled shaders the job actually ran (each preceded by
+its name, so two shaders swapping contents cannot collide) and of the resolved parameters, sorted so the
+order they were typed in is not part of the identity. `HashFile` used to return sixteen zeros when it
+could not open a file, so an unreadable script produced a valid-looking hash and no error. Dependencies
+are pinned by commit, and a fresh configure fetched all ten at exactly the commits that were already
+built.
+
+### Slope per metre, `Coords` in metres
+
+`Erosion.Thermal`'s `talus` and the hydraulic capacity term were height differences per cell, so the
+same script was a different terrain at every spacing. Both are rise over run now. Over the same world
+positions at 8 m and 16 m, a thermal-only graph went from differing by 8.0 m on average to 0.02 m.
+`Terrain.Coords` returns metres, and `.z` on a value over `R2` is its second component.
+
+What this did *not* fix is the iteration count, which is still per cell (see `docs/todo.md`).
+
+### Tried and rejected
+
+**Diagonal neighbours for hydraulic erosion.** The ripple is grid-aligned, so the obvious remedy is to
+let water leave at 45 degrees. Implemented (eight neighbours, 1/sqrt(2) weight, `flow_rate` bound
+lowered to 0.146) and measured by mean |second difference| of the same graph: 5.3 along the axes before;
+6.4 along the axes and 7.8 along the diagonals after. More roughness overall, and the anisotropy
+flipped (axis-to-diagonal 1.36 to 0.83) rather than going away. Reverted.
+
+**A per-edge talus jitter** to stop thermal erosion from terracing a smooth dome. It conserved material
+(the border drift still shrinks with the perimeter), it was bit-identical across section layouts, and it
+changed the field by at most 0.4 m. It did nothing visible because there was nothing to fix: the
+terracing had come from the old per-cell units, where a talus of one at 8 m spacing was an 8 m drop per
+cell. With slope units the dome does not terrace. Reverted rather than carried as a parameter nobody
+needs.
+
+### Not a bug: the viewer's start-up framing
+
+The todo proposed framing, picking the level and framing again on the radius that level implies. It does
+not converge. `IdealLevel` wants a tile about half the viewing distance across, so the ring is larger
+than the view by construction, and the fixed point of "frame the whole ring" is `maxLevel`: each pass
+raises the level by about two. The framing radius is a distance heuristic and the comment now says so.
+
+### `--raw`, and a CRT pathology worth remembering
+
+Raw `f32` output for `R2` was meant to take the PNG encoder off the critical path. The first version was
+**slower** than the PNG, 50 s against 23 s on an 8192 square, because the volume writer pays a seek and a
+write per row. The second, appending whole bands, was still 40 s, and the cause was not the disk (the
+same drive does a plain sequential write at over a gigabyte per second) and not the stream buffer
+(a 1 MiB `setvbuf` changed nothing). Timing each call showed 8 MiB appends at 2 GiB/s and 24 MiB appends
+at 25 to 80 MiB/s: **one large `fwrite` is pathologically slow with this CRT, and the same data in 4 MiB
+pieces runs at 1.7 GiB/s.** With that, 13.0 s against 23.3 s.
+
+The seek in the volume writer also truncated its offset through `long`, which is 32 bits on Windows, so
+a volume past 2 GiB wrote later rows over earlier ones. It is a 64-bit seek now.

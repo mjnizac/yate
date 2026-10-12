@@ -66,6 +66,12 @@ build/Debug/bin/terrain_export --script assets/scripts/basic.lua --min 0,0 --max
 
 `--log-format json` emits one JSON object per line, which is what tooling should parse.
 `--device <32 hex chars>` forces a physical device; the log lists every candidate with its UUID.
+`--raw` writes raw little-endian `f32` instead of a PNG: the evaluated values, unnormalised and
+uncompressed, in row-major order with the dimensions in the sidecar. On an 8192 square `basic.lua` it is
+13.0 s against 23.3 s for the PNG and about three times the bytes. `--max-samples <n>` refuses a job over
+`n` samples before anything is allocated (default 2^40), so a mistyped bound is an error with the number
+it computed instead of an export of billions of sections. Every numeric option is parsed strictly: a
+trailing suffix, `nan`, `inf` and an overflow are errors that name the option and the text.
 `--png-level` and `--png-filter` trade encoding time against output size; the defaults are level 2 and
 the `up` filter, and `--png-level 1` is the setting for a job that wants throughput over size. Run
 `--help` for the rest.
