@@ -9,30 +9,35 @@
 -- cirque. One warped position is shared by every landform and by the ridged detail, so the spines
 -- wander together. The detail is small: it breaks the regularity of the structure, it does not make it.
 --
--- Parameters (metres): `height` is the height of the main crest above the valley floors, `warp` how far
+-- Parameters (metres): `height` is the main crest above the valley floors, `scale` enlarges the plan, `warp` how far
 -- the outlines wander.
 
 local function main(params)
-    local height = params.height or 1000.0
+    local height = params.height or 1400.0
     local warp   = params.warp or 260.0
+    local scale  = params.scale or 1.4
     local seed   = params.seed
 
-    local position = Shapes.Warp{ amplitude = warp, frequency = 0.0005, octaves = 3, seed = seed + 11 }
+    -- `world` is where the ground is, in metres, wandering a little. The landforms below are drawn in
+    -- a plan that `scale` enlarges, so the whole layout grows without every coordinate being edited;
+    -- heights and depths stay in metres. The fine noise reads `world`, so its grain does not grow.
+    local world = Shapes.Warp{ amplitude = warp, frequency = 0.0005, octaves = 3, seed = seed + 11 }
+    local position = Vec.Combine{ world.x / scale, world.z / scale }
 
     -- The crest barely varies: its rises and notches are the summits and passes below, not noise.
     local slow = Noises.fBm{ frequency = 0.0005, octaves = 2, amplitude = 1.0, seed = seed + 2,
                              position = position }
     local crest = height * 0.92 + slow.value * height * 0.08
 
-    local function ridge(points, scale, width)
+    local function ridge(points, factor, width, profile, rise)
         return Landforms.Ridge{
-            points = points, width = width, height = crest * scale, profile = "linear",
-            position = position,
+            points = points, width = width, height = rise or (crest * factor),
+            profile = profile or "linear", position = position,
         }
     end
-    local function summit(x, z, radius, scale)
+    local function summit(x, z, radius, factor)
         return Landforms.Cone{
-            at = { x, z }, radius = radius, height = height * scale, position = position,
+            at = { x, z }, radius = radius, height = height * factor, position = position,
         }
     end
     local function join(a, b, k)
@@ -61,15 +66,36 @@ local function main(params)
         join(summit(1300, 350, 1150, 1.2), summit(3000, -200, 950, 1.05), 260.0),
         260.0)
 
-    local massif = join(join(main_crest, south, 300.0), join(spurs, summits, 260.0), 260.0)
+    -- Buttresses: arêtes that come down from the summits in their own directions, each with its own
+    -- cross-section and a height that falls away from the summit it leaves, so they are shoulders of
+    -- the mountain and not ridges laid beside it. Sharp, rounded and broad profiles are mixed on purpose.
+    local function buttress(from, points, factor, width, profile, reach)
+        local away = Curves.Smoothstep{
+            input = Shapes.Point{ at = from, position = position }, min = 0.0, max = reach,
+        }
+        return ridge(points, factor, width, profile, height * factor * (1.0 - 0.65 * away))
+    end
+    local buttresses = join(
+        join(buttress({ -300, -100 }, { { -300, -100 }, { -80, 1000 }, { 250, 2000 } },
+                      0.95, 1200, "linear", 2300),
+             buttress({ -300, -100 }, { { -300, -100 }, { 600, 650 }, { 1000, 1500 } },
+                      0.8, 1500, "smooth", 2000), 200.0),
+        join(buttress({ -1900, 250 }, { { -1900, 250 }, { -2500, -900 }, { -2800, -1900 } },
+                      0.85, 1300, "smooth", 2200),
+             buttress({ 1300, 350 }, { { 1300, 350 }, { 2000, 1000 }, { 2400, 1700 } },
+                      0.7, 1100, "linear", 1700), 200.0),
+        200.0)
+
+    local massif = join(join(main_crest, south, 300.0),
+                        join(join(spurs, buttresses, 220.0), summits, 260.0), 260.0)
 
     -- Highland under and around the range, so it stands on country and not on a table.
     local highland = Landforms.Dome{
-        at = { 0, -1100 }, radius = 6500, height = height * 0.3, profile = "smooth", position = position,
+        at = { 0, -1100 }, radius = 6500, height = height * 0.1, profile = "smooth", position = position,
     }
     local foothills = Noises.fBm{
-        frequency = 0.0008, octaves = 4, persistence = 0.5, amplitude = height * 0.1, seed = seed + 5,
-        position = position,
+        frequency = 0.0008, octaves = 4, persistence = 0.5, amplitude = height * 0.05, seed = seed + 5,
+        position = world,
     }
 
     -- Valleys, cut after the massif so they read as erosion of it. The long one runs along the foot of
@@ -94,6 +120,11 @@ local function main(params)
         + cirque(-1000, 350, 700, 0.45)
         + cirque(450, -250, 600, 0.42)
         + cirque(2500, 250, 650, 0.4)
+        -- Couloirs: narrow, deep, each falling from a summit face into a cirque or a valley head.
+        + valley({ { -450, 50 }, { -750, 200 }, { -1000, 350 } }, 340, 0.2)
+        + valley({ { -150, -200 }, { 150, -300 }, { 450, -250 } }, 340, 0.2)
+        + valley({ { 1500, 400 }, { 2000, 350 }, { 2500, 250 } }, 320, 0.2)
+        + valley({ { -1900, 150 }, { -1500, -450 }, { -1300, -1250 } }, 360, 0.2)
 
     -- The cuts act where the massif stands, fading to nothing at its foot, so each valley opens out onto
     -- the country below instead of ending in a pit.
@@ -108,7 +139,7 @@ local function main(params)
     }
     local walls = Noises.Ridged{
         frequency = 0.0026, octaves = 4, persistence = 0.5, amplitude = height * 0.07,
-        seed = seed + 21, position = position,
+        seed = seed + 21, position = world,
     }
     local land = structure + walls.value * high * (0.3 + 0.7 * steep)
 
