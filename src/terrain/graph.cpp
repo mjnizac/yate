@@ -599,6 +599,14 @@ Status Graph::RequestOutput(std::string_view name, Value value, f32_t rangeMin, 
                     "output {} declares an empty range [{}, {}]", name, rangeMin, rangeMax);
     }
 
+    // The name becomes a file stem, so a name cut short would collide with another output's or write
+    // a file nobody asked for.
+    if (name.size() >= OutputRequest::kMaxName) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Validation,
+                    "output name '{}' is {} characters; the limit is {}", name, name.size(),
+                    OutputRequest::kMaxName - 1);
+    }
+
     OutputRequest& request = m_outputs[m_outputCount++];
     detail::CopyBounded(request.name, name);
     request.value    = value;

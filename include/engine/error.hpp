@@ -84,6 +84,22 @@ constexpr void CopyBounded(std::array<char, N>& out, std::string_view text) noex
     out[count] = '\0';
 }
 
+/// Like `CopyBounded`, but says so when the text does not fit instead of cutting it off.
+///
+/// `CopyBounded` is right for text that is only ever shown to a person -- a GPU name, a log line --
+/// and wrong for anything that names something: a path cut off at 255 characters opens a *different*
+/// file, and a parameter name cut off at 31 matches a different parameter. Those use this, and
+/// treat `false` as the error it is. On failure `out` is left empty.
+template <usize_t N>
+[[nodiscard]] constexpr bool CopyChecked(std::array<char, N>& out, std::string_view text) noexcept {
+    if (text.size() >= N) {
+        out[0] = '\0';
+        return false;
+    }
+    CopyBounded(out, text);
+    return true;
+}
+
 } // namespace detail
 
 /// Builds an error with no script location.
