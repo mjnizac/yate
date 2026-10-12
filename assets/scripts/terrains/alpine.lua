@@ -1,106 +1,119 @@
--- Alpine: a ridged massif with a hierarchy of summits, joined crests, spurs, glacial valleys and rock
--- walls cut by gullies.
+-- Alpine: one massif with a dominant summit, secondary summits on a connected crest, spurs separated by
+-- continuous valleys that start in cirques, and detail kept subordinate to all of it.
 --
 --   terrain_viewer --script assets/scripts/terrains/alpine.lua
 --
--- The structure comes first and the noise second. A main range runs west to east with a lower range
--- to its south; spurs leave the main crest, three summits stand on it, and a deep valley separates the
--- two ranges. One warped position is shared by every landform and by the detail noise, so crests wander
--- together and the detail follows them instead of cutting across. Parameters: `height` is the main
--- crest in metres above the valley floors, `warp` how far the outlines wander.
+-- The structure is drawn, not generated. Reading it from the top: a main crest that runs west to east
+-- and a lower range to the south; four summits of decreasing height on the crest; four spurs; a glacial
+-- valley along the foot of the main crest and three that leave it between the spurs, each opening in a
+-- cirque. One warped position is shared by every landform and by the ridged detail, so the spines
+-- wander together. The detail is small: it breaks the regularity of the structure, it does not make it.
+--
+-- Parameters (metres): `height` is the height of the main crest above the valley floors, `warp` how far
+-- the outlines wander.
 
 local function main(params)
     local height = params.height or 1000.0
-    local warp   = params.warp or 240.0
+    local warp   = params.warp or 260.0
     local seed   = params.seed
 
-    local position = Shapes.Warp{ amplitude = warp, frequency = 0.0006, octaves = 3, seed = seed + 11 }
+    local position = Shapes.Warp{ amplitude = warp, frequency = 0.0005, octaves = 3, seed = seed + 11 }
 
-    -- The crest is not one height: a slow noise lifts it into summits and drops it into passes.
-    local swell = Noises.fBm{ frequency = 0.0011, octaves = 3, amplitude = 1.0, seed = seed + 2,
-                              position = position }
-    local crest = height * 0.85 + swell.value * height * 0.35
+    -- The crest barely varies: its rises and notches are the summits and passes below, not noise.
+    local slow = Noises.fBm{ frequency = 0.0005, octaves = 2, amplitude = 1.0, seed = seed + 2,
+                             position = position }
+    local crest = height * 0.92 + slow.value * height * 0.08
 
-    -- The main range, a lower range to the south, and four spurs that leave the main crest.
-    local main_range = Landforms.Ridge{
-        points = { { -3600, -700 }, { -1900, 250 }, { -300, -150 }, { 1300, 350 }, { 3600, -250 } },
-        width = 2300, height = crest, profile = "linear", position = position,
-    }
-    local south_range = Landforms.Ridge{
-        points = { { -3500, -2600 }, { -1500, -2200 }, { 600, -2750 }, { 2600, -2300 }, { 3700, -2500 } },
-        width = 2000, height = crest * 0.62, profile = "linear", position = position,
-    }
-    local spur = function(points, scale, width)
+    local function ridge(points, scale, width)
         return Landforms.Ridge{
             points = points, width = width, height = crest * scale, profile = "linear",
             position = position,
         }
     end
-    local spurs = Combine.SmoothMax{
-        a = Combine.SmoothMax{
-            a = spur({ { -1900, 250 }, { -1700, 1300 }, { -1900, 2300 } }, 0.62, 1500),
-            b = spur({ { -300, -150 }, { -450, -1100 }, { -250, -1900 } }, 0.55, 1400),
-            k = 200.0,
-        },
-        b = Combine.SmoothMax{
-            a = spur({ { 1300, 350 }, { 1700, 1250 }, { 1500, 2200 } }, 0.5, 1400),
-            b = spur({ { 1300, 350 }, { 2000, -500 }, { 2300, -1500 } }, 0.45, 1300),
-            k = 200.0,
-        },
-        k = 200.0,
-    }
+    local function summit(x, z, radius, scale)
+        return Landforms.Cone{
+            at = { x, z }, radius = radius, height = height * scale, position = position,
+        }
+    end
+    local function join(a, b, k)
+        return Combine.SmoothMax{ a = a, b = b, k = k }
+    end
 
-    -- Summits on the main crest, joined to it with a wide smooth maximum so they are the high points of
-    -- the chain and not cones stuck on it.
-    local summits = Combine.SmoothMax{
-        a = Landforms.Cone{ at = { -1900, 250 }, radius = 1000, height = height * 1.45, position = position },
-        b = Combine.SmoothMax{
-            a = Landforms.Cone{ at = { 1300, 350 }, radius = 900, height = height * 1.3, position = position },
-            b = Landforms.Cone{ at = { -300, -150 }, radius = 700, height = height * 1.05, position = position },
-            k = 120.0,
-        },
-        k = 120.0,
-    }
+    -- The main crest and the lower range behind it.
+    local main_crest = ridge(
+        { { -3600, -600 }, { -1900, 250 }, { -300, -100 }, { 1300, 350 }, { 3600, -300 } }, 1.0, 2500)
+    local south = ridge(
+        { { -3500, -2700 }, { -1500, -2300 }, { 600, -2800 }, { 2600, -2400 }, { 3700, -2600 } },
+        0.62, 2200)
 
-    local massif = Combine.SmoothMax{
-        a = Combine.SmoothMax{ a = main_range, b = south_range, k = 260.0 },
-        b = Combine.SmoothMax{ a = spurs, b = summits, k = 220.0 },
-        k = 220.0,
-    }
+    -- Four spurs, alternating north and south of the crest, each lower than the one it leaves.
+    local spurs = join(
+        join(ridge({ { -1900, 250 }, { -1750, 1250 }, { -2000, 2300 } }, 0.62, 1500),
+             ridge({ { -300, -100 }, { -500, -1000 }, { -300, -1900 } }, 0.55, 1400), 220.0),
+        join(ridge({ { 1300, 350 }, { 1800, 1250 }, { 1600, 2250 } }, 0.5, 1400),
+             ridge({ { 1300, 350 }, { 2100, -500 }, { 2400, -1500 } }, 0.45, 1300), 220.0),
+        220.0)
 
-    -- The glacial valley between the two ranges, cut after the massif so it reads as erosion of it.
-    local valley = Landforms.Trench{
-        points = { { -3600, -1500 }, { -1200, -1250 }, { 700, -1600 }, { 3600, -1350 } },
-        width = 1300, depth = height * 0.5, profile = "smooth", position = position,
-    }
-    -- Under and around the range: a highland that rises toward it, with foothills on top, so the massif
-    -- stands on country and not on a table.
+    -- Summits: one dominant, two secondary, one minor. Wide cones joined with a wide smooth maximum, so
+    -- each is the culmination of the crest under it and the crest runs from one to the next.
+    local summits = join(
+        join(summit(-300, -100, 1800, 1.5), summit(-1900, 250, 1250, 1.25), 300.0),
+        join(summit(1300, 350, 1150, 1.2), summit(3000, -200, 950, 1.05), 260.0),
+        260.0)
+
+    local massif = join(join(main_crest, south, 300.0), join(spurs, summits, 260.0), 260.0)
+
+    -- Highland under and around the range, so it stands on country and not on a table.
     local highland = Landforms.Dome{
         at = { 0, -1100 }, radius = 6500, height = height * 0.3, profile = "smooth", position = position,
     }
     local foothills = Noises.fBm{
-        frequency = 0.0008, octaves = 5, persistence = 0.5, amplitude = height * 0.14, seed = seed + 5,
+        frequency = 0.0008, octaves = 4, persistence = 0.5, amplitude = height * 0.1, seed = seed + 5,
         position = position,
     }
-    local structure = massif + valley + highland + foothills.value
 
-    -- Detail follows the structure: sharp ridged relief where the ground is high and steep, almost
-    -- none on the valley floors and the gentle shoulders.
-    local high = Curves.Smoothstep{ input = structure, min = height * 0.15, max = height * 0.8 }
+    -- Valleys, cut after the massif so they read as erosion of it. The long one runs along the foot of
+    -- the main crest; the others leave it between the spurs and each begins in a cirque.
+    local function valley(points, width, depth)
+        return Landforms.Trench{
+            points = points, width = width, depth = height * depth, profile = "smooth",
+            position = position,
+        }
+    end
+    local function cirque(x, z, radius, depth)
+        return Landforms.Bowl{
+            at = { x, z }, radius = radius, depth = height * depth, profile = "smooth",
+            position = position,
+        }
+    end
+    local cuts =
+        valley({ { -3600, -1500 }, { -1200, -1300 }, { 700, -1600 }, { 3600, -1350 } }, 1300, 0.5)
+        + valley({ { -1000, 350 }, { -900, 1300 }, { -1000, 2700 } }, 900, 0.5)
+        + valley({ { 450, -250 }, { 600, -900 }, { 700, -1500 } }, 800, 0.5)
+        + valley({ { 2500, 250 }, { 2800, 1200 }, { 2700, 2700 } }, 900, 0.45)
+        + cirque(-1000, 350, 700, 0.45)
+        + cirque(450, -250, 600, 0.42)
+        + cirque(2500, 250, 650, 0.4)
+
+    -- The cuts act where the massif stands, fading to nothing at its foot, so each valley opens out onto
+    -- the country below instead of ending in a pit.
+    local where = Curves.Smoothstep{ input = massif, min = height * 0.05, max = height * 0.55 }
+    local structure = massif + cuts * where + highland + foothills.value
+
+    -- Detail follows the structure: ridged relief where the ground is high and steep, almost none on
+    -- the valley floors and the gentle shoulders. Small on purpose.
+    local high = Curves.Smoothstep{ input = structure, min = height * 0.2, max = height * 0.9 }
     local steep = Masks.Slope{
-        input = Terrain.Gradient{ input = structure }, min = 0.35, max = 0.9,
+        input = Terrain.Gradient{ input = structure }, min = 0.4, max = 0.95,
     }
     local walls = Noises.Ridged{
-        frequency = 0.0028, octaves = 5, persistence = 0.5, amplitude = height * 0.13,
+        frequency = 0.0026, octaves = 4, persistence = 0.5, amplitude = height * 0.07,
         seed = seed + 21, position = position,
     }
-    local texture = Noises.fBm{
-        frequency = 0.012, octaves = 3, amplitude = height * 0.03, seed = seed + 31,
-    }
-    local land = structure + walls.value * high * (0.35 + 0.65 * steep) + texture.value * high
+    local land = structure + walls.value * high * (0.3 + 0.7 * steep)
 
     local carved = Erosion.Hydraulic{
-        input = land, iterations = 28, rain = 0.5, capacity = 9.0, evaporation = 0.04,
+        input = land, iterations = 24, rain = 0.5, capacity = 9.0, evaporation = 0.04,
     }
     -- Hydraulic erosion leaves a one-sample ripple aligned with the grid; a radius-1 blur clears it.
     local smoothed = Filters.Blur{ input = carved, radius = 1 }
@@ -109,7 +122,7 @@ local function main(params)
     }
 
     return {
-        height  = { value = settled, range = { -height * 0.6, height * 1.9 } },
+        height  = { value = settled, range = { -height * 0.7, height * 2.0 } },
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } },
     }
 end
