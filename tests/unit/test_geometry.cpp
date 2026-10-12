@@ -1119,12 +1119,49 @@ return main
         CHECK(std::isfinite(lowest) && std::isfinite(highest) && highest - lowest > 10.0);
     }
 
+    // Erosion.Gullies is pointwise: the same bytes whatever the section size, and nothing on flat ground.
+    const std::string gullies = std::string(kDirectory) + "/gullies.lua";
+    {
+        std::ofstream out(gullies, std::ios::binary);
+        out << R"(local function main(params)
+    local cone = Curves.Profile{ input = Shapes.Point{} - 240, kind = "linear", width = 240 } * 200
+    local cut = Erosion.Gullies{ input = cone, cell = 60, octaves = 4, strength = 12, seed = 3 }
+    return { d = { value = cut, range = { -50, 250 } } }
+end
+return main
+)";
+    }
+    const Field g64 = RunExport(gullies, std::string(kDirectory) + "/gullies_64", wide, "d", "--seed 5");
+    const Field g16 = RunExport(gullies, std::string(kDirectory) + "/gullies_16", small, "d", "--seed 5");
+    ++test::g_checks;
+    const bool gully_same = g64.Ok() && g16.Ok()
+                            && std::memcmp(g64.values.data(), g16.values.data(),
+                                           g64.values.size() * sizeof(float)) == 0;
+    std::printf("     Erosion.Gullies, sections 64 and 16: %s\n",
+                gully_same ? "byte-identical" : "DIFFER");
+    CHECK(gully_same);
+    if (g64.Ok()) {
+        // Outside the cone the ground is flat, so nothing is cut; on the cone something is.
+        ++test::g_checks;
+        CHECK(At(g64, -250.0, -250.0) == 0.0);
+        double changed = 0.0;
+        for (double x = -150.0; x <= 150.0; x += 4.0) {
+            const double plain = std::max(0.0, (240.0 - std::fabs(x)) / 240.0) * 200.0;
+            changed = std::max(changed, std::fabs(At(g64, x, 0.0) - plain));
+        }
+        ++test::g_checks;
+        CHECK(changed > 2.0);
+    }
+
     struct Case {
         const char* name;
         const char* body;
         const char* fragment;
     };
     const Case cases[] = {
+        {"gullies_bad_gradient",
+         "    local result = Erosion.Gullies{ input = Terrain.Coords{}.x, gradient = Terrain.Coords{}.x }",
+         "Gullies gradient must be R2->R2"},
         {"wn_scalar_position",
          "    local result = Noises.fBm{ position = Terrain.Const{ value = 1.0 } }.value",
          "position field, got R2->R1"},

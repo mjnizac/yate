@@ -96,6 +96,7 @@ numbers drift, and this one is the index.
 | `Shapes.*`, `Landforms.*` | `R2->R1` | the prelude: placed shapes, booleans, masks, warps and heights built from them (see below) |
 | `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
 | `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
+| `Erosion.Gullies` | `R2->R1` | branching gullies cut across the slope of `input` from its gradient (`gradient`, default `Terrain.Gradient`), drawn at `position` (default the world position); `cell` metres, `octaves`, `strength` metres, `full` the slope of full effect. Pointwise: the drainage pattern at kilometre scale that the simulations cannot reach |
 
 `Filters.Blur`, `Terrain.Gradient` and the two erosions are what put a halo on a graph: their radii
 propagate backwards to everything that feeds them, and they add along a chain. The engine refuses a

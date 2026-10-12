@@ -987,6 +987,30 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         return Handle{Unwrap(graph.AddThermalErosion(input, params, location))};
     });
 
+    // Gullies across the slope of `input`, from its gradient: the look of erosion where the simulation
+    // cannot reach (kilometres of drainage), as a pattern rather than a process. Pointwise, so it is the
+    // same at every spacing and costs no halo beyond the gradient's.
+    erosion.set_function("Gullies", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Erosion.Gullies", location);
+        const Value          input = args.Input("input");
+        const Value gradient = args.Has("gradient") ? args.Input("gradient")
+                                                    : Unwrap(graph.AddGradient(input, location));
+        const Value position = PositionOrCoords(args, graph, location);
+
+        Graph::GulliesParams params;
+        params.cell       = args.Float("cell", params.cell);
+        params.octaves    = args.Count("octaves", params.octaves, 1, 8);
+        params.strength   = args.Float("strength", params.strength);
+        params.full       = args.Float("full", params.full);
+        params.gain       = args.Float("gain", params.gain);
+        params.lacunarity = args.Float("lacunarity", params.lacunarity);
+        params.seedSalt   = args.Count("seed", 0, 0, ~0u);
+        args.Finish();
+
+        return Handle{Unwrap(graph.AddGullies(input, gradient, position, params, location))};
+    });
+
     erosion.set_function("Hydraulic", [&graph, spacing](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Erosion.Hydraulic", location);

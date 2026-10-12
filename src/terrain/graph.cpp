@@ -27,6 +27,7 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::HydraulicErosion: return "HydraulicErosion";
         case OpKind::Transform: return "Transform";
         case OpKind::Shape: return "Shape";
+        case OpKind::Gullies: return "Gullies";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -393,6 +394,55 @@ Result<Value> Graph::AddSlopeMask(Value gradient, f32_t minSlope, f32_t maxSlope
     node.channels[0]  = Mapping{Domain::R2, 1};
     PackFloat(node.params, 0, minSlope);
     PackFloat(node.params, 1, maxSlope);
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddGullies(Value height, Value gradient, Value position,
+                               const GulliesParams& params, SourceLocation location) {
+    const Mapping scalar{Domain::R2, 1};
+    const Mapping planar{Domain::R2, 2};
+    const struct {
+        Value       value;
+        Mapping     wanted;
+        const char* role;
+    } inputs[] = {{height, scalar, "Gullies input"},
+                  {gradient, planar, "Gullies gradient"},
+                  {position, planar, "Gullies position"}};
+    for (const auto& input : inputs) {
+        if (Status checked = CheckValue(input.value, input.role, location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(input.value.mapping == input.wanted)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "{} must be {}, got {}", input.role, ToString(input.wanted),
+                ToString(input.value.mapping)));
+        }
+    }
+    if (!(params.cell > 0.0f) || !(params.full > 0.0f) || !(params.gain > 0.0f)
+        || !(params.lacunarity > 0.0f) || !std::isfinite(params.strength) || params.octaves == 0) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Gullies needs cell, full, gain and lacunarity greater than zero, a finite strength and "
+            "at least one octave"));
+    }
+
+    Node node;
+    node.kind         = OpKind::Gullies;
+    node.nodeClass    = NodeClass::Pointwise;
+    node.inputCount   = 3;
+    node.inputs[0]    = height;
+    node.inputs[1]    = gradient;
+    node.inputs[2]    = position;
+    node.channelCount = 1;
+    node.channels[0]  = scalar;
+    PackFloat(node.params, 0, params.cell);
+    node.params[1] = params.octaves;
+    PackFloat(node.params, 2, params.strength);
+    PackFloat(node.params, 3, params.full);
+    PackFloat(node.params, 4, params.gain);
+    PackFloat(node.params, 5, params.lacunarity);
+    node.params[6] = params.seedSalt;
     return Append(node, location);
 }
 

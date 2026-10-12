@@ -80,6 +80,8 @@ enum class OpKind : u16_t {
     Transform,
     /// Signed distance to a shape, from a position field. Pointwise.
     Shape,
+    /// Gullies cut across a heightfield's slope from its gradient, without simulating water. Pointwise.
+    Gullies,
     Count,
 };
 
@@ -320,6 +322,22 @@ public:
 
     /// `gradient` must be `R2 -> R2`. Produces `R2 -> R1` ramping from 0 below `minSlope` to 1
     /// above `maxSlope`.
+    struct GulliesParams {
+        /// Lattice size of the first octave, in metres.
+        f32_t cell = 450.0f;
+        u32_t octaves = 5;
+        /// Half the depth of the first octave, in metres.
+        f32_t strength = 60.0f;
+        /// Slope (rise over run) at and above which the full strength applies.
+        f32_t full = 0.5f;
+        f32_t gain = 0.5f;
+        f32_t lacunarity = 2.0f;
+        u32_t seedSalt = 0;
+    };
+    /// `height` with gullies cut across its slope. `gradient` is the height's gradient and `position`
+    /// where the pattern is drawn, in metres; both `R2 -> R2`.
+    [[nodiscard]] Result<Value> AddGullies(Value height, Value gradient, Value position,
+                                           const GulliesParams& params, SourceLocation location);
     [[nodiscard]] Result<Value> AddSlopeMask(Value gradient, f32_t minSlope, f32_t maxSlope,
                                              SourceLocation location);
 
