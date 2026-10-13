@@ -53,7 +53,7 @@ const vec3 kGrassColor = vec3(0.22, 0.32, 0.16);
 const vec3 kScreeColor = vec3(0.47, 0.45, 0.42);
 const vec3 kRockColor  = vec3(0.30, 0.29, 0.28);
 const vec3 kSnowColor  = vec3(0.90, 0.92, 0.96);
-const float kScreeLine = 1950.0;
+const float kScreeLine = 2600.0;
 const float kSnowLine  = 2250.0;
 
 // Rock texture, which the heightfield cannot carry: it is sampled every few metres at best and every 16
@@ -105,7 +105,7 @@ void main() {
 
     float slope  = 1.0 - clamp(normal.y, 0.0, 1.0);
     float height = vWorldPosition.y;
-    float rocky  = smoothstep(0.16, 0.42, slope);
+    float rocky  = smoothstep(0.2, 0.42, slope);
     // Snow lies where the ground is smooth enough to hold it and high enough to keep it; the rock
     // shows through where it is steep. The line wavers with the rock noise so it is not a contour.
     float footprint = max(length(fwidth(vWorldPosition)), 1e-3);
@@ -116,9 +116,9 @@ void main() {
                * (1.0 - smoothstep(0.34, 0.5, slope + rock * 0.08));
 
     vec3 albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
-    // Talus: ground at the angle of repose (about 28 to 38 degrees) above the valley floors is scree,
+    // Talus: ground at the angle of repose (about 30 to 37 degrees) above the valley floors is scree,
     // pale and bare, whatever its height; grass holds only on gentler slopes.
-    float repose = smoothstep(0.09, 0.13, slope) * smoothstep(600.0, 900.0, height);
+    float repose = smoothstep(0.135, 0.17, slope) * smoothstep(900.0, 1200.0, height);
     albedo       = mix(albedo, kScreeColor * 1.12, repose);
     // Rock: darker in the runnels, lighter on the ribs.
     vec3 rockColor = kRockColor * (0.9 + 0.12 * rock);
