@@ -42,6 +42,11 @@ Dune fields from `Dunes.Field`, the dune macro (`terrains/dunes.lua`, `terrains/
 three styles: `"procedural"` (default, analytic, no repetition, about 0.6 s), `"simulated"`
 (`Erosion.Wind`, periodic) and `"star"`; previews in `docs/images/dunes/`.
 
+Islands, archipelagos and continents from `Lands.Island`, `Lands.Archipelago` and `Lands.Continent`, the
+lands macro (`assets/scripts/lands/`): one signed coast distance, a margin with a shelf and a slope, a
+coast type, four archipelago layouts and a continent with ranges; accepted against `terrain_metrics`
+numbers and four golden datasets (`lands_*`); previews in `docs/images/lands/`.
+
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.
 

@@ -65,6 +65,21 @@ full history is in the git log.
 - [ ] **`test_datasets` `volume_r3` timing** fails intermittently (24 to 29 ms against a 20 ms baseline,
       the same spread the history shows for weeks); the baseline or the tolerance needs a decision.
 
+## Lands macro (`Lands.*`)
+
+- [ ] **No real references yet**: `docs/references/islands/*/source.md` and `measurement.md` are
+      placeholders; the per-type acceptance numbers (dimension, shelf, hypsometry) wait for them.
+- [ ] **Rivers do not reach the sea** on a continent: `Erosion.StreamPower` takes the edge of its grid
+      as base level; it needs the sea (the coast distance) as a drainage outlet.
+- [ ] **Coast type has no fetch**: exposure is the normal against one wave direction. A CPU pass over
+      the coast could compute a real fetch.
+- [ ] **A ring atoll is not closed**: the islets leave passes and the lagoon counts as open sea; a
+      continuous reef needs a union with a smooth radius that closes the gaps.
+- [ ] **Islands in a group share one warp** tied to a median size, so large ones read smoother and
+      small ones rougher than a per-island warp would.
+- [ ] **`terrain_metrics` box dimension** is a diagnostic per range of scales, not a target; `box` range
+      and window must be fixed per example to compare runs.
+
 ## Dune macro (`Dunes.*`)
 
 - [ ] **No sections-parallel and sections-perpendicular profiles are measured**, only slope and height

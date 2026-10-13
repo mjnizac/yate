@@ -1228,3 +1228,27 @@ sawtooth, with a height per period. Three findings, all from numbers or from cha
   few degrees under repose took it to 0.3 % over 35 and 0.03 % over 40.
 * **A smooth maximum of 0 and 0 is k / 4.** Rounding the foot of a profile that must be exactly 0 at the
   ends of its period left a crease wherever two dunes of different heights met; subtracting k / 4 fixed it.
+
+
+## The lands macro: islands, archipelagos and continents
+
+Decisions for `Lands.*`, from two expert reviews of the plan and from the first runs:
+
+* **One field, one sign.** Everything is a function of `coast_sdf` with land negative. Mixing the two
+  conventions between products is the usual source of inverted shelves.
+* **Fractal dimension is a diagnostic, not a target.** Box counting over 2^2..2^7 cells gave 0.9 to 1.1
+  on every island; the value depends on the range of scales and on the grid, so examples record the range
+  and the number is compared between runs of one example, not against a literature value.
+* **The margin is a multiple of the radius.** A fixed 2.6 km shelf made the same island look different at
+  every size; `compressed` now scales both widths with the radius, `geologic` keeps metres.
+* **Coast type from several inputs.** Curvature alone makes every cape a cliff and every bay a beach.
+  Hardness and sediment (regional noise plus a preset bias), exposure and curvature are blended and the
+  transition is wide (0.2 to 0.7); with sharper edges every preset saturated to one type.
+* **Islets are primitives.** Placed on the CPU outside the outline with a channel plus twice the warp's
+  reach, so a warp can neither join them to the island nor leave a hole in it.
+* **An archipelago's islands share a warp tied to the median island** and are placed after the warp's
+  reach is known. A warp tied to the whole group would have folded the small islands.
+* **A continent is a region**, not a planet: an irregular mass with ranges raised by `Ranges.Carve`
+  and faded at the coast. Rivers to the sea wait for `Erosion.StreamPower` to accept it as base level.
+* **The single island's formulas stayed put.** Changing how the interior's reach is derived for groups
+  moved every island's heights and its goldens; the single-island expression was kept.

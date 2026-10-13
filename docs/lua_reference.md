@@ -1163,6 +1163,58 @@ stacked surfaces. A scarp can be vertical, never undercut.
 
 ---
 
+### Islands, archipelagos and continents: `Lands.*` (the lands macro)
+
+`Lands.Island`, `Lands.Archipelago` and `Lands.Continent` build land and sea from ONE field, the signed
+distance to the coast in metres, `coast_sdf`, with one sign convention everywhere: **land d < 0, coast
+d = 0, sea d > 0**. Every other product is a function of it, and each can be asked for by name in
+`island:outputs{ ... }` (a script holds at most eight outputs; `height` and `normals` are always there):
+
+| Product | Meaning |
+| --- | --- |
+| `coast_sdf` | signed distance to the coast, metres, land negative |
+| `land_mask` | `1 - Smoothstep(-w, w, d)`: 1 on land, 0 at sea |
+| `land_height` | the ground above the sea, from the distance inland |
+| `bathymetry` | the sea floor, negative, from the distance offshore |
+| `surface_height` | the two joined at the coast; it is the script's `height` |
+| `shore_mask` | 1 on the coast, falling to 0 `shore_band` metres either side |
+| `coast_type` | 0 a beach, 1 a cliff |
+| `region_id` | which island of a group a cell is nearest to (1 for a single island) |
+
+```lua
+local island = Lands.Island{ seed = 4, radius = 3000, roughness = 0.6, breakage = 6, coast = "mixed" }
+return island:outputs{ "coast_type", "land_mask" }
+```
+
+Main keys of `Lands.Island`: `radius` (generated outline) or `area` (a drawn polygon) or `areas` (several);
+`roughness` 0 to 1 (a warp in three bands of wavelength, macro, meso and micro, each with an amplitude a
+fixed fraction of it, so the coast is the same shape at every scale and never folds; a band shorter than
+about 6 samples is left out); `breakage` (islets, placed on the CPU with a minimum channel so they
+cannot touch the island); `height`, `hypsometry`; `coast` (`mixed`, `rocky`, `sedimentary`, `cliff`) with
+`wave_from`, `hardness`, `sediment`; `margin` (`compressed` for the viewer, with the shelf and slope as
+multiples of the radius, or `geologic` with a shelf under 1 degree out to 40 km).
+
+`Lands.Archipelago{ layout = ... }` places `count` islands within `radius` of the centre:
+`"scattered"` (sizes follow a power law, a minimum channel the warp cannot close), `"hotspot"` (a bent
+chain, large at one end), `"arc"` (islands on an arc, each cut to fit its neighbours) and `"atoll"` (a
+ring of low islets round a lagoon of a few tens of metres). `Lands.Continent` is the outline at its most
+irregular with `ranges` (or `ranges_count` generated crest lines) raised across the interior by
+`Ranges.Carve` and faded out towards the coast; its rivers end at the edge of the range grid, not at the
+sea.
+
+The type of coast is an artistic heuristic (hardness, sediment, exposure to the waves and curvature as a
+bias), not a fetch calculation. `terrain_metrics` measures an export (land fraction, masses, lagoons,
+coast length, box-counting dimension, narrowest channel, hypsometry, slope by depth); see
+`docs/commands.md`. The viewer colours these terrains with `look = { palette = "coast" }`.
+
+![Islands at two sizes](images/lands/island_scales.png)
+
+![Coast type: beach (amber) to cliff (red)](images/lands/coast_types.png)
+
+![Archipelagos: scattered, hotspot, arc, atoll](images/lands/archipelagos.png)
+
+![Continent with ranges](images/lands/continent.png)
+
 ## 11. Recipes
 
 ### A complete terrain

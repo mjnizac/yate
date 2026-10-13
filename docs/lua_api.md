@@ -139,7 +139,8 @@ script, the shaders the job ran, the parameters and the prelude. `outputs[].stat
 
 A script's returned table may carry `look = { palette = "sand", wind = degrees }` beside its outputs. It
 is not an output and an export ignores it; the viewer uses it to pick a palette (`"default"`: grass,
-rock, snow; `"sand"`: sand with darker lee faces and ripples across `wind`).
+rock, snow; `"sand"`: sand with darker lee faces and ripples across `wind`; `"coast"`: sand on the
+gentle ground at the sea and on the shallows, wet where the sea reaches, rock on steep shores).
 
 ## The prelude
 
