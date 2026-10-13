@@ -9,7 +9,7 @@
 
 local function main(params)
     local h = params.height or 2200.0
-    local structure, tallest, sun = Ranges.Carve{
+    local structure, tallest, extras = Ranges.Carve{
         seed = params.seed,
         ridges = {
             -- The main crest, bent, and its spurs.
@@ -25,7 +25,7 @@ local function main(params)
         },
         k = params.k, diffusion = params.diffusion,
     }
-    return Ranges.Finish(structure, tallest, params.seed, nil, sun)
+    return Ranges.Finish(structure, tallest, params.seed, { resolution = params.resolution }, extras)
 end
 
 return main
