@@ -31,12 +31,24 @@ constexpr usize_t kCacheEntries = 4;
 
 struct CacheEntry {
     u64_t                    key = 0;
+    u64_t                    check = 0;
     std::pmr::vector<f64_t>* result = nullptr;
 };
 
 std::mutex                          g_cacheMutex;
 std::array<CacheEntry, kCacheEntries> g_cache{};
 usize_t                             g_cacheNext = 0;
+
+/// A second, independent hash over the same bytes. A cached result is used only when both match, so a
+/// collision of the first cannot hand back another terrain.
+[[nodiscard]] u64_t MixCheck(u64_t h, const void* data, usize_t bytes) {
+    const auto* p = static_cast<const unsigned char*>(data);
+    for (usize_t i = 0; i < bytes; ++i) {
+        h = (h ^ p[i]) * 0x9E3779B185EBCA87ull;
+        h ^= h >> 29;
+    }
+    return h;
+}
 
 [[nodiscard]] u64_t Mix(u64_t h, const void* data, usize_t bytes) {
     const auto* p = static_cast<const unsigned char*>(data);
@@ -58,15 +70,27 @@ usize_t                             g_cacheNext = 0;
     return Mix(h, uplift.data(), uplift.size_bytes());
 }
 
+[[nodiscard]] u64_t Check(std::span<const f64_t> height, std::span<const f64_t> uplift,
+                          const StreamPowerParams& params) {
+    u64_t h = 0x84222325CBF29CE4ull;
+    const f64_t numbers[] = {params.cell, params.k, params.m, params.talus, params.diffusion};
+    const u32_t counts[]  = {params.width, params.depth, params.iterations, params.refresh};
+    h = MixCheck(h, numbers, sizeof(numbers));
+    h = MixCheck(h, counts, sizeof(counts));
+    h = MixCheck(h, height.data(), height.size_bytes());
+    return MixCheck(h, uplift.data(), uplift.size_bytes());
+}
+
 } // namespace
 
 Status StreamPowerErode(std::span<f64_t> height, std::span<const f64_t> uplift,
                         const StreamPowerParams& params) {
-    const u64_t key = Key(height, uplift, params);
+    const u64_t key   = Key(height, uplift, params);
+    const u64_t check = Check(height, uplift, params);
     {
         std::lock_guard lock(g_cacheMutex);
         for (const CacheEntry& entry : g_cache) {
-            if (entry.result != nullptr && entry.key == key && entry.result->size() == height.size()) {
+            if (entry.result != nullptr && entry.key == key && entry.check == check && entry.result->size() == height.size()) {
                 std::memcpy(height.data(), entry.result->data(), height.size_bytes());
                 LOG_INFO("stream power: {}x{} grid, {} step(s), from the cache", params.width,
                          params.depth, params.iterations);
@@ -92,6 +116,7 @@ Status StreamPowerErode(std::span<f64_t> height, std::span<const f64_t> uplift,
         slot.result   = ::new (storage) std::pmr::vector<f64_t>(&memory::General().Resource());
     }
     slot.key = key;
+    slot.check = check;
     slot.result->assign(height.begin(), height.end());
     return {};
 }
