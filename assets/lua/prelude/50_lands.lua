@@ -537,7 +537,7 @@ function Lands.Island(t)
         local result = {
             height  = { value = self.surface_height, range = ranges.surface_height },
             normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = self.surface_height } } },
-            look    = { palette = "default" },
+            look    = { palette = "coast" },
         }
         for _, name in ipairs(names or {}) do
             if ranges[name] == nil or name == "surface_height" then

@@ -1388,10 +1388,12 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
             Graph::Look                parsed;
             if (palette == "sand") {
                 parsed.palette = 1;
+            } else if (palette == "coast") {
+                parsed.palette = 2;
             } else if (palette != "default") {
                 return std::unexpected(MakeScriptError(
                     ErrorCode::ScriptError, ErrorStage::Script, location.file, location.line,
-                    "look.palette '{}' is not known; expected 'default' or 'sand'", palette));
+                    "look.palette '{}' is not known; expected 'default', 'sand' or 'coast'", palette));
             }
             parsed.wind = static_cast<f32_t>(look.get_or("wind", 0.0));
             graph.SetLook(parsed);

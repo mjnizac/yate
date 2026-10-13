@@ -158,6 +158,18 @@ void main() {
         albedo    = mix(sand, sand * vec3(0.80, 0.72, 0.66), lee);
     }
 
+    // Coast (`look = { palette = "coast" }`): sand on the gentle ground just above the sea and on the
+    // shallows under it, wet and darker where the sea reaches, rock on the steep ground at the water.
+    if ((pc.look & 0xFFu) == 2u) {
+        float shore = 1.0 - smoothstep(4.0, 14.0, height);
+        float gentle_shore = shore * (1.0 - smoothstep(0.08, 0.25, slope));
+        vec3  beach = vec3(0.78, 0.70, 0.50);
+        float wet   = 1.0 - smoothstep(-0.5, 2.5, height);
+        beach       = mix(beach, beach * vec3(0.62, 0.60, 0.58), wet);
+        albedo      = mix(albedo, beach, gentle_shore);
+        albedo      = mix(albedo, kRockColor, shore * smoothstep(0.25, 0.45, slope));
+    }
+
     float sun = max(dot(normal, kSunDirection), 0.0) * sunlit;
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,
     // which is most of what makes an unlit slope legible.
