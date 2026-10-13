@@ -7,7 +7,10 @@
 -- so the macro's own defaults apply. Which keys a style takes is the macro's to say: one that belongs to
 -- another style is an error, not silently ignored.
 --
---   all styles   wind (degrees), repose (degrees), swell (metres), style ("simulated" or "star")
+--   all styles   wind (degrees), repose (degrees), swell (metres), style ("procedural" (default),
+--                "simulated" or "star")
+--   procedural   wavelength, height, sinuosity, windward_angle, draa_wavelength, draa_height,
+--                small_wavelength, small_height, region, margin
 --   simulated    sand, variety, cell, cells, iterations, smooth, relief, small_wavelength,
 --                small_height, draa_wavelength, draa_height
 --   star         wavelength, height, sinuosity, back, flats, small
@@ -16,7 +19,7 @@ local KEYS = {
     "wind", "style", "repose", "swell",
     "sand", "variety", "cell", "cells", "iterations", "smooth", "relief",
     "small_wavelength", "small_height", "draa_wavelength", "draa_height",
-    "wavelength", "height", "sinuosity", "back", "flats", "small",
+    "wavelength", "height", "sinuosity", "back", "flats", "small", "windward_angle", "region", "margin",
 }
 
 local function main(params)

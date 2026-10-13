@@ -1222,6 +1222,53 @@ return main
     }
 }
 
+/// `Dunes.Field`: the procedural style is pointwise, so sections agree to the byte, and a key of
+/// another style is an error that names the caller's line.
+void TestDuneFields() {
+    test::Section("procedural dune fields");
+
+    const std::string script = std::string(kDirectory) + "/dunes_procedural.lua";
+    {
+        std::ofstream out(script, std::ios::binary);
+        out << R"(local function main(params)
+    local field = Dunes.Field{ seed = params.seed, wavelength = 300, height = 40, small_height = 3 }
+    return field
+end
+return main
+)";
+    }
+    Grid wide;
+    wide.spacing = 4.0;
+    wide.side    = 128;
+    Grid small   = wide;
+    small.section = 16;
+    wide.section  = 64;
+    const Field whole  = RunExport(script, std::string(kDirectory) + "/dunes_64", wide, "height", "--seed 3");
+    const Field pieces = RunExport(script, std::string(kDirectory) + "/dunes_16", small, "height", "--seed 3");
+    ++test::g_checks;
+    const bool identical = whole.Ok() && pieces.Ok()
+                           && std::memcmp(whole.values.data(), pieces.values.data(),
+                                          whole.values.size() * sizeof(float)) == 0;
+    std::printf("     Dunes.Field procedural, sections 64 and 16: %s\n",
+                identical ? "byte-identical" : (whole.Ok() ? "DIFFER" : whole.error.c_str()));
+    CHECK(identical);
+
+    // Another seed is another field.
+    const Field other = RunExport(script, std::string(kDirectory) + "/dunes_seed", wide, "height", "--seed 4");
+    ++test::g_checks;
+    CHECK(whole.Ok() && other.Ok()
+          && std::memcmp(whole.values.data(), other.values.data(), whole.values.size() * sizeof(float)) != 0);
+
+    const Field wrong = Export("dunes_wrong_key", "    local result = Dunes.Field{ flats = 0.3 }.height");
+    ++test::g_checks;
+    if (wrong.Ok() || wrong.error.find("'procedural' does not take 'flats'") == std::string::npos
+        || wrong.error.find("belongs to style 'star'") == std::string::npos
+        || wrong.error.find("dunes_wrong_key.lua:") == std::string::npos) {
+        ++test::g_failures;
+        std::printf("FAIL dunes_wrong_key: got %.240s\n", wrong.Ok() ? "success" : wrong.error.c_str());
+    }
+}
+
 /// Numbers that say whether a terrain is *sane*. Not whether it is convincing: that is a person's eye.
 struct Indicators {
     double      low = 0.0;
@@ -1452,6 +1499,7 @@ int main() {
     TestProfiles();
     TestErrors();
     TestWarpedNoise();
+    TestDuneFields();
     TestLandforms();
     TestPreludeErrors();
     TestPreludeHash();
