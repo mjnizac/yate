@@ -67,8 +67,8 @@ full history is in the git log.
 
 ## Lands macro (`Lands.*`)
 
-- [ ] **No real references yet**: `docs/references/islands/*/source.md` and `measurement.md` are
-      placeholders; the per-type acceptance numbers (dimension, shelf, hypsometry) wait for them.
+- [ ] **No real references measured yet**: per-type acceptance numbers (dimension, shelf, hypsometry)
+      wait for references measured with `terrain_metrics` (protocol in `docs/commands.md`).
 - [ ] **Rivers do not reach the sea** on a continent: `Erosion.StreamPower` takes the edge of its grid
       as base level; it needs the sea (the coast distance) as a drainage outlet.
 - [ ] **Coast type has no fetch**: exposure is the normal against one wave direction. A CPU pass over

@@ -211,3 +211,15 @@ gap between masses, land height percentiles and mean slope by depth (shelf, slop
 library is `tests/unit/terrain_metrics.hpp`, the same code `test_lands` checks against fields with known
 answers, so a number from the tool means what the test says it means. The dimension is a diagnostic per
 coast type and range of scales, not a target: it changes with the resolution, the window and the level.
+
+Measuring a reference against an example, so the numbers are comparable:
+
+1. Resample the reference to one fixed resolution per coast type and record it with the numbers.
+2. Use the reference's own sea level (0 unless it says otherwise).
+3. Run `terrain_metrics <dir or .raw> --box 2,7` on both with the same window.
+4. Compare per coast type and per range of scales: a ragged rocky coast sits around 1.2 to 1.3, a
+   sedimentary one or an atoll rim lower. Acceptance values come from measuring references; until an
+   example has some, it is accepted on structural properties only (one mass, the sign of the distance,
+   identical sections), not on a number.
+
+Third-party images and heightmaps stay out of the repository (`docs/references/.gitignore`).
