@@ -33,7 +33,7 @@ local function check(t)
     end
     local allowed = {
         ridges = true, peaks = true, seed = true, center = true, extent = true, cell = true,
-        steps = true, k = true, diffusion = true, talus = true, lift = true, wander = true,
+        steps = true, k = true, diffusion = true, talus = true, lift = true, wander = true, cells = true,
         cirques = true, wobble = true,
     }
     for key in pairs(t) do
@@ -120,7 +120,7 @@ function Ranges.Carve(t)
     local margin   = (t.wander or 1300.0) + 2500.0
     local center   = t.center or { (minX + maxX) * 0.5, (minZ + maxZ) * 0.5 }
     local extent   = t.extent or (math.max(maxX - minX, maxZ - minZ) + 2.0 * margin)
-    local n        = 336
+    local n        = t.cells or 230
     local cell     = t.cell or extent / n
     n              = math.floor(extent / cell + 0.5)
     local originX  = center[1] - n * cell * 0.5
@@ -139,7 +139,30 @@ function Ranges.Carve(t)
         end
         ridges[#ridges + 1] = { points = r.points, lengths = lengths, height = r.height, width = r.width }
     end
-    local peaks = t.peaks or {}
+    -- Summits along every crest, so a range is not one height end to end: one every 5 km or so, at a
+    -- hashed place and height, the first of each crest the tallest. Explicit `peaks` are added to them.
+    local function point_at(r, s)
+        for i = 2, #r.points do
+            if r.lengths[i] >= s or i == #r.points then
+                local a, b = r.points[i - 1], r.points[i]
+                local span = math.max(r.lengths[i] - r.lengths[i - 1], 1e-6)
+                local u = math.min(math.max((s - r.lengths[i - 1]) / span, 0.0), 1.0)
+                return { a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u }
+            end
+        end
+    end
+    local peaks = {}
+    for i, r in ipairs(ridges) do
+        local total = r.lengths[#r.lengths]
+        local count = math.max(1, math.floor(total / 5000.0 + 0.5))
+        local first = math.floor(hash(i, 0, 90) * count)
+        for j = 0, count - 1 do
+            local s = total * (j + 0.5 + 0.5 * (hash(i, j, 91) - 0.5)) / count
+            local boost = j == first and 1.45 or 1.12 + 0.2 * hash(i, j, 92)
+            peaks[#peaks + 1] = { at = point_at(r, s), height = r.height * boost, radius = r.width * 0.75 }
+        end
+    end
+    for _, p in ipairs(t.peaks or {}) do peaks[#peaks + 1] = p end
     local tallest = 0.0
     for _, r in ipairs(ridges) do tallest = math.max(tallest, r.height) end
     for _, p in ipairs(peaks) do tallest = math.max(tallest, p.height) end
@@ -152,14 +175,14 @@ function Ranges.Carve(t)
         local best = 0.0
         for i, r in ipairs(ridges) do
             local d, s = along(wx, wz, r.points, r.lengths)
-            local h = r.height * (1.0 + 0.25 * fbm(s, i * 977.0, 4000.0, 2, 30 + i))
+            local h = r.height * (0.85 + 0.25 * fbm(s, i * 977.0, 4000.0, 2, 30 + i))
             best = math.max(best, h * smooth(1.0 - d / r.width))
         end
         for _, p in ipairs(peaks) do
             local d = math.sqrt((wx - p.at[1]) ^ 2 + (wz - p.at[2]) ^ 2)
             best = math.max(best, p.height * smooth(1.0 - d / (p.radius or 3000.0)))
         end
-        return best * (1.0 + 0.3 * fbm(px, pz, 2600.0, 3, 40))
+        return best * (1.0 + 0.5 * fbm(px, pz, 4000.0, 3, 40))
     end
 
     -- The uplift is smooth, so it is evaluated on every other cell and interpolated: a quarter of the
@@ -197,7 +220,8 @@ function Ranges.Carve(t)
 
     -- 2. Rivers.
     local k         = t.k or 0.016
-    local diffusion = t.diffusion or 60.0
+    -- Relative to the cell, so the spacing of valleys is the same whatever size the grid has.
+    local diffusion = t.diffusion or 0.012 * cell * cell
     local talus     = t.talus or 1.15
     local carved = Erosion.StreamPower{
         size = { n, n }, cell = cell, height = height, uplift = uplift, iterations = steps, k = k,
@@ -255,7 +279,11 @@ function Ranges.Finish(structure, tallest, seed)
     local gullied = Erosion.Gullies{
         input = ground, cell = 420.0, octaves = 3, strength = 18.0, full = 0.7, seed = seed + 53,
     }
-    local land = Combine.Blend{ a = ground, b = gullied, mask = mountain }
+    -- A second, finer generation on the walls of the first: what reads as erosion at close range.
+    local fine = Erosion.Gullies{
+        input = gullied, cell = 140.0, octaves = 3, strength = 9.0, full = 0.6, seed = seed + 57,
+    }
+    local land = Combine.Blend{ a = ground, b = fine, mask = mountain }
     local carved = Erosion.Hydraulic{
         input = land, iterations = 20, rain = 0.5, capacity = 9.0, evaporation = 0.04,
     }
