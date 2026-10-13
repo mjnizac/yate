@@ -637,6 +637,9 @@ struct ViewerLayer::State {
     TileCache cache;
     /// Level the ring is at, and how long the ideal level has disagreed with it.
     u32_t level             = 0;
+    /// The level the next (or the running) background build is for. Equal to `level` for a plain reload.
+    u32_t levelTarget       = 0;
+    u32_t pendingLevel      = 0;
     u32_t disagreeingFrames = 0;
     /// Tiles missing from the ring at the end of the last streaming pass. Zero means the ring is
     /// complete, which is what a test can wait for.
@@ -848,6 +851,7 @@ void ViewerLayer::OnAttach() {
     m_state->level = IdealLevel(m_state->camera.ViewDistance(0.0f), m_state->settings.sectionSize,
                                 m_state->settings.resolution, m_state->settings.maxLevel,
                                 m_state->settings.detail);
+    m_state->levelTarget = m_state->level;
 
     // First load is synchronous: there is nothing to keep rendering yet, so there is no reason to defer
     // it and every reason to fail here rather than after the window has opened on an empty scene.
@@ -1096,9 +1100,10 @@ void ViewerLayer::UpdateReload() {
                                 std::string_view{state.reload.error.Format().data()});
             state.hasError = true;
             LOG_ERROR("reload failed, keeping the previous terrain: {}", state.lastError.data());
+            state.levelTarget = state.level;
         } else {
             Result<Terrain> terrain =
-                BuildTerrain(*state.context, state.pending, state.settings, state.level);
+                BuildTerrain(*state.context, state.pending, state.settings, state.pendingLevel);
             if (!terrain) {
                 detail::CopyBounded(state.lastError,
                                     std::string_view{terrain.error().Format().data()});
@@ -1106,6 +1111,7 @@ void ViewerLayer::UpdateReload() {
                 LOG_ERROR("reload compiled but could not be prepared, keeping the previous "
                           "terrain: {}",
                           state.lastError.data());
+                state.levelTarget = state.level;
             } else {
                 // Swapped only once the new terrain exists, so a failure anywhere above leaves the old
                 // one on screen untouched (spec section 11).
@@ -1115,6 +1121,7 @@ void ViewerLayer::UpdateReload() {
                 }
                 state.cache.Release(*state.context);
                 state.terrain = std::move(*terrain);
+                state.level   = state.pendingLevel;
                 ++state.loadCount;
                 state.hasError     = false;
                 state.lastError[0] = 0;
@@ -1150,6 +1157,7 @@ void ViewerLayer::UpdateReload() {
     state.reloadRequested     = false;
     state.pendingSinceSeconds = 0.0;
 
+    state.pendingLevel = state.levelTarget;
     state.reload.running.store(true);
     state.reload.failed = false;
     // The worker gets its own copy of the parameters: the panel may edit them on this thread meanwhile.
@@ -1159,7 +1167,7 @@ void ViewerLayer::UpdateReload() {
         state.pending.Reset();
         if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.seed,
                                        params,
-                                       SpacingOf(state.settings.resolution, state.level));
+                                       SpacingOf(state.settings.resolution, state.pendingLevel));
             !loaded) {
             state.reload.error  = loaded.error();
             state.reload.failed = true;
@@ -1387,37 +1395,10 @@ void ViewerLayer::UpdateLevel() {
     }
     state.disagreeingFrames = 0;
 
-    // The script sees the level's spacing, so a level change re-runs it. Into `pending`, which is also
-    // where a hot reload leaves its graph: building from `current` here would rebuild the script as it
-    // was at startup and silently undo the last reload.
-    state.pending.Reset();
-    if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.seed,
-                                   state.params, SpacingOf(state.settings.resolution, ideal));
-        !loaded) {
-        LOG_WARN("could not switch to level {}, staying at {}: {}", ideal, state.level,
-                 loaded.error().Format().data());
-        return;
-    }
-
-    Result<Terrain> terrain =
-        BuildTerrain(*state.context, state.pending, state.settings, ideal);
-    if (!terrain) {
-        LOG_WARN("could not switch to level {}, staying at {}: {}", ideal, state.level,
-                 terrain.error().Format().data());
-        return;
-    }
-    if (Status idle = state.context->WaitIdle(); !idle) {
-        LOG_WARN("could not wait for the device before changing level: {}",
-                 idle.error().Format().data());
-    }
-    // Every resident tile is at the old spacing, so none of them survives a level change. That is the
-    // cost of one global level, and it is paid rarely: the ideal level has to disagree for
-    // `kLevelChangeFrames` frames first.
-    state.cache.Release(*state.context);
-    state.terrain = std::move(*terrain);
-    state.level   = ideal;
-    StreamTiles(~0u);
-    LOG_INFO("level {} at {} m per sample", state.level, state.terrain.spacing);
+    // The script sees the level's spacing, so a level change re-runs it, on the reload worker: the ring
+    // keeps drawing at the old level until the new terrain is built and swapped in (`UpdateReload`).
+    state.levelTarget    = ideal;
+    state.reloadRequested = true;
 }
 
 u32_t ViewerLayer::TilesDrawn() const noexcept {
