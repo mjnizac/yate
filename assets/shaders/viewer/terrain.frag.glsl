@@ -40,15 +40,21 @@ layout(location = 2) in float vHeight;
 
 layout(location = 0) out vec4 outColor;
 
-// Low and warm, so slopes facing away are shaded rather than black and the relief reads at a glance.
-const vec3 kSunDirection = normalize(vec3(0.45, 0.72, 0.52));
-const vec3 kSunColor     = vec3(1.0, 0.96, 0.88);
-const vec3 kSkyColor     = vec3(0.32, 0.40, 0.52);
+// About 32 degrees up and warm: low enough that a face turned from it is in shade and ridges and gullies
+// read as light against dark, high enough that a valley floor is still lit. The sky fills the shade.
+const vec3 kSunDirection = normalize(vec3(0.55, 0.42, 0.40));
+const vec3 kSunColor     = vec3(1.05, 0.98, 0.88);
+const vec3 kSkyColor     = vec3(0.34, 0.42, 0.56);
 
-// Rock where it is steep, grass where it is not. The band is wide so the transition is not a hard line.
-const vec3 kRockColor  = vec3(0.42, 0.40, 0.38);
-const vec3 kGrassColor = vec3(0.26, 0.36, 0.20);
-const vec3 kPeakColor  = vec3(0.78, 0.78, 0.80);
+// Grass where it is gentle and low, scree above it, rock where it is steep and snow where it is high and
+// not too steep to hold it. Heights are in metres and fixed, so a low terrain is never snowy and the
+// colour of a point does not depend on what else the script made.
+const vec3 kGrassColor = vec3(0.22, 0.32, 0.16);
+const vec3 kScreeColor = vec3(0.47, 0.45, 0.42);
+const vec3 kRockColor  = vec3(0.30, 0.29, 0.28);
+const vec3 kSnowColor  = vec3(0.90, 0.92, 0.96);
+const float kScreeLine = 1500.0;
+const float kSnowLine  = 1750.0;
 
 void main() {
     vec3 normal = normalize(vNormal);
@@ -58,17 +64,20 @@ void main() {
         normal = vec3(0.0, 1.0, 0.0);
     }
 
-    float slope = 1.0 - clamp(normal.y, 0.0, 1.0);
-    vec3  albedo = mix(kGrassColor, kRockColor, smoothstep(0.15, 0.55, slope));
-    // Lightest at the top, which reads as snow without needing a height range from the script.
-    albedo = mix(albedo, kPeakColor, smoothstep(0.55, 0.8, normal.y) * smoothstep(0.3, 0.9, slope));
+    float slope  = 1.0 - clamp(normal.y, 0.0, 1.0);
+    float height = vWorldPosition.y;
+    vec3  albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
+    albedo       = mix(albedo, kRockColor, smoothstep(0.16, 0.42, slope));
+    float snow   = smoothstep(kSnowLine - 150.0, kSnowLine + 150.0, height)
+                 * (1.0 - smoothstep(0.30, 0.48, slope));
+    albedo       = mix(albedo, kSnowColor, snow);
 
     float sun = max(dot(normal, kSunDirection), 0.0);
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,
     // which is most of what makes an unlit slope legible.
     float sky = 0.5 + 0.5 * normal.y;
 
-    vec3 lit = albedo * (kSunColor * sun + kSkyColor * sky * 0.35);
+    vec3 lit = albedo * (kSunColor * sun + kSkyColor * sky * 0.4);
 
     // Water, computed from the eye and this fragment rather than drawn: alpha zero means none.
     vec4 water = unpackUnorm4x8(pc.waterColour);
