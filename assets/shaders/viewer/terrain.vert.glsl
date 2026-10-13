@@ -1,9 +1,9 @@
 // Displaced grid: the vertex shader reads the compute output directly, so no mesh is ever uploaded
 // (spec section 12, viewer).
 //
-// Every vertex derives its grid position from `gl_VertexIndex` and samples the height buffer at that
-// position. Six vertices per quad rather than an index buffer, because an index buffer is a second
-// allocation and a second upload to describe something the vertex index already encodes.
+// Every vertex derives its grid position from `gl_VertexIndex`, which is the index buffer's value: the
+// vertex's row-major position in the grid. The grid is indexed so a vertex shared by up to six
+// triangles is shaded once (the post-transform cache) and not six times.
 //
 // The heights and the normals arrive as buffer device addresses in push constants, exactly as the compute
 // kernels pass their buffers around, so a tile the evaluator produced can be drawn without a copy, a
@@ -42,19 +42,11 @@ layout(location = 0) out vec3 vWorldPosition;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out float vHeight;
 
-// Which corner of which quad this vertex is. Two triangles wound counter-clockwise when seen from above,
-// which with the pipeline's front face and cull mode is what makes the terrain visible from above and
-// culled from below.
-const uvec2 kCorners[6] =
-    uvec2[6](uvec2(0, 0), uvec2(0, 1), uvec2(1, 0), uvec2(1, 0), uvec2(0, 1), uvec2(1, 1));
-
 void main() {
-    uint quadsPerSide = max(pc.gridVertices, 2u) - 1u;
-    uint quad         = uint(gl_VertexIndex) / 6u;
-    uint corner       = uint(gl_VertexIndex) % 6u;
-
-    uvec2 quadCoord = uvec2(quad % quadsPerSide, quad / quadsPerSide);
-    uvec2 gridCoord = quadCoord + kCorners[corner];
+    uint verticesPerSide = max(pc.gridVertices, 2u);
+    uint quadsPerSide    = verticesPerSide - 1u;
+    uint vertex          = uint(gl_VertexIndex);
+    uvec2 gridCoord      = uvec2(vertex % verticesPerSide, vertex / verticesPerSide);
 
     // The rendered grid may be coarser than the data, so a grid vertex maps onto a sample rather than
     // being one. Integer arithmetic, so neighbouring tiles land on exactly the same samples at their

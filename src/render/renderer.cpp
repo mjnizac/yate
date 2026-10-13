@@ -25,6 +25,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <memory_resource>
@@ -619,6 +620,11 @@ struct ViewerLayer::State {
     vulkan::GraphicsPipeline wirePipeline;
     /// Open water for the pixels no terrain covers. Only drawn when water is on.
     vulkan::GraphicsPipeline seaPipeline;
+    /// Triangle indices of the one grid every tile is drawn with: two triangles per quad, wound
+    /// counter-clockwise seen from above (which with the pipeline's front face and cull mode makes the
+    /// terrain visible from above and culled from below).
+    vulkan::Buffer indices;
+    u32_t          indexCount = 0;
     b8_t                     wireframe = false;
     Camera                   camera;
     Input                    input;
@@ -788,6 +794,39 @@ void ViewerLayer::OnAttach() {
         LOG_WARN("open water is unavailable: {}", sea.error().Format().data());
     }
 
+    {
+        // One grid for every tile, so one index buffer. Host-visible: it is a few hundred kilobytes written once.
+        const u32_t vertices = std::min(m_state->settings.gridVertices, m_state->settings.sectionSize);
+        const u32_t quads    = vertices - 1;
+        std::pmr::vector<u32_t> data(&memory::General().Resource());
+        data.reserve(static_cast<usize_t>(quads) * quads * 6);
+        for (u32_t z = 0; z < quads; ++z) {
+            for (u32_t x = 0; x < quads; ++x) {
+                const u32_t a = z * vertices + x;
+                const u32_t b = a + vertices;
+                for (const u32_t corner : {a, b, a + 1, a + 1, b, b + 1}) {
+                    data.push_back(corner);
+                }
+            }
+        }
+        const VkDeviceSize bytes = data.size() * sizeof(u32_t);
+        Result<vulkan::Buffer> indices = m_state->context->Memory().CreateBuffer(vulkan::BufferDesc{
+            .size = bytes, .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            .category = vulkan::VramCategory::Viewer, .hostVisible = true});
+        if (!indices) {
+            LOG_ERROR("could not create the grid indices: {}", indices.error().Format().data());
+            App().AddExit(ExitCode::FailedToInitializeEngine);
+            App().Stop();
+            return;
+        }
+        m_state->indices    = *indices;
+        m_state->indexCount = static_cast<u32_t>(data.size());
+        std::memcpy(m_state->indices.mapped, data.data(), bytes);
+        if (Status flushed = m_state->context->Memory().FlushBuffer(m_state->indices, 0, bytes); !flushed) {
+            LOG_WARN("could not flush the grid indices: {}", flushed.error().Format().data());
+        }
+    }
+
     // The camera is framed and the level chosen *before* the script runs, because the script is given
     // the level's sample spacing and `IdealLevel` needs only the camera, not the graph.
     //
@@ -898,6 +937,9 @@ void ViewerLayer::OnDetach() {
     m_state->ui.Shutdown();
     if (m_state->context != nullptr) {
         m_state->cache.Release(*m_state->context);
+    }
+    if (m_state->context != nullptr && m_state->indices.IsValid()) {
+        m_state->context->Memory().DestroyBuffer(m_state->indices);
     }
     m_state->pipeline     = vulkan::GraphicsPipeline{};
     m_state->wirePipeline = vulkan::GraphicsPipeline{};
@@ -1193,11 +1235,12 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
 
         if (!bound) {
             pipeline.Bind(frame.commands, frame.extent, constants);
+            vkCmdBindIndexBuffer(frame.commands, state.indices.handle, 0, VK_INDEX_TYPE_UINT32);
             bound = true;
         } else {
             pipeline.Push(frame.commands, constants);
         }
-        vkCmdDraw(frame.commands, vertexCount, 1, 0, 0);
+        vkCmdDrawIndexed(frame.commands, vertexCount, 1, 0, 0, 0);
         ++drawn;
     }
     state.tilesDrawn = drawn;
