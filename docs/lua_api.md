@@ -94,6 +94,7 @@ numbers drift, and this one is the index.
 | `Curves.Terrace` | the input's mapping | snaps a height to steps; `step` in metres, `sharpness` in `[0, 1]` |
 | `Combine.SmoothMin`, `Combine.SmoothMax` | the shared mapping | `Min` and `Max` with the corner rounded over `k` |
 | `Shapes.*`, `Landforms.*` | `R2->R1` | the prelude: placed shapes, booleans, masks, warps and heights built from them (see below) |
+| `Ranges.Carve`, `Ranges.Finish` | `R2->R1` and the script's outputs | the prelude's alpine macro: a range raised along crest lines, carved by `Erosion.StreamPower` and finished on the GPU; see `docs/lua_reference.md` §10, "Mountain ranges" |
 | `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
 | `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
 | `Erosion.StreamPower` | a list of numbers | CPU, not a graph op: stream-power erosion with uplift over a whole grid (`size`, `cell`, `height`, `uplift` lists x fastest; `iterations`, `k`, `m`, `talus`, `diffusion`, `refresh`), the drainage network no section can compute; feed the result to `Terrain.Grid` |
@@ -134,7 +135,7 @@ script, the shaders the job ran, the parameters and the prelude. `outputs[].stat
 
 ## The prelude
 
-`Shapes.*` and `Landforms.*` are not ops. They are Lua the engine runs before the script
+`Shapes.*`, `Landforms.*` and `Ranges.*` are not ops. They are Lua the engine runs before the script
 (`assets/lua/prelude/`), and every call in them is one of the ops above, so they add no kernel and no
 node type: a landform is a shape, a profile and a multiply.
 

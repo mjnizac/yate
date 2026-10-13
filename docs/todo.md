@@ -55,3 +55,12 @@ full history is in the git log.
       inputs and global operations. It would be built on the items above rather than instead of them,
       and its first phase is already mostly done: per-metre erosion, a pixel check and a file-bytes
       check were its "make the current engine honest" list. Whether to take the rest is open.
+
+## Alpine macro (`Ranges.*`)
+
+- [ ] **Shadows come from the simulation grid** (~100 m cells): the strata cliffs and the gullies cast
+      none. A sun-direction heightmap pass in the viewer would cover any script.
+- [ ] **`--detail 1` lost a piece of foreground** next to the camera once; not investigated.
+- [ ] **Strata steps are regular close up**: one bed thickness and one dip per terrain.
+- [ ] **`test_datasets` `volume_r3` timing** fails intermittently (24 to 29 ms against a 20 ms baseline,
+      the same spread the history shows for weeks); the baseline or the tolerance needs a decision.

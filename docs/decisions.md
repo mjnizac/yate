@@ -1150,3 +1150,37 @@ before (which was more than a 1 m export showed, so it was a flattering preview,
 time 450 ms instead of ~170 on a 2 km export. Three dataset goldens (the ones that erode at 1 m) were
 regenerated. Coarse levels are spikier because there is nothing left to relax the finest noise octaves
 (todo).
+
+## The alpine macro, and what building it taught
+
+`Ranges.Carve` / `Ranges.Finish` came out of a long series of attempts at an alpine terrain judged
+against photographs and real heightmaps (`docs/references/alpine/`, not versioned). What each attempt
+showed is worth more than the final parameters.
+
+**Composition before detail.** Ranges built by adding shapes (ridges, cones, `SmoothMax`) read as clay:
+convex everywhere, no arêtes. Carving a block with cirques and valleys gave concave walls and sharp edges,
+but every primitive left its signature (circles from cutters, flat floors from `dome` profiles, rings
+from terraces). Neither is how mountains form, and neither held up.
+
+**Erosion is the form, and it is global.** The look of the references is a drainage network: valleys
+joining larger valleys from the crest to the plain. The GPU erosion moves material one cell per
+iteration and measured 0.5 % of the relief; `Erosion.Gullies` (a pointwise pattern) gave the texture of
+drainage without the network. What produced it was a stream-power simulation with uplift over the whole
+terrain (`Erosion.StreamPower`), which no section with a halo can compute, carried to the sections by
+`Terrain.Grid`. Uplift along crest lines, not a dome, is what keeps the rivers from radiating from a
+centre.
+
+**Measure before tuning.** Two impressions turned out to be numbers. "Too grey": 77 % of the massif was
+steeper than 30 degrees because every hillslope sat at the simulation's talus; lowering it from 1.15 to
+0.6 was the fix, not the shader. "Slow when zooming": the GPU took 9 ms, the script 8 s, re-run on every
+level change; the fix was a cache of the simulation and taking a constant out of a per-cell loop.
+
+**What the viewer hides.** Close up, a normal bumped by noise read as scales or pits at every scale
+tried; rock texture is now colour only and the relief belongs to the heightfield. Colour thresholds
+decided by slope alone draw patches wherever a slope crosses them (pale scree on ordinary hillsides).
+At 16 to 32 m per sample nothing under ~60 m survives; `--detail` exists to look closer. Push constants
+are full, so the shadow travels in the length of the normal.
+
+**Tried and taken back.** A piedmont and varied country around the range, and a scree mask painted from
+the terrain, were judged worse than what they replaced and reverted: the plain around a range is flat.
+The terrain was judged by eye on the user's references throughout; no metric decided it.

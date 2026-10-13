@@ -24,16 +24,21 @@ vector maps and raw `f32` volumes with a metadata sidecar; `terrain_viewer` (Gra
 graph as a GPU-displaced grid with an orbit camera (`--view`, `--target`), a ring of streamed tiles,
 hot reload, `--screenshot`, and the analytic sea level (`--water`, off by default).
 
-Fifteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`,
-`Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`. The script API is
+Seventeen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular, with an optional
+`position`), `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`,
+`ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies` and `Grid`, plus
+`Erosion.StreamPower`, a whole-grid simulation on the CPU. The script API is
 `Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`, `Erosion.*`,
-`Geometry.*`, and the Lua prelude's `Shapes.*` and `Landforms.*`, documented with pictures in
+`Geometry.*`, and the Lua prelude's `Shapes.*`, `Landforms.*` and `Ranges.*` (the alpine macro), documented with pictures in
 `docs/lua_reference.md`.
 
 Five reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
 canyon, mesas, coast), with previews in `docs/images/shapes/`. The shape layer is `Geometry.*` (C++ ops), plus
 `Shapes.*` and `Landforms.*`, which are Lua in `assets/lua/prelude/` that the engine loads before every
 script.
+
+Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
+`terrains/alpine.lua`, with previews in `docs/images/ranges/`.
 
 Eight sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
 crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the

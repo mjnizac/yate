@@ -14,7 +14,7 @@ Copy the closest example, run it in the viewer, change one thing at a time.
 | You want | Start from | The part to change |
 | --- | --- | --- |
 | Rolling hills, farmland | `terrains/rolling.lua` | fBm `amplitude` and `frequency` |
-| Alpine massif | `terrains/alpine.lua` | the cirque and valley tables, `height`, `gullies` |
+| Alpine massif, any range | `terrains/alpine.lua`, `ranges/*.lua` | the crest lines given to `Ranges.Carve` (§10) |
 | Eroded rock, gullies | `terrains/badlands.lua` | hydraulic `iterations`, `erosion_rate` |
 | River valleys | `terrains/riverlands.lua` | hydraulic `rain`, `capacity` |
 | Sand | `terrains/dunes.lua` | the warp and the ridge frequency |
@@ -961,6 +961,85 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/mountain_range.l
 ![Mesas and badlands](images/shapes/mesas.png)
 
 ![Coast with cliffs, a beach and water](images/shapes/coast.png)
+
+### Mountain ranges: `Ranges.Carve` and `Ranges.Finish` (the alpine macro)
+
+The alpine terrain, packaged: a range is a list of crest lines, and the prelude
+(`assets/lua/prelude/30_ranges.lua`) does the rest. Every range example and `terrains/alpine.lua` is a
+dozen lines:
+
+```lua
+local function main(params)
+    local h = params.height or 2200.0
+    local structure, tallest, sun = Ranges.Carve{
+        seed = params.seed,
+        ridges = {
+            { points = { { -6200, -900 }, { -2600, 300 }, { 400, -200 }, { 3200, 700 } },
+              height = h, width = 5200 },
+            { points = { { -1200, 200 }, { -600, 2600 } }, height = h * 0.7, width = 3400 },
+        },
+        peaks = { { at = { -400, 0 }, height = h * 1.3, radius = 3600 } },
+    }
+    return Ranges.Finish(structure, tallest, params.seed, nil, sun)
+end
+return main
+```
+
+**What `Ranges.Carve` does**, in order, on a CPU grid of about 230 x 230 cells over the range and a
+margin (its edge is the base level):
+
+1. **Uplift.** Each crest lifts the ground within `width` of it, its height wandering along the line;
+   the plan is bent by `wander` metres so no crest is straight. A summit is placed every ~5 km along
+   every crest (one of them 1.45 times the crest, the rest 1.12 to 1.32), plus any `peaks` given. The
+   uplift is gently stepped (`shoulders`), so benches survive the erosion.
+2. **Rivers.** `Erosion.StreamPower` runs ~380 steps: the valleys join into larger ones down to the
+   plain and leave sharp ridges between them. `talus` (default 0.6, about 31 degrees) is the steepest a
+   hillslope may stay; `diffusion` is relative to the cell, so valley spacing does not depend on the grid.
+3. **Cirques** under every peak (three each, a steep headwall over a spoon floor), then a short second
+   run with twice the talus, which keeps their walls.
+4. **Deposition** in the low third: valley floors fill flat towards a broad average.
+5. **U valleys.** The drainage is traced; around every cell where at least `glacier_area` (2.5 km²)
+   drains, the ground is lowered to a parabola rising from the river, wider the larger the catchment.
+6. **Talus cones** at 33 degrees (`repose`) under every wall, capped in thickness.
+7. **Shadow.** For each cell, whether the viewer's sun clears the horizon.
+
+It returns the structure (a `Terrain.Grid`, read through a broad warp so no channel runs along the grid),
+the tallest height, and the shadow grid.
+
+**What `Ranges.Finish` adds** on the GPU: tilted strata in patches on the middle slopes (cliffs and
+ledges; `dip`, `bed`, `strata`), scree from a thermal pass kept where it lies above the ground, two
+generations of `Erosion.Gullies`, the hydraulic and thermal passes, a blur kept off the crests, and the
+outputs `height`, `normals` and `shadow`. The plain around the range is flat.
+
+| `Ranges.Carve` key | Default | |
+| --- | --- | --- |
+| `ridges` | required | `{ points = { {x, z}, ... }, height = m, width = m }`, one per crest |
+| `peaks` | none | extra summits, `{ at = {x, z}, height = m, radius = m }` |
+| `seed` | 0 | everything hashed from it |
+| `k`, `diffusion`, `talus`, `steps`, `lift` | 0.016, 0.012 x cell², 0.6, 380, 2.4 | the simulation |
+| `cells`, `extent`, `center`, `cell` | 230 cells over the crests and a margin | the grid |
+| `wander`, `wobble` | 1300 m, 180 m | how far the plan bends; the warp the grid is read through |
+| `shoulders`, `glacial`, `glacier_area`, `cirques`, `fill`, `repose`, `talus_cones` | on | each stage, `false` or 0 to skip |
+
+**Cost.** About 5 s for the first run (the simulation is 3 of them). The result is cached by a hash of
+everything that goes in, so the viewer, which re-runs the script whenever the level of detail changes,
+does not simulate again; a level change costs the Lua around it, about a second.
+
+**Examples:** `terrains/alpine.lua` (main crest, three spurs, two named summits), and in
+`assets/scripts/ranges/`: `sierra.lua` (one long range), `arc.lua` (a bow with outer spurs),
+`parallel.lua` (two ranges and the valley between), `knot.lua` (three ranges meeting at a massif).
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/alpine.lua
+build/Release/bin/terrain_viewer --script assets/scripts/ranges/knot.lua --view 170,-26,20000
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/alpine.lua --detail 1 --ring 4
+```
+
+![Alpine](images/ranges/alpine.png)
+
+![Sierra](images/ranges/sierra.png)
+
+![Knot](images/ranges/knot.png)
 
 **The limit of all of this is the heightfield.** One height per (x, z): no caves, arches, overhangs or
 stacked surfaces. A scarp can be vertical, never undercut.
