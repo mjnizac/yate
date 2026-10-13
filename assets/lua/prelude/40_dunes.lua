@@ -29,8 +29,8 @@
 local engine = ...
 local fail   = engine.fail
 
-local Noises, Terrain, Curves, Combine, Erosion, Vec, Masks =
-    Noises, Terrain, Curves, Combine, Erosion, Vec, Masks
+local Noises, Terrain, Curves, Combine, Erosion, Vec, Masks, Shapes =
+    Noises, Terrain, Curves, Combine, Erosion, Vec, Masks, Shapes
 local type, pairs, ipairs, tostring = type, pairs, ipairs, tostring
 local math = math
 
@@ -431,6 +431,90 @@ function Dunes.Simulated(t)
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } },
         look    = { palette = "sand", wind = wind },
     }
+end
+
+-- --- Regions --------------------------------------------------------------------------------------
+--
+-- Dunes only where a polygon says: `area = { {x, z}, ... }` (or `areas`, a list of polygons) restricts
+-- the field to it, and the dunes fade to flat ground over `feather` metres inside the edge, so a
+-- region has no cliff at its border. The edge wanders by `edge_wander` metres (a warp at the scale of
+-- the fade), so it is a coastline of sand and not a drawn polygon. Works with every style: it scales
+-- the finished height by a mask and takes the normals again, so it adds one polygon distance, a
+-- smoothstep and a multiply per region.
+local field_of_style = Dunes.Field
+
+local REGION_KEYS = { area = true, areas = true, feather = true, edge_wander = true }
+
+function Dunes.Field(t)
+    t = t or {}
+    if type(t) ~= "table" then
+        fail("Dunes.Field expects a table of named arguments, as in Dunes.Field{ ... }")
+    end
+    if t.area == nil and t.areas == nil then
+        for _, key in ipairs({ "feather", "edge_wander" }) do
+            if t[key] ~= nil then
+                fail("Dunes.Field takes '" .. key .. "' only with 'area' or 'areas'")
+            end
+        end
+        return field_of_style(t)
+    end
+
+    local polygons = {}
+    local function polygon(points, what)
+        if type(points) ~= "table" or #points < 3 then
+            fail("Dunes.Field expects " .. what .. " as a list of at least 3 { x, z } points")
+        end
+        for i, point in ipairs(points) do
+            if type(point) ~= "table" or type(point[1]) ~= "number" or type(point[2]) ~= "number" then
+                fail("Dunes.Field expects point " .. i .. " of " .. what .. " to be a pair { x, z }")
+            end
+        end
+        polygons[#polygons + 1] = points
+    end
+    if t.area ~= nil then
+        polygon(t.area, "'area'")
+    end
+    if t.areas ~= nil then
+        if type(t.areas) ~= "table" or #t.areas == 0 then
+            fail("Dunes.Field expects 'areas' as a list of polygons")
+        end
+        for i, points in ipairs(t.areas) do
+            polygon(points, "polygon " .. i .. " of 'areas'")
+        end
+    end
+    local feather = t.feather or 500.0
+    local wander  = t.edge_wander or feather * 0.35
+    if type(feather) ~= "number" or feather <= 0 or type(wander) ~= "number" or wander < 0 then
+        fail("Dunes.Field expects feather greater than zero and edge_wander of zero or more, in metres")
+    end
+
+    local plain = {}
+    for key, value in pairs(t) do
+        if not REGION_KEYS[key] then
+            plain[key] = value
+        end
+    end
+    local out = field_of_style(plain)
+
+    -- 1 in the region, 0 on its edge, smooth between: the signed distance is negative inside.
+    local position
+    if wander > 0 then
+        position = Shapes.Warp{
+            amplitude = wander, frequency = 1.0 / (feather * 2.5), octaves = 3, seed = (t.seed or 0) + 99,
+        }
+    end
+    local mask
+    for _, points in ipairs(polygons) do
+        local shape  = Shapes.Polygon{ points = points, position = position }
+        local inside = 1.0 - Curves.Smoothstep{ input = shape, min = -feather, max = 0.0 }
+        mask = mask and Combine.Max{ a = mask, b = inside } or inside
+    end
+
+    local height = out.height.value * mask
+    out.height   = { value = height, range = out.height.range }
+    out.normals  = { value = Terrain.Normals{ input = Terrain.Gradient{ input = height } } }
+    out.mask     = { value = mask, range = { 0, 1 } }
+    return out
 end
 
 _G.Dunes = Dunes

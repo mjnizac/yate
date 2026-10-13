@@ -1259,6 +1259,37 @@ return main
     CHECK(whole.Ok() && other.Ok()
           && std::memcmp(whole.values.data(), other.values.data(), whole.values.size() * sizeof(float)) != 0);
 
+    // A region: relief inside the polygon, nothing outside it, and the same bytes across sections.
+    const std::string region = std::string(kDirectory) + "/dunes_region.lua";
+    {
+        std::ofstream out(region, std::ios::binary);
+        out << R"(local function main(params)
+    local field = Dunes.Field{
+        seed = params.seed, wavelength = 120, height = 14, small_height = 1,
+        area = { { -150, -150 }, { 150, -150 }, { 150, 150 }, { -150, 150 } }, feather = 60, edge_wander = 10,
+    }
+    return field
+end
+return main
+)";
+    }
+    const Field inside = RunExport(region, std::string(kDirectory) + "/dunes_region_64", wide, "height", "--seed 3");
+    const Field cut    = RunExport(region, std::string(kDirectory) + "/dunes_region_16", small, "height", "--seed 3");
+    ++test::g_checks;
+    CHECK(inside.Ok() && cut.Ok()
+          && std::memcmp(inside.values.data(), cut.values.data(), inside.values.size() * sizeof(float)) == 0);
+    if (inside.Ok()) {
+        // The tile is 512 m across about the origin: the middle is in the region, the corner is not.
+        double relief = 0.0;
+        for (double x = -60.0; x <= 60.0; x += 4.0) {
+            relief = std::max(relief, std::fabs(At(inside, x, 0.0) - At(inside, 0.0, 0.0)));
+        }
+        ++test::g_checks;
+        CHECK(relief > 1.0);
+        ++test::g_checks;
+        CHECK(std::fabs(At(inside, 250.0, 250.0)) < 0.01);
+    }
+
     const Field wrong = Export("dunes_wrong_key", "    local result = Dunes.Field{ flats = 0.3 }.height");
     ++test::g_checks;
     if (wrong.Ok() || wrong.error.find("'procedural' does not take 'flats'") == std::string::npos
