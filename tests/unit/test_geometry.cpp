@@ -546,7 +546,7 @@ void TestPreludeHash() {
     directory.erase(directory.find_last_of("/\\") + 1);
 
     engine::terrain::Sha256 hash;
-    for (const char* name : {"10_shapes.lua", "20_landforms.lua", "30_ranges.lua"}) {
+    for (const char* name : {"10_shapes.lua", "20_landforms.lua", "30_ranges.lua", "40_dunes.lua"}) {
         const std::string text = ReadFile(directory + "lua/prelude/" + name);
         hash.Update(std::string_view{name});
         hash.Update("\n", 1);
