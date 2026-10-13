@@ -1,6 +1,7 @@
 build/
 out/
 out_release/
+out_*/
 .vs/
 .vscode/
 *.spv
