@@ -968,28 +968,59 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/mountain_range.l
 
 ```lua
 local function main(params)
-    return Dunes.Field{ seed = params.seed, wind = 20 }
+    local field = Dunes.Field{ seed = params.seed, wind = 110 }
+    return field
 end
 return main
 ```
 
-**The dunes come from the wind.** `Erosion.Wind` runs Werner's slab model on a periodic grid (192 x 192
+`Dunes.Field` is a dispatcher over three styles; the first is the default.
+
+**`"procedural"`: analytic, any area, no repetition.** No grid and no simulation: every sample is a
+function of its position, so it costs milliseconds (a 0.6 s script, then the GPU), is identical at any
+resolution and section size, and does not repeat (measured: the autocorrelation of a 20 km export is
+under 0.2 beyond 3 km). Three scales, each a family of dunes in metres:
+
+* **Draa**, 2.6 km apart, low and broad, with a gentle lee side (a draa has no slip face worth the name).
+* **Dunes**, 700 m apart, two families on winds 30 degrees apart, joined with a smooth maximum: where they
+  meet the crests cross and branch.
+* **Small dunes**, 170 m apart and a few metres high, summed on the gentle backs of the larger ones and
+  masked off the flats, the crests and the slip faces.
+
+How a family is built: the along-wind distance is bent by a slow noise (kept under 0.6 in slope, so a
+crest never folds) and split into periods; **each dune has its own height**, a noise sampled at the
+period index and across the wind, so heights vary slowly along a crest and jump between dunes at the
+foot, where there is no sand to jump; most are tall for their length and a tail is low; a regional size
+field (`region`, 4.5 km) takes whole areas down to almost bare ground. The profile is set in metres: a
+back rising convexly at about `windward_angle`, a slip face at `repose - margin` degrees, a brink
+rounded by a smooth minimum and a foot rounded by a smooth maximum, and a height capped to what fits in
+the period. Slip faces are built `margin` (6) degrees under `repose` because the composition adds slope.
+
+Measured on 2 m exports, seeds 1 to 3, 8 x 8 km: median slope 5 degrees, p95 24 to 25, p99.9 37 to 38;
+0.3 % of cells over 35 degrees and 0.03 % over 40 (the edges of 2 m-high dunes, two samples wide).
+`Erosion.Thermal` closes the pipeline at `repose + 2` but is not what holds the limit: it limits the
+difference along each axis, not the gradient, and moves a cell per iteration, so a slip face tens of
+cells long is out of its reach; on this field it moves nothing but spikes.
+
+**`"simulated"`: Werner's slab model.** `Erosion.Wind` runs on a periodic grid (192 x 192
 cells of 30 m by default, about 3.5 s, cached): slabs of sand are lifted and hop downwind, settle more
 readily on sand than on bare ground and always in the wind shadow behind a crest (15 degrees), and
 avalanche past the angle of repose; a fraction only creeps one cell (reptation), which rounds crests.
 Dunes form, migrate and merge. The starting sand varies over kilometres (`sand`, `variety`): where it is
-thick the wind builds tall sinuous ridges, where it is thin smaller ones and bare flats, so a field has
-dunes of every size. The grid tiles the plane (`Terrain.Grid{ wrap = true }`) in a frame turned to `wind`.
+thick the wind builds tall sinuous ridges, where it is thin smaller ones. The grid tiles the plane
+(`Terrain.Grid{ wrap = true }`, every `cells * cell` metres) in a frame turned to `wind`. Then, on the
+GPU: relief scaled by `relief` and by a regional size, great dunes (`draa_*`) with rounded crests under
+them, small dunes in patches, the swell of the sand sea and a light settling.
 
-Then, on the GPU: the relief scaled by `relief` and by a regional size (from almost flat to full height, so
-a field has low ground and ranges of tall dunes), the great dunes (`draa_*`) with rounded crests under
-them, small dunes a few metres high in patches on the gentle slopes (`small_wavelength`, `small_height`),
-the swell of the sand sea, and a light settling at the angle of repose. The viewer draws
-sand (`look`) with faint ripples across the wind.
+**What the viewer shows.** Its sun is fixed, so the same field reads differently with the wind: with the
+lee faces turned to the sun (`wind` near 20) the slip faces are thin bright lines and the backs, which
+give the dunes their volume, are barely shaded; with the sun to the side (`wind` near 110, the default)
+the field reads as soft dunes with volume; with the lee faces away from it (`wind` near 200) the slip
+faces are dark. That is lighting, not geometry: the export is the same field turned.
 
-**Styles.** `style` is `"simulated"` (the default, described above) or `"star"` (below). `"transverse"` is
-a deprecated alias of `"simulated"` and prints a warning. A key that belongs to the other style is an
-error that names it, not something silently ignored.
+**Keys.** `style` is `"procedural"` (the default), `"simulated"` or `"star"` (below). `"transverse"` is
+a deprecated alias of `"simulated"` and prints a warning. A key that belongs to another style is an
+error that names the style, not something silently ignored.
 
 Lengths and heights are metres, angles degrees. Defaults are in `Dunes.Field` and `Dunes.Simulated`
 (`assets/lua/prelude/40_dunes.lua`), not in the example scripts.
@@ -997,9 +1028,12 @@ Lengths and heights are metres, angles degrees. Defaults are in `Dunes.Field` an
 | Key | Styles | Default | |
 | --- | --- | --- | --- |
 | `seed` | all | 0 | integer, from `--seed` |
-| `wind` | all | 20 | degrees, the direction the wind blows towards |
+| `wind` | all | 110 (`procedural`), 20 (`simulated`, `star`) | degrees, the direction the wind blows towards |
 | `repose` | all | 33 | the angle slip faces stand at; sets the slab height in `simulated` |
 | `swell` | all | 25 (`simulated`), 64 (`star`) | metres: amplitude of the swell of the sand sea |
+| `wavelength`, `height` | procedural | 700, 95 | between dunes; the tallest dune (the cap is 0.125 x `wavelength`) |
+| `sinuosity`, `windward_angle`, `margin` | procedural | 0.35, 10, 6 | bend of the crests (0 to 0.4); angle of the back; degrees the slip face is built under `repose` |
+| `draa_wavelength`, `draa_height`, `small_wavelength`, `small_height`, `region` | procedural | 2600, 70, 170, 5, 4500 | the other scales and the regional size field, metres |
 | `sand` | simulated | 70 | metres of starting sand |
 | `variety` | simulated | 0.3 | how much it varies, by region |
 | `cells`, `cell` | simulated | 192, 30 | simulation grid; it tiles every `cells * cell` metres |
@@ -1016,7 +1050,9 @@ build/Release/bin/terrain_viewer --script assets/scripts/terrains/dunes.lua --vi
 build/Release/bin/terrain_viewer --script assets/scripts/terrains/star_dunes.lua
 ```
 
-![Dunes](images/dunes/dunes.png)
+![Procedural dunes](images/dunes/procedural.png)
+
+![Dunes, simulated](images/dunes/dunes.png)
 
 ![Dunes, close](images/dunes/close.png)
 

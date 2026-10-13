@@ -1212,3 +1212,19 @@ too few iterations leave grain, too many merge everything into a few huge dunes 
 more starting sand gives continuous ridges, and varying it gives the mix of sizes; slab heights make the
 simulated dunes steep for their size, so the relief is scaled down rather than smoothed away. GLSL's
 `%` on a negative int is undefined, which drew a seam where the periodic grid wrapped.
+
+**A procedural style for dunes, and what measuring it showed.** The simulated dunes repeat every
+`cells * cell` metres and cost seconds; the request was an analytic, procedural field that can be
+generated anywhere. `style = "procedural"` builds the profile in metres from the period of a bent
+sawtooth, with a height per period. Three findings, all from numbers or from changing one thing:
+
+* **The thin-lines look was the light, not the geometry.** With wind 20 the slip faces face the viewer's
+  fixed sun and read as thin bright lines on a flat sheet; at wind 110 the same geometry reads as soft
+  dunes. Fixing the geometry first would have been wasted work.
+* **`Erosion.Thermal` cannot enforce a slope limit.** It limits the difference along each axis (a
+  diagonal face reaches 1.4 times the threshold) and moves a cell per iteration (a slip face is tens of
+  cells long). Raising iterations from 12 to 30 and lowering talus changed the fraction of cells over 35
+  degrees from 0.74 % to 0.76 % and 0.68 %. The limit has to be in the construction: slip faces built a
+  few degrees under repose took it to 0.3 % over 35 and 0.03 % over 40.
+* **A smooth maximum of 0 and 0 is k / 4.** Rounding the foot of a profile that must be exactly 0 at the
+  ends of its period left a crease wherever two dunes of different heights met; subtracting k / 4 fixed it.

@@ -94,7 +94,7 @@ numbers drift, and this one is the index.
 | `Curves.Terrace` | the input's mapping | snaps a height to steps; `step` in metres, `sharpness` in `[0, 1]` |
 | `Combine.SmoothMin`, `Combine.SmoothMax` | the shared mapping | `Min` and `Max` with the corner rounded over `k` |
 | `Shapes.*`, `Landforms.*` | `R2->R1` | the prelude: placed shapes, booleans, masks, warps and heights built from them (see below) |
-| `Dunes.Field` | the script's outputs | the prelude's dune macro: crescent chains on one wind (or three, `style = "star"`), slip faces at the angle of repose, interdune flats, smaller dunes on their backs; coloured as sand in the viewer. See `docs/lua_reference.md` §10, "Dune fields" |
+| `Dunes.Field` | the script's outputs | the prelude's dune macro, three styles: `"procedural"` (default, analytic, no repetition), `"simulated"` (`Erosion.Wind` on a periodic grid) and `"star"`; slip faces at the angle of repose, dunes of every size; coloured as sand in the viewer. See `docs/lua_reference.md` §10, "Dune fields" |
 | `Ranges.Carve`, `Ranges.Finish` | `R2->R1` and the script's outputs | the prelude's alpine macro: a range raised along crest lines, carved by `Erosion.StreamPower` and finished on the GPU; see `docs/lua_reference.md` §10, "Mountain ranges" |
 | `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
 | `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
