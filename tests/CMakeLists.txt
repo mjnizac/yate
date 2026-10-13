@@ -27,6 +27,17 @@ engine_add_unit_test(test_compiler)
 engine_add_unit_test(test_lua_errors)
 engine_add_unit_test(test_output_files)
 
+# The land/sea metrics the Lands macros are accepted against, on fields with known answers. Standard
+# library only, but it uses test_support like the rest.
+engine_add_unit_test(test_lands)
+
+# The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only,
+# standard library only, so it links nothing from the engine.
+add_executable(terrain_metrics tools/terrain_metrics.cpp)
+target_include_directories(terrain_metrics PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit")
+engine_set_warnings(terrain_metrics)
+set_target_properties(terrain_metrics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 # Black-box: runs terrain_export and terrain_viewer as a user would. It needs both built first, and a
 # device for the cases that actually export.
 engine_add_unit_test(test_cli)
