@@ -34,7 +34,7 @@ local function check(t)
     local allowed = {
         ridges = true, peaks = true, seed = true, center = true, extent = true, cell = true,
         steps = true, k = true, diffusion = true, talus = true, lift = true, wander = true, cells = true,
-        cirques = true, wobble = true,
+        cirques = true, wobble = true, fill = true, fill_radius = true,
     }
     for key in pairs(t) do
         if not allowed[key] then
@@ -259,6 +259,46 @@ function Ranges.Carve(t)
         }
     end
 
+    -- Deposition: what the slopes shed collects in the low ground. Every cell is raised towards a broad
+    -- average of its surroundings, less a little, but only low on the range: valley floors fill flat and
+    -- widen, and the foot of every slope gets a concave apron of scree, while the high ground keeps its
+    -- edges. Radius in metres, so it does not depend on the grid.
+    local fill = t.fill or 1.0
+    if fill > 0 then
+        local radius = math.max(1, math.floor((t.fill_radius or 500.0) / cell + 0.5))
+        local function box(src)
+            local tmp, out = {}, {}
+            for z = 0, n - 1 do
+                local sum, row = 0.0, z * n
+                for x = -radius, radius do sum = sum + src[row + math.min(math.max(x, 0), n - 1) + 1] end
+                for x = 0, n - 1 do
+                    tmp[row + x + 1] = sum / (2 * radius + 1)
+                    sum = sum + src[row + math.min(x + radius + 1, n - 1) + 1]
+                              - src[row + math.max(x - radius, 0) + 1]
+                end
+            end
+            for x = 0, n - 1 do
+                local sum = 0.0
+                for z = -radius, radius do sum = sum + tmp[math.min(math.max(z, 0), n - 1) * n + x + 1] end
+                for z = 0, n - 1 do
+                    out[z * n + x + 1] = sum / (2 * radius + 1)
+                    sum = sum + tmp[math.min(z + radius + 1, n - 1) * n + x + 1]
+                              - tmp[math.max(z - radius, 0) * n + x + 1]
+                end
+            end
+            return out
+        end
+        local broad = box(box(carved))
+        for i = 1, #carved do
+            local h = carved[i]
+            local low = smooth(1.0 - h / (tallest * 0.3))
+            local floor = broad[i] - tallest * 0.04
+            if floor > h then
+                carved[i] = h + math.min(floor - h, tallest * 0.08) * low * fill
+            end
+        end
+    end
+
     -- 4. On the GPU, read through a broad warp: the simulation routes water in eight directions on a
     -- square grid, and a channel that follows one of them for long reads as a ruled line.
     local wobble = t.wobble or 180.0
@@ -270,14 +310,36 @@ end
 
 -- The finish every range gets on the GPU: low rolling country around it, fine gullies on the steep
 -- walls of the simulated valleys, and the erosion passes. Returns the script's outputs.
-function Ranges.Finish(structure, tallest, seed)
-    seed = seed or 0
+function Ranges.Finish(structure, tallest, seed, options)
+    seed    = seed or 0
+    options = options or {}
     local country = Noises.fBm{ frequency = 0.0004, octaves = 3, amplitude = 45.0, seed = seed + 5 }
     local ground  = structure + country.value
     local mountain = Curves.Smoothstep{ input = structure, min = tallest * 0.05, max = tallest * 0.25 }
+
+    -- Strata: rock laid down in beds that were then tilted. The height is cut into steps along planes
+    -- dipping `dip` degrees, displaced by a broad noise so the beds bend: each step is a ledge (a flat
+    -- at its own inclination, where grass or snow lies) under a cliff. Seen from afar the ledges line up
+    -- into slanting bands across the whole mountain. Only on the middle and upper slopes, and only in
+    -- patches, so some faces are bedded rock and others are not.
+    local dip    = math.rad(options.dip or 15.0)
+    local strike = math.rad(options.strike or 25.0 + 80.0 * ((seed * 2654435761) % 1000) / 1000.0)
+    local c      = Terrain.Coords{}
+    local tilt   = (c.x * math.cos(strike) + c.z * math.sin(strike)) * math.tan(dip)
+    local bend   = Noises.fBm{ frequency = 0.0005, octaves = 3, amplitude = 220.0, seed = seed + 81 }
+    local plane  = tilt + bend.value
+    local step   = options.bed or 180.0
+    local bedded = Curves.Terrace{ input = ground + plane, step = step, sharpness = 0.82 } - plane
+    local patches = Curves.Smoothstep{
+        input = Noises.fBm{ frequency = 0.00035, octaves = 2, amplitude = 1.0, seed = seed + 83 }.value,
+        min = 0.0, max = 0.35,
+    }
+    local band = Curves.Smoothstep{ input = structure, min = tallest * 0.25, max = tallest * 0.5 }
+    local strata = Combine.Blend{ a = ground, b = bedded, mask = band * patches * (options.strata or 1.0) }
+
     -- Few octaves and long cells: streaks running down the walls, not grain.
     local gullied = Erosion.Gullies{
-        input = ground, cell = 420.0, octaves = 3, strength = 18.0, full = 0.7, seed = seed + 53,
+        input = strata, cell = 420.0, octaves = 3, strength = 18.0, full = 0.7, seed = seed + 53,
     }
     -- A second, finer generation on the walls of the first: what reads as erosion at close range.
     local fine = Erosion.Gullies{
