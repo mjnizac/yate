@@ -445,8 +445,11 @@ private:
     if (name == "billow") {
         return NoiseKind::Billow;
     }
+    if (name == "cellular") {
+        return NoiseKind::Cellular;
+    }
     ENGINE_FAIL(ErrorCode::ScriptError, ErrorStage::Script,
-                "unknown noise kind '{}'; expected simplex, ridged or billow", name);
+                "unknown noise kind '{}'; expected simplex, ridged, billow or cellular", name);
 }
 
 // --- Erosion and the sample spacing ---------------------------------------------------------------
@@ -697,6 +700,9 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     });
     noises.set_function("Billow", [noise](sol::this_state lua, sol::table table) {
         return noise(lua, std::move(table), "Noises.Billow", "billow");
+    });
+    noises.set_function("Cellular", [noise](sol::this_state lua, sol::table table) {
+        return noise(lua, std::move(table), "Noises.Cellular", "cellular");
     });
 
     // --- Terrain --------------------------------------------------------------------------------

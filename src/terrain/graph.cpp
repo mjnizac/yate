@@ -177,6 +177,11 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
             "Noise lacunarity must be strictly greater than zero, got {}", params.lacunarity));
     }
 
+    if (params.kind == NoiseKind::Cellular && params.domain == Domain::R3) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
+                                              location.file, location.line,
+                                              "cellular noise is 2D only; drop 'domain = 3'"));
+    }
     const b8_t warped = params.position.IsValid();
     if (warped) {
         if (Status checked = CheckValue(params.position, "Noise position", location); !checked) {

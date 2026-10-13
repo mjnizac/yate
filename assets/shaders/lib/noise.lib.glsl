@@ -206,9 +206,50 @@ vec4 Billow3D(vec3 p, uint seed) {
     return vec4(2.0 * s * n.x - 1.0, (2.0 * s) * n.yzw);
 }
 
+// --- 2D cellular ---------------------------------------------------------------------------------
+//
+// Worley's F2 - F1: the distance to the second nearest of a set of jittered lattice points minus the
+// distance to the nearest. It is zero on the boundaries between cells and grows towards each point,
+// so `1 - 2 (F2 - F1)` is a net of sharp ridges along the boundaries around a pit at every point,
+// with planar faces between: arêtes around cirques, or with the sign flipped, faceted peaks between
+// V valleys. Mostly in [-1, 1], below it near a point far from its neighbours; not clamped, because a
+// clamp left flat polygons on the floors. The gradient is exact away from the boundaries,
+//
+//   d(F2 - F1)/dp = (p - c2) / F2 - (p - c1) / F1,
+//
+// and on a boundary, where the nearest two swap, the first one found in a fixed order wins, which is
+// deterministic. A 5 x 5 search, because with points anywhere in their cell the second nearest can be
+// two cells away.
+vec3 Cellular2D(vec2 p, uint seed) {
+    vec2  cell = floor(p);
+    float d1 = 1e9, d2 = 1e9;
+    vec2  c1 = vec2(0.0), c2 = vec2(0.0);
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
+            ivec2 lattice = ivec2(cell) + ivec2(i, j);
+            uint  h       = HashLattice2(lattice, seed);
+            vec2  point   = vec2(lattice) + vec2(HashToUnit(h), HashToUnit(HashMix(h ^ ENGINE_HASH_PHI)));
+            float d       = length(p - point);
+            if (d < d1) {
+                d2 = d1;
+                c2 = c1;
+                d1 = d;
+                c1 = point;
+            } else if (d < d2) {
+                d2 = d;
+                c2 = point;
+            }
+        }
+    }
+    float f = d2 - d1;
+    vec2 g = (p - c2) / max(d2, 1e-6) - (p - c1) / max(d1, 1e-6);
+    return vec3(1.0 - 2.0 * f, -2.0 * g);
+}
+
 // Base function ids, matching engine::terrain::NoiseKind.
-#define ENGINE_BASE_SIMPLEX 0u
-#define ENGINE_BASE_RIDGED  1u
-#define ENGINE_BASE_BILLOW  2u
+#define ENGINE_BASE_SIMPLEX  0u
+#define ENGINE_BASE_RIDGED   1u
+#define ENGINE_BASE_BILLOW   2u
+#define ENGINE_BASE_CELLULAR 3u
 
 #endif // ENGINE_LIB_NOISE_GLSL
