@@ -1,0 +1,10 @@
+# Third-party images and height maps are not versioned unless their licence says so in source.md.
+*.png
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.avif
+*.webp
+*.tif
+*.tiff

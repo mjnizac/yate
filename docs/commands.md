@@ -195,3 +195,19 @@ of the op that produced them, so `ThermalErosion:53` is the erosion on line 53 o
 ```bash
 tracy-capture -o traces/viewer.tracy -f
 ```
+
+## Measuring land and sea: `terrain_metrics`
+
+```bash
+build/Release/bin/terrain_metrics out/island_export            # a directory with height.raw and metadata.json
+build/Release/bin/terrain_metrics out/x/height.raw --width 1024 --depth 1024 --resolution 8 --level 0
+build/Release/bin/terrain_metrics out/island_export --json --box 2,7
+```
+
+Reads an exported height field and reports it as land (above `--level`, the sea level) and sea: land
+fraction, masses and the share of the largest, lagoons (water that never reaches the edge), coast
+length and per km2, box-counting dimension with its R2 over `--box kmin,kmax` cells (2^k), the narrowest
+gap between masses, land height percentiles and mean slope by depth (shelf, slope, abyssal). The
+library is `tests/unit/terrain_metrics.hpp`, the same code `test_lands` checks against fields with known
+answers, so a number from the tool means what the test says it means. The dimension is a diagnostic per
+coast type and range of scales, not a target: it changes with the resolution, the window and the level.
