@@ -154,8 +154,8 @@ void main() {
         normal = normalize(normal - vec3(ripple.x, 0.0, ripple.y) * 0.3);
         vec3 sand = vec3(0.66, 0.45, 0.24)
                   * (0.95 + 0.08 * ValueNoise(vec3(vWorldPosition.x, 0.0, vWorldPosition.z) / 400.0));
-        float lee = smoothstep(0.08, 0.22, 1.0 - clamp(normal.y, 0.0, 1.0));
-        albedo    = mix(sand, sand * vec3(0.86, 0.80, 0.76), lee);
+        float lee = smoothstep(0.06, 0.25, 1.0 - clamp(normal.y, 0.0, 1.0));
+        albedo    = mix(sand, sand * vec3(0.80, 0.72, 0.66), lee);
     }
 
     float sun = max(dot(normal, kSunDirection), 0.0) * sunlit;
@@ -163,7 +163,11 @@ void main() {
     // which is most of what makes an unlit slope legible.
     float sky = 0.5 + 0.5 * normal.y;
 
-    vec3 lit = albedo * (kSunColor * sun + kSkyColor * sky * 0.4);
+    // Sand is lit harder than rock and grass: deserts are bright and their shade is deep, which is
+    // most of what makes a dune field legible.
+    float ambient = (pc.look & 0xFFu) == 1u ? 0.28 : 0.4;
+    float direct  = (pc.look & 0xFFu) == 1u ? 1.15 : 1.0;
+    vec3 lit = albedo * (kSunColor * sun * direct + kSkyColor * sky * ambient);
 
     // Water, computed from the eye and this fragment rather than drawn: alpha zero means none.
     vec4 water = unpackUnorm4x8(pc.waterColour);
