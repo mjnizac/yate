@@ -32,7 +32,9 @@ struct ScriptEnvironment {
     /// bookkeeping, so a script that needs seconds is a script that loops; the budget turns that into
     /// an error with a line number instead of a process that never returns, which matters most in the
     /// viewer, where the script runs on a worker thread at every hot reload.
-    f64_t timeoutSeconds = 10.0;
+    // Long enough for a script that simulates erosion over a whole grid (Erosion.StreamPower takes
+    // seconds), short enough that an infinite loop is still caught.
+    f64_t timeoutSeconds = 60.0;
     /// User parameters, exposed to the script as named fields of `params`.
     const terrain::Params* params = nullptr;
 };
