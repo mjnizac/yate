@@ -1203,3 +1203,12 @@ heightmaps) and how each became a step of `Dunes.Field`:
 * **Colour does a lot.** Sand needs its own palette; the viewer gets it through a new `look` key in the
   returned table, with ripples across the wind drawn in the shader (a few metres apart, larger than real,
   so a camera at 300 m sees them).
+
+**Revised: dunes from a wind simulation.** The pointwise pattern was judged too abrupt, too uniform in
+size, and its ripples too strong. Tools and papers on desert scenery (Werner 1995; Beneš and Roa 2004,
+"Simulating desert scenery"; Desertscape simulation) all move sand rather than draw it, so the default is
+now `Erosion.Wind`, Werner's slab model with shadow, avalanche and reptation. What tuning it showed:
+too few iterations leave grain, too many merge everything into a few huge dunes with wide bare flats;
+more starting sand gives continuous ridges, and varying it gives the mix of sizes; slab heights make the
+simulated dunes steep for their size, so the relief is scaled down rather than smoothed away. GLSL's
+`%` on a negative int is undefined, which drew a seam where the periodic grid wrapped.

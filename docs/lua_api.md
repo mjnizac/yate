@@ -99,7 +99,8 @@ numbers drift, and this one is the index.
 | `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
 | `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
 | `Erosion.StreamPower` | a list of numbers | CPU, not a graph op: stream-power erosion with uplift over a whole grid (`size`, `cell`, `height`, `uplift` lists x fastest; `iterations`, `k`, `m`, `talus`, `diffusion`, `refresh`), the drainage network no section can compute; feed the result to `Terrain.Grid` |
-| `Terrain.Grid` | `R2->R1` | a list of numbers (`values`, `size = { w, d }`, `origin`, `cell`) sampled with Catmull-Rom at `position` (default the world position), edge held outside |
+| `Terrain.Grid` | `R2->R1` | a list of numbers (`values`, `size = { w, d }`, `origin`, `cell`) sampled with Catmull-Rom at `position` (default the world position), edge held outside or repeated with `wrap = true` |
+| `Erosion.Wind` | a list of numbers | CPU, not a graph op: Werner's aeolian slab model over a periodic grid (`size`, `cell`, `slab`, `height`; `iterations`, `hop`, `p_sand`, `p_bare`, `shadow`, `repose`, `creep`, `smooth`, `seed`), wind along +x; feed the result to `Terrain.Grid{ wrap = true }` |
 | `Erosion.Gullies` | `R2->R1` | branching gullies cut across the slope of `input` from its gradient (`gradient`, default `Terrain.Gradient`), drawn at `position` (default the world position); `cell` metres, `octaves`, `strength` metres, `full` the slope of full effect. Pointwise: the drainage pattern at kilometre scale that the simulations cannot reach |
 
 `Filters.Blur`, `Terrain.Gradient` and the two erosions are what put a halo on a graph: their radii

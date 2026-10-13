@@ -968,34 +968,31 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/mountain_range.l
 
 ```lua
 local function main(params)
-    return Dunes.Field{ seed = params.seed, wind = 20, wavelength = 650, height = 80 }
+    return Dunes.Field{ seed = params.seed, wind = 20 }
 end
 return main
 ```
 
-What it builds, all pointwise except the final settling:
+**The dunes come from the wind.** `Erosion.Wind` runs Werner's slab model on a periodic grid (192 x 192
+cells of 33 m by default, about 4 s, cached): slabs of sand are lifted and hop downwind, settle more
+readily on sand than on bare ground and always in the wind shadow behind a crest (15 degrees), and
+avalanche past the angle of repose; a fraction only creeps one cell (reptation), which rounds crests.
+Dunes form, migrate and merge. The starting sand varies over kilometres (`sand`, `variety`): where it is
+thick the wind builds tall sinuous ridges, where it is thin smaller ones and bare flats, so a field has
+dunes of every size. The grid tiles the plane (`Terrain.Grid{ wrap = true }`) in a frame turned to `wind`.
 
-1. **The dune profile** along the wind: a sawtooth (`x - Terrace(x)`) shaped into a long convex back
-   (`back`, 0.8 of a period) and a short straight slip face, with a sharp brink between them.
-2. **Crescents.** The distance along the wind is bent by a billow noise of the position across it;
-   billow's cusps are where two arcs meet, so the crests bow into barchan crescents with horns
-   downwind (`sinuosity`).
-3. **Vigour and flats.** A slow noise scales the dunes, so some chains are tall and others break into
-   separate barchans; below `flats` of a dune's height the ground is the interdune flat.
-4. **Small dunes** on the backs of the large ones, on a wind turned 25 degrees, cusp-free (`small`).
-5. **The swell** of the sand sea over kilometres (`swell`).
-6. **Settling:** a thermal pass at the angle of repose (`repose`, 33 degrees).
-
-`style = "star"` takes the highest of three fields at 120 degrees, which gives star dunes. The
-result carries `look = { palette = "sand", wind = wind }`, so the viewer draws sand with ripples
-across the wind on the gentle slopes.
+Then, on the GPU: the relief scaled by `relief` (0.7, which softens the transitions without changing the
+shapes), small dunes a few metres high in patches on the gentle backs (`small_wavelength`,
+`small_height`), the swell of the sand sea, and a light settling at the angle of repose. The viewer draws
+sand (`look`) with faint ripples across the wind.
 
 | Key | Default | |
 | --- | --- | --- |
 | `wind` | 20 | degrees, the direction the wind blows towards |
-| `wavelength`, `height` | 650 m, 80 m | between crests; dune height |
-| `sinuosity`, `back`, `flats`, `small`, `swell`, `repose` | 0.45, 0.8, 0.28, 0.12, 0.8, 33 | |
-| `style` | `"transverse"` | or `"star"` |
+| `sand`, `variety` | 55 m, 0.85 | mean starting sand and how much it varies |
+| `iterations`, `cells`, `cell`, `smooth` | 300, 192, 33 m, 1 | the simulation: more iterations, fewer and larger dunes |
+| `relief`, `small_wavelength`, `small_height`, `swell`, `repose` | 0.7, 240 m, 4 m, 30 m, 32 | the finish |
+| `style` | `"simulated"` | or `"star"`: the older pointwise pattern of three winds (`wavelength`, `height`, `sinuosity`, `back`, `flats`, `small`) |
 
 ```bash
 build/Release/bin/terrain_viewer --script assets/scripts/terrains/dunes.lua --view 200,-30,4000
