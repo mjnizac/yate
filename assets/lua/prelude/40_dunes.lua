@@ -1,7 +1,12 @@
 -- Dunes: a sand sea shaped by one wind.
 --
--- `Dunes.Field` is the dune macro. What makes sand read as dunes, from the references
--- (docs/references/dunes, not versioned):
+-- `Dunes.Field` is the dune macro, and a dispatcher over styles:
+--
+--   "simulated"  Werner's slab model (`Erosion.Wind`) on a periodic grid: emergent, tiles every
+--                `cells * cell` metres, a few seconds the first time. ("transverse" is a deprecated alias.)
+--   "star"       three crest families at 120 degrees, analytic and pointwise.
+--
+-- What makes sand read as dunes, from the references (docs/references/dunes, not versioned):
 --
 --   * the profile is asymmetric: a long, gentle, slightly convex back facing the wind (about 10
 --     degrees) and a short, straight slip face behind the crest at the angle of repose (about 33);
@@ -12,9 +17,9 @@
 --   * smaller dunes ride on the backs of the large ones, on a slightly different wind;
 --   * under all of it the sand sea itself swells over kilometres.
 --
--- All pointwise but the last pass, so a field costs almost nothing and is the same at any spacing.
--- The repeating profile comes from a sawtooth, `x - Terrace(x)`, which is continuous where it wraps
--- because the profile is zero at both ends of a period.
+-- The analytic style is pointwise but for the last pass, so it costs almost nothing and is the same at
+-- any spacing. The repeating profile comes from a sawtooth, `x - Terrace(x)`, which is continuous where
+-- it wraps because the profile is zero at both ends of a period.
 --
 -- Run by the engine after `30_ranges.lua`.
 
@@ -28,12 +33,28 @@ local math = math
 
 local Dunes = {}
 
-local ACCEPTED = {
-    seed = true, wind = true, wavelength = true, height = true, sinuosity = true, back = true,
-    flats = true, small = true, swell = true, style = true, repose = true, sand = true, cell = true,
-    cells = true, iterations = true, variety = true, relief = true, small_wavelength = true,
-    small_height = true, smooth = true, draa_wavelength = true, draa_height = true,
+-- Keys every style takes, and the keys each style adds. An unknown key is an error, and so is a key
+-- that belongs to another style: it would be silently ignored, which is the worst way to fail.
+local COMMON = { seed = true, wind = true, style = true, repose = true, swell = true }
+local ONLY = {
+    simulated = {
+        sand = true, variety = true, cell = true, cells = true, iterations = true, smooth = true,
+        relief = true, small_wavelength = true, small_height = true, draa_wavelength = true,
+        draa_height = true,
+    },
+    star = {
+        wavelength = true, height = true, sinuosity = true, back = true, flats = true, small = true,
+    },
 }
+local STYLES = "'simulated' or 'star' ('transverse' is a deprecated alias of 'simulated')"
+
+local function keys_of(style)
+    local list = {}
+    for k in pairs(COMMON) do list[#list + 1] = k end
+    for k in pairs(ONLY[style]) do list[#list + 1] = k end
+    table.sort(list)
+    return table.concat(list, ", ")
+end
 
 -- One family of dunes: the profile along `wind` (degrees), `wavelength` metres between crests, in
 -- [0, 1] with 1 on the crest. `back` is the fraction of a period the windward slope takes.
@@ -73,54 +94,58 @@ local function crests(c, wind, wavelength, back, sinuosity, seed, smooth, round)
 end
 
 -- A dune field: returns the script's outputs, coloured as sand in the viewer.
+--
+-- Lengths and heights are metres, angles degrees. `swell` (metres) is the amplitude of the slow swell
+-- of the sand sea; `repose` (33 by default in every style) is the angle slip faces stand at.
 function Dunes.Field(t)
     t = t or {}
     if type(t) ~= "table" then
         fail("Dunes.Field expects a table of named arguments, as in Dunes.Field{ ... }")
     end
+    local style = t.style or "simulated"
+    if style == "transverse" then
+        print("warning: Dunes.Field style 'transverse' is deprecated; it is the 'simulated' style")
+        style = "simulated"
+    end
+    if style ~= "simulated" and style ~= "star" then
+        fail("Dunes.Field style must be " .. STYLES .. ", got '" .. tostring(style) .. "'")
+    end
     for key in pairs(t) do
-        if not ACCEPTED[key] then
-            fail("Dunes.Field does not take '" .. tostring(key) .. "'; it accepts seed, wind, sand, "
-                 .. "variety, cell, cells, iterations, swell, repose, style, and for the star pattern "
-                 .. "wavelength, height, sinuosity, back, flats, small")
+        if not COMMON[key] and not ONLY[style][key] then
+            local other = style == "simulated" and "star" or "simulated"
+            local hint = ONLY[other][key] and (" (that key belongs to style '" .. other .. "')") or ""
+            fail("Dunes.Field style '" .. style .. "' does not take '" .. tostring(key) .. "'" .. hint
+                 .. "; it accepts " .. keys_of(style))
         end
     end
-    local seed       = t.seed or 0
-    local wind       = t.wind or 20.0
+    local seed  = t.seed or 0
+    local wind  = t.wind or 20.0
+    local swell = t.swell or (style == "star" and 64.0 or 25.0)
+    if style == "simulated" then
+        return Dunes.Simulated(t)
+    end
+
     local wavelength = t.wavelength or 650.0
     local height     = t.height or 80.0
     local sinuosity  = t.sinuosity or 0.45
     local back       = t.back or 0.8
     local flats      = t.flats or 0.28
     local small      = t.small or 0.12
-    local swell      = t.swell or 0.8
-    local style      = t.style or "simulated"
     if wavelength <= 0 or height <= 0 or back <= 0.5 or back >= 0.95 then
-        fail("Dunes.Field needs wavelength and height greater than zero and back in (0.5, 0.95)")
+        fail("Dunes.Field style 'star' needs wavelength and height greater than zero and back in "
+             .. "(0.5, 0.95)")
     end
-
     local c = Terrain.Coords{}
 
-    if style == "transverse" or style == "simulated" then
-        return Dunes.Simulated(t)
-    end
-
-    -- The big dunes. A star field is three winds at 120 degrees, the highest of them winning, which
-    -- puts arms in three directions round every peak.
-    local big
-    if style == "star" then
-        big = Combine.Max{
-            a = Combine.Max{
-                a = crests(c, wind, wavelength, back, sinuosity, seed + 1),
-                b = crests(c, wind + 120.0, wavelength * 1.1, back, sinuosity, seed + 2),
-            },
-            b = crests(c, wind + 240.0, wavelength * 0.9, back, sinuosity, seed + 3),
-        }
-    elseif style == "transverse" then
-        big = crests(c, wind, wavelength, back, sinuosity, seed + 1)
-    else
-        fail("Dunes.Field style must be 'simulated' or 'star', got '" .. tostring(style) .. "'")
-    end
+    -- The big dunes: three winds at 120 degrees, the highest of them winning, which puts arms in three
+    -- directions round every peak.
+    local big = Combine.Max{
+        a = Combine.Max{
+            a = crests(c, wind, wavelength, back, sinuosity, seed + 1),
+            b = crests(c, wind + 120.0, wavelength * 1.1, back, sinuosity, seed + 2),
+        },
+        b = crests(c, wind + 240.0, wavelength * 0.9, back, sinuosity, seed + 3),
+    }
 
     -- Height wanders along each crest and between crests, so some chains are tall and others break
     -- into separate barchans; below `flats` of a dune's height the ground is the interdune flat.
@@ -136,7 +161,7 @@ function Dunes.Field(t)
 
     -- The sand sea's own swell, kilometres across.
     local sea = Noises.fBm{
-        frequency = 1.0 / (wavelength * 12.0), octaves = 3, amplitude = height * swell, seed = seed + 6,
+        frequency = 1.0 / (wavelength * 12.0), octaves = 3, amplitude = swell, seed = seed + 6,
     }
 
     local sand = body * height + ripple * on * (height * small) + sea.value
@@ -147,7 +172,7 @@ function Dunes.Field(t)
     }
 
     return {
-        height  = { value = settled, range = { -height * (swell + 1.0), height * (swell + 2.5) } },
+        height  = { value = settled, range = { -(height + swell * 1.5), height * 2.5 + swell * 1.5 } },
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } },
         look    = { palette = "sand", wind = wind },
     }
@@ -185,7 +210,7 @@ function Dunes.Simulated(t)
     local cell    = t.cell or 30.0
     local sand    = t.sand or 70.0
     local variety = t.variety or 0.3
-    local repose  = t.repose or 32.0
+    local repose  = t.repose or 33.0
     local swell   = t.swell or 25.0
     local slab    = math.tan(math.rad(repose)) * cell / 4.0
     local hash, value = make_noise(seed)
