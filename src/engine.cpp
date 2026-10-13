@@ -6,6 +6,7 @@
 #include <engine/memory/general.hpp>
 #include <engine/platform.hpp>
 #include <engine/terrain/kernels.hpp>
+#include <engine/terrain/stream_power.hpp>
 #include <engine/vulkan/context.hpp>
 #include <engine/vulkan/swapchain.hpp>
 #include <engine/vulkan/window.hpp>
@@ -315,6 +316,7 @@ Status shutdown(Application* application) {
         g_runtime.windowSystemReady = false;
     }
     if (g_runtime.memoryReady) {
+        terrain::ReleaseStreamPowerCache();
         memory::Shutdown();
         g_runtime.memoryReady = false;
     }

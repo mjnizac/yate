@@ -50,4 +50,8 @@ struct StreamPowerParams {
 [[nodiscard]] Status StreamPowerErode(std::span<f64_t> height, std::span<const f64_t> uplift,
                                       const StreamPowerParams& params);
 
+/// The last few results are cached (see stream_power.cpp); this frees them. Called at engine shutdown,
+/// before the memory system checks for leaks.
+void ReleaseStreamPowerCache() noexcept;
+
 } // namespace engine::terrain

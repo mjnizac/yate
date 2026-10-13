@@ -1,24 +1,114 @@
 #include <engine/terrain/stream_power.hpp>
 
+#include <engine/log.hpp>
 #include <engine/memory/general.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
+#include <chrono>
+#include <cstring>
+#include <mutex>
 #include <utility>
 
 namespace engine::terrain {
+
+Status StreamPowerRun(std::span<f64_t> height, std::span<const f64_t> uplift,
+                      const StreamPowerParams& params);
 
 namespace {
 
 constexpr std::array<i32_t, 8> kDx = {-1, 0, 1, -1, 1, -1, 0, 1};
 constexpr std::array<i32_t, 8> kDz = {-1, -1, -1, 0, 0, 1, 1, 1};
 
+// The viewer re-runs a script whenever the level of detail changes, because the sample spacing is part
+// of what a script sees; a simulation over the whole terrain does not depend on it, and took seconds
+// every time the camera crossed a level. The last few results are kept, keyed by a hash of everything
+// that goes in, so the same inputs come back at once. The hash is over the exact bits, so a cached
+// result is the result.
+constexpr usize_t kCacheEntries = 4;
+
+struct CacheEntry {
+    u64_t                    key = 0;
+    std::pmr::vector<f64_t>* result = nullptr;
+};
+
+std::mutex                          g_cacheMutex;
+std::array<CacheEntry, kCacheEntries> g_cache{};
+usize_t                             g_cacheNext = 0;
+
+[[nodiscard]] u64_t Mix(u64_t h, const void* data, usize_t bytes) {
+    const auto* p = static_cast<const unsigned char*>(data);
+    for (usize_t i = 0; i < bytes; ++i) {
+        h ^= p[i];
+        h *= 0x100000001B3ull;
+    }
+    return h;
+}
+
+[[nodiscard]] u64_t Key(std::span<const f64_t> height, std::span<const f64_t> uplift,
+                        const StreamPowerParams& params) {
+    u64_t h = 0xCBF29CE484222325ull;
+    const f64_t numbers[] = {params.cell, params.k, params.m, params.talus, params.diffusion};
+    const u32_t counts[]  = {params.width, params.depth, params.iterations, params.refresh};
+    h = Mix(h, numbers, sizeof(numbers));
+    h = Mix(h, counts, sizeof(counts));
+    h = Mix(h, height.data(), height.size_bytes());
+    return Mix(h, uplift.data(), uplift.size_bytes());
+}
+
 } // namespace
 
 Status StreamPowerErode(std::span<f64_t> height, std::span<const f64_t> uplift,
                         const StreamPowerParams& params) {
+    const u64_t key = Key(height, uplift, params);
+    {
+        std::lock_guard lock(g_cacheMutex);
+        for (const CacheEntry& entry : g_cache) {
+            if (entry.result != nullptr && entry.key == key && entry.result->size() == height.size()) {
+                std::memcpy(height.data(), entry.result->data(), height.size_bytes());
+                LOG_INFO("stream power: {}x{} grid, {} step(s), from the cache", params.width,
+                         params.depth, params.iterations);
+                return {};
+            }
+        }
+    }
+    const auto started = std::chrono::steady_clock::now();
+    if (Status run = StreamPowerRun(height, uplift, params); !run) {
+        return run;
+    }
+    LOG_INFO("stream power: {}x{} grid, {} step(s) in {:.0f} ms", params.width, params.depth,
+             params.iterations,
+             std::chrono::duration<f64_t, std::milli>(std::chrono::steady_clock::now() - started)
+                 .count());
+
+    std::lock_guard lock(g_cacheMutex);
+    CacheEntry& slot = g_cache[g_cacheNext];
+    g_cacheNext      = (g_cacheNext + 1) % kCacheEntries;
+    if (slot.result == nullptr) {
+        void* storage = memory::General().Allocate(sizeof(std::pmr::vector<f64_t>),
+                                                   alignof(std::pmr::vector<f64_t>));
+        slot.result   = ::new (storage) std::pmr::vector<f64_t>(&memory::General().Resource());
+    }
+    slot.key = key;
+    slot.result->assign(height.begin(), height.end());
+    return {};
+}
+
+void ReleaseStreamPowerCache() noexcept {
+    std::lock_guard lock(g_cacheMutex);
+    for (CacheEntry& entry : g_cache) {
+        if (entry.result != nullptr) {
+            entry.result->~vector();
+            memory::General().Free(entry.result);
+            entry.result = nullptr;
+        }
+    }
+}
+
+Status StreamPowerRun(std::span<f64_t> height, std::span<const f64_t> uplift,
+                      const StreamPowerParams& params) {
     const usize_t count = static_cast<usize_t>(params.width) * params.depth;
     if (params.width < 3 || params.depth < 3 || height.size() != count || uplift.size() != count
         || !(params.cell > 0.0) || !(params.k >= 0.0) || !(params.m >= 0.0)
