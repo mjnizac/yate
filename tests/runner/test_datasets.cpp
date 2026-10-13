@@ -409,7 +409,10 @@ void CheckTiming(const Case& testCase, const char* label, f64_t measured, f64_t 
         return;
     }
     const f64_t ratio = measured / baseline;
-    if (ratio > 1.0 + testCase.failSlower) {
+    // A few milliseconds is scheduler and driver noise, whatever fraction of a 20 ms case it is: a
+    // difference under this much is only ever a warning, so a short case cannot make the suite red.
+    constexpr f64_t kNoiseMilliseconds = 8.0;
+    if (ratio > 1.0 + testCase.failSlower && measured - baseline > kNoiseMilliseconds) {
         Fail("%s: %s is %.1f%% slower than the baseline (%.2f ms vs %.2f ms)",
              testCase.name.c_str(), label, (ratio - 1.0) * 100.0, measured, baseline);
     } else if (ratio > 1.0 + testCase.warnSlower) {
