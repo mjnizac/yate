@@ -190,6 +190,16 @@ constexpr OpInfo kOps[] = {
      .resolutionWord = kMaxNodeParams,
      .hasReference   = false, // Hashes the job seed, which the pointwise reference does not receive.
      .specFieldCount = 0},
+    {.kind           = OpKind::Grid,
+     .name           = "Grid",
+     .shader         = "ops/grid.comp.spv",
+     .nodeClass      = NodeClass::Pointwise,
+     // The position. The values arrive in input slot 1, bound by the evaluator, not the compiler.
+     .maxInputs      = 1,
+     .maxChannels    = 1,
+     .resolutionWord = kMaxNodeParams,
+     .hasReference   = false, // Reads the grid buffer, which the pointwise reference does not see.
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -820,6 +830,7 @@ b8_t EvalPointwise(const Graph::Node& node,
         case OpKind::Coords:
         case OpKind::Noise:
         case OpKind::Gullies:
+        case OpKind::Grid:
         case OpKind::Blur:
         case OpKind::Count:
             // Both depend on world position, which a pointwise reference does not receive.

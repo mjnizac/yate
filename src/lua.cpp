@@ -24,6 +24,7 @@
 #include <engine/terrain/graph.hpp>
 #include <engine/terrain/kernels.hpp>
 #include <engine/terrain/sha256.hpp>
+#include <engine/terrain/stream_power.hpp>
 
 #include <sol/sol.hpp>
 
@@ -320,6 +321,28 @@ public:
             out[count++] = ReadPair(entry.as<sol::table>(), key);
         }
         return count;
+    }
+
+    /// A flat list of exactly `count` numbers, appended to `out` as `T`.
+    template <typename T>
+    void Numbers(const char* key, usize_t count, std::pmr::vector<T>& out) {
+        Accept(key);
+        const sol::optional<sol::table> list = m_table[key];
+        if (!list.has_value()) {
+            Fail(m_location, "{} needs a list of {} numbers as '{}'", m_op, count, key);
+        }
+        if (list->size() != count) {
+            Fail(m_location, "{} expects '{}' to hold {} numbers, got {}", m_op, key, count,
+                 list->size());
+        }
+        out.reserve(out.size() + count);
+        for (usize_t i = 1; i <= count; ++i) {
+            const sol::optional<f64_t> value = (*list)[i];
+            if (!value.has_value()) {
+                Fail(m_location, "{} expects entry {} of '{}' to be a number", m_op, i, key);
+            }
+            out.push_back(static_cast<T>(*value));
+        }
     }
 
     [[nodiscard]] SourceLocation Location() const noexcept { return m_location; }
@@ -991,6 +1014,66 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.iterations = ScaleErosion(params.iterations, spacing, "Erosion.Thermal").iterations;
 
         return Handle{Unwrap(graph.AddThermalErosion(input, params, location))};
+    });
+
+    // A field from a grid of numbers the script computed, sampled smoothly at `position`. The values are
+    // listed x fastest; `origin` is where the first one is, in metres, and `cell` the spacing.
+    terrain.set_function("Grid", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Terrain.Grid", location);
+        const std::array<f64_t, 2> size   = args.Pair("size", {0.0, 0.0});
+        const std::array<f64_t, 2> origin = args.Pair("origin", {0.0, 0.0});
+        Graph::GridParams          params;
+        params.width   = static_cast<u32_t>(size[0]);
+        params.depth   = static_cast<u32_t>(size[1]);
+        params.originX = static_cast<f32_t>(origin[0]);
+        params.originZ = static_cast<f32_t>(origin[1]);
+        params.cell    = args.Float("cell", 1.0);
+        if (params.width != size[0] || params.depth != size[1] || params.width < 2 || params.depth < 2) {
+            Fail(location, "Terrain.Grid expects size as a pair of whole numbers of at least 2");
+        }
+        std::pmr::vector<f32_t> values(&memory::General().Resource());
+        args.Numbers("values", static_cast<usize_t>(params.width) * params.depth, values);
+        const Value position = PositionOrCoords(args, graph, location);
+        args.Finish();
+        return Handle{Unwrap(graph.AddGrid(position, values, params, location))};
+    });
+
+    // Stream-power erosion of a whole grid on the CPU (see stream_power.hpp). Takes and returns plain
+    // lists of numbers, x fastest, so a script builds the grid, erodes it and hands it to Terrain.Grid.
+    erosion.set_function("StreamPower", [](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Erosion.StreamPower", location);
+        const std::array<f64_t, 2> size = args.Pair("size", {0.0, 0.0});
+        terrain::StreamPowerParams params;
+        params.width = static_cast<u32_t>(size[0]);
+        params.depth = static_cast<u32_t>(size[1]);
+        if (params.width != size[0] || params.depth != size[1] || params.width < 3 || params.depth < 3
+            || static_cast<u64_t>(params.width) * params.depth > (16ull << 20)) {
+            Fail(location, "Erosion.StreamPower expects size as a pair of whole numbers of at least 3");
+        }
+        params.cell       = args.Number("cell", 50.0);
+        params.iterations = args.Count("iterations", 100, 1, 100000);
+        params.k          = args.Number("k", 1e-4);
+        params.m          = args.Number("m", 0.5);
+        params.talus      = args.Number("talus", 0.0);
+        params.diffusion  = args.Number("diffusion", 0.0);
+        params.refresh    = args.Count("refresh", 1, 1, 1000);
+        const usize_t count = static_cast<usize_t>(params.width) * params.depth;
+        std::pmr::vector<f64_t> height(&memory::General().Resource());
+        std::pmr::vector<f64_t> uplift(&memory::General().Resource());
+        args.Numbers("height", count, height);
+        args.Numbers("uplift", count, uplift);
+        args.Finish();
+        if (Status eroded = terrain::StreamPowerErode(height, uplift, params); !eroded) {
+            Fail(location, "{}", eroded.error().Message());
+        }
+        sol::state_view view(lua);
+        sol::table      out = view.create_table(static_cast<i32_t>(count), 0);
+        for (usize_t i = 0; i < count; ++i) {
+            out[i + 1] = height[i];
+        }
+        return out;
     });
 
     // Gullies across the slope of `input`, from its gradient: the look of erosion where the simulation

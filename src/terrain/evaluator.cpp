@@ -35,6 +35,27 @@ Result<SectionResources> SectionResources::Create(vulkan::Context&     context,
         resources.m_slots.push_back(*slot);
     }
 
+    // Grid values: uploaded once, read by every section. Host-visible, so no staging copy; a grid is
+    // read a few times per sample and is small next to the sections.
+    if (!compiled.gridData.empty()) {
+        resources.m_memory       = &context.Memory();
+        const VkDeviceSize bytes = compiled.gridData.size() * sizeof(f32_t);
+        Result<vulkan::Buffer> grid = resources.m_memory->CreateBuffer(vulkan::BufferDesc{
+            .size  = bytes,
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            .category    = vulkan::VramCategory::Intermediate,
+            .hostVisible = true});
+        if (!grid) {
+            return std::unexpected(grid.error());
+        }
+        resources.m_grid = *grid;
+        std::memcpy(resources.m_grid.mapped, compiled.gridData.data(), bytes);
+        if (Status flushed = resources.m_memory->FlushBuffer(resources.m_grid, 0, bytes); !flushed) {
+            return std::unexpected(flushed.error());
+        }
+        resources.m_totalBytes += bytes;
+    }
+
     LOG_INFO("section resources ready: {} slot(s), {} KiB (plan said {} KiB)",
              resources.m_slots.size(), resources.m_totalBytes / 1024,
              compiled.stats.peakSectionBytes / 1024);
@@ -44,6 +65,11 @@ Result<SectionResources> SectionResources::Create(vulkan::Context&     context,
 SectionResources::~SectionResources() { Release(); }
 
 void SectionResources::Release() noexcept {
+    if (m_memory != nullptr && m_grid.IsValid()) {
+        m_memory->DestroyBuffer(m_grid);
+    }
+    m_grid   = vulkan::Buffer{};
+    m_memory = nullptr;
     if (m_pool != nullptr) {
         for (vulkan::SectionSlot& slot : m_slots) {
             m_pool->Release(slot);
@@ -59,10 +85,14 @@ SectionResources::SectionResources(SectionResources&& other) noexcept { *this = 
 SectionResources& SectionResources::operator=(SectionResources&& other) noexcept {
     if (this != &other) {
         Release();
-        m_pool       = other.m_pool;
-        m_slots      = std::move(other.m_slots);
-        m_totalBytes = other.m_totalBytes;
-        other.m_pool = nullptr;
+        m_pool         = other.m_pool;
+        m_slots        = std::move(other.m_slots);
+        m_totalBytes   = other.m_totalBytes;
+        m_memory       = other.m_memory;
+        m_grid         = other.m_grid;
+        other.m_memory = nullptr;
+        other.m_grid   = vulkan::Buffer{};
+        other.m_pool   = nullptr;
         other.m_totalBytes = 0;
     }
     return *this;
@@ -294,6 +324,9 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
             if (buffer != kInvalidBuffer) {
                 constants.outputs[channel] = resources.Slot(buffer).address;
             }
+        }
+        if (dispatch.kind == OpKind::Grid) {
+            constants.inputs[1] = resources.GridAddress();
         }
 
 #ifdef TRACY_ENABLE

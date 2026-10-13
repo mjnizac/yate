@@ -3,6 +3,7 @@
 #include <engine/assert.hpp>
 #include <engine/terrain/kernels.hpp>
 #include <engine/log.hpp>
+#include <engine/memory/general.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,7 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::Transform: return "Transform";
         case OpKind::Shape: return "Shape";
         case OpKind::Gullies: return "Gullies";
+        case OpKind::Grid: return "Grid";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -75,6 +77,7 @@ void PackFloat(std::array<u32_t, kMaxNodeParams>& params, usize_t word, f32_t va
 void Graph::Clear() noexcept {
     m_nodeCount   = 0;
     m_outputCount = 0;
+    m_gridData.clear();
 }
 
 const Graph::Node& Graph::NodeAt(u32_t index) const {
@@ -399,6 +402,57 @@ Result<Value> Graph::AddSlopeMask(Value gradient, f32_t minSlope, f32_t maxSlope
     node.channels[0]  = Mapping{Domain::R2, 1};
     PackFloat(node.params, 0, minSlope);
     PackFloat(node.params, 1, maxSlope);
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddGrid(Value position, std::span<const f32_t> values, const GridParams& params,
+                            SourceLocation location) {
+    // 16 M values, 64 MiB: far beyond any drainage grid, and a typo that asks for more is caught here.
+    constexpr u64_t kMaxGridValues = 16ull << 20;
+    if (Status checked = CheckValue(position, "Grid position", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    const Mapping planar{Domain::R2, 2};
+    if (!(position.mapping == planar)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Grid position must be {}, got {}", ToString(planar), ToString(position.mapping)));
+    }
+    const u64_t count = static_cast<u64_t>(params.width) * params.depth;
+    if (params.width < 2 || params.depth < 2 || count != values.size()
+        || m_gridData.size() + count > kMaxGridValues) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Grid needs at least 2 x 2 values and exactly width x depth of them ({} x {} = {}), got "
+            "{}; all grids together hold at most {}",
+            params.width, params.depth, count, values.size(), kMaxGridValues));
+    }
+    if (!(params.cell > 0.0f) || !std::isfinite(params.originX) || !std::isfinite(params.originZ)
+        || !std::all_of(values.begin(), values.end(), [](f32_t v) { return std::isfinite(v); })) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
+                                              location.file, location.line,
+                                              "Grid needs a cell greater than zero and finite values"));
+    }
+
+    if (m_gridData.empty()) {
+        m_gridData = std::pmr::vector<f32_t>(&memory::General().Resource());
+    }
+    const u32_t offset = static_cast<u32_t>(m_gridData.size());
+    m_gridData.insert(m_gridData.end(), values.begin(), values.end());
+
+    Node node;
+    node.kind         = OpKind::Grid;
+    node.nodeClass    = NodeClass::Pointwise;
+    node.inputCount   = 1;
+    node.inputs[0]    = position;
+    node.channelCount = 1;
+    node.channels[0]  = Mapping{Domain::R2, 1};
+    node.params[0]    = offset;
+    node.params[1]    = params.width;
+    node.params[2]    = params.depth;
+    PackFloat(node.params, 3, params.originX);
+    PackFloat(node.params, 4, params.originZ);
+    PackFloat(node.params, 5, params.cell);
     return Append(node, location);
 }
 

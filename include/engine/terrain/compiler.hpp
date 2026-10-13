@@ -112,10 +112,12 @@ struct CompiledGraph {
     std::pmr::vector<Dispatch>       dispatches;
     std::pmr::vector<PlannedBuffer>  buffers;
     std::pmr::vector<CompiledOutput> outputs;
+    /// The graph's grid values, which `SectionResources` uploads once (see `OpKind::Grid`).
+    std::pmr::vector<f32_t>          gridData;
     CompileStats                     stats;
 
     explicit CompiledGraph(std::pmr::memory_resource& resource)
-        : dispatches(&resource), buffers(&resource), outputs(&resource) {}
+        : dispatches(&resource), buffers(&resource), outputs(&resource), gridData(&resource) {}
 };
 
 struct CompileOptions {

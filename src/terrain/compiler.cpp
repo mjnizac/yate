@@ -447,6 +447,7 @@ Result<CompiledGraph> Compile(const Graph& graph, const CompileOptions& options)
 
     CompiledGraph compiled(memory::General().Resource());
     compiled.stats.nodesIn = static_cast<u32_t>(graph.NodeCount());
+    compiled.gridData.assign(graph.GridData().begin(), graph.GridData().end());
 
     std::pmr::vector<NodeWork> work(graph.NodeCount(), &memory::General().Resource());
     if (options.canonicalize) {

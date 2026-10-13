@@ -1153,12 +1153,52 @@ return main
         CHECK(changed > 2.0);
     }
 
+    // Terrain.Grid passes through its values and is the same whatever the section size; a grid from
+    // Erosion.StreamPower, which must have cut below what uplift alone would give.
+    const std::string grid = std::string(kDirectory) + "/grid.lua";
+    {
+        std::ofstream out(grid, std::ios::binary);
+        out << R"(local function main(params)
+    local n, cell = 24, 25.0
+    local height, uplift = {}, {}
+    for z = 0, n - 1 do
+        for x = 0, n - 1 do
+            local edge = x == 0 or z == 0 or x == n - 1 or z == n - 1
+            height[#height + 1] = ((x * 7 + z * 13) % 5) * 0.1
+            uplift[#uplift + 1] = edge and 0 or 2.0
+        end
+    end
+    local eroded = Erosion.StreamPower{ size = { n, n }, cell = cell, height = height, uplift = uplift,
+                                        iterations = 60, k = 0.02, talus = 1.0, diffusion = 5 }
+    -- Uplift alone would raise the interior by 120 m; erosion has to have taken a good part of it.
+    local total, raised = 0, 0
+    for i = 1, #eroded do total = total + eroded[i] raised = raised + height[i] + uplift[i] * 60 end
+    if not (total < raised * 0.8 and total > 0) then error("stream power kept " .. total / raised) end
+    local g = Terrain.Grid{ values = eroded, size = { n, n }, origin = { -300, -300 }, cell = cell }
+    return { d = { value = g, range = { -10, 200 } } }
+end
+return main
+)";
+    }
+    const Field grid64 = RunExport(grid, std::string(kDirectory) + "/grid_64", wide, "d");
+    const Field grid16 = RunExport(grid, std::string(kDirectory) + "/grid_16", small, "d");
+    ++test::g_checks;
+    const bool grid_same = grid64.Ok() && grid16.Ok()
+                           && std::memcmp(grid64.values.data(), grid16.values.data(),
+                                          grid64.values.size() * sizeof(float)) == 0;
+    std::printf("     Terrain.Grid of Erosion.StreamPower, sections 64 and 16: %s\n",
+                grid_same ? "byte-identical" : (grid64.Ok() ? "DIFFER" : grid64.error.c_str()));
+    CHECK(grid_same);
+
     struct Case {
         const char* name;
         const char* body;
         const char* fragment;
     };
     const Case cases[] = {
+        {"grid_wrong_count",
+         "    local result = Terrain.Grid{ values = { 1, 2, 3 }, size = { 2, 2 }, cell = 1 }",
+         "to hold 4 numbers"},
         {"gullies_bad_gradient",
          "    local result = Erosion.Gullies{ input = Terrain.Coords{}.x, gradient = Terrain.Coords{}.x }",
          "Gullies gradient must be R2->R2"},

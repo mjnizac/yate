@@ -7,6 +7,7 @@
 #    include <engine/error.hpp>
 #    include <engine/terrain/compiler.hpp>
 #    include <engine/terrain/kernels.hpp>
+#    include <engine/vulkan/allocator.hpp>
 #    include <engine/vulkan/buffer_pool.hpp>
 #    include <engine/vulkan/device.hpp>
 
@@ -41,9 +42,14 @@ public:
     /// Bytes actually held, which is the sum of the slot sizes the pool handed over.
     [[nodiscard]] u64_t TotalBytes() const noexcept { return m_totalBytes; }
 
+    /// Address of the uploaded grid values, or 0 when the graph has none.
+    [[nodiscard]] VkDeviceAddress GridAddress() const noexcept { return m_grid.address; }
+
 private:
     void Release() noexcept;
 
+    vulkan::Allocator*                   m_memory = nullptr;
+    vulkan::Buffer                       m_grid;
     vulkan::SectionPool*                 m_pool = nullptr;
     std::pmr::vector<vulkan::SectionSlot> m_slots;
     u64_t                                 m_totalBytes = 0;

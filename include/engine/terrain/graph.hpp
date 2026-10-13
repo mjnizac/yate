@@ -5,7 +5,10 @@
 #include <engine/terrain/mapping.hpp>
 
 #include <array>
+#include <memory_resource>
+#include <span>
 #include <string_view>
+#include <vector>
 
 namespace engine::terrain {
 
@@ -82,6 +85,10 @@ enum class OpKind : u16_t {
     Shape,
     /// Gullies cut across a heightfield's slope from its gradient, without simulating water. Pointwise.
     Gullies,
+    /// A field given as a regular grid of values, sampled smoothly at a position field. Pointwise. The
+    /// values live in the graph and are uploaded once; this is how something computed on the CPU over
+    /// the whole terrain (a drainage simulation) reaches the sections.
+    Grid,
     Count,
 };
 
@@ -339,6 +346,21 @@ public:
     /// where the pattern is drawn, in metres; both `R2 -> R2`.
     [[nodiscard]] Result<Value> AddGullies(Value height, Value gradient, Value position,
                                            const GulliesParams& params, SourceLocation location);
+    struct GridParams {
+        u32_t width = 0;
+        u32_t depth = 0;
+        /// World position in metres of value (0, 0), and the spacing between values.
+        f32_t originX = 0.0f;
+        f32_t originZ = 0.0f;
+        f32_t cell    = 1.0f;
+    };
+    /// A grid of `width * depth` values, x fastest, sampled with Catmull-Rom interpolation at
+    /// `position` (`R2 -> R2`, metres) and held at its edge value outside. The values are copied.
+    [[nodiscard]] Result<Value> AddGrid(Value position, std::span<const f32_t> values,
+                                        const GridParams& params, SourceLocation location);
+    /// Every grid's values, back to back; a grid node's parameter word 0 is its offset in here.
+    [[nodiscard]] std::span<const f32_t> GridData() const noexcept { return m_gridData; }
+
     [[nodiscard]] Result<Value> AddSlopeMask(Value gradient, f32_t minSlope, f32_t maxSlope,
                                              SourceLocation location);
 
@@ -446,6 +468,9 @@ private:
     usize_t                                m_nodeCount = 0;
     std::array<OutputRequest, kMaxOutputs> m_outputs{};
     usize_t                                m_outputCount = 0;
+    /// The one thing a graph allocates, and only when a script makes a grid: its values are data, not
+    /// a node, and can be megabytes. Given the general allocator on first use.
+    std::pmr::vector<f32_t> m_gridData;
 };
 
 /// A graph is large, because the spec asks for fixed-capacity storage so that building one never
