@@ -53,8 +53,45 @@ const vec3 kGrassColor = vec3(0.22, 0.32, 0.16);
 const vec3 kScreeColor = vec3(0.47, 0.45, 0.42);
 const vec3 kRockColor  = vec3(0.30, 0.29, 0.28);
 const vec3 kSnowColor  = vec3(0.90, 0.92, 0.96);
-const float kScreeLine = 1500.0;
-const float kSnowLine  = 1750.0;
+const float kScreeLine = 1250.0;
+const float kSnowLine  = 1500.0;
+
+// Rock texture, which the heightfield cannot carry: it is sampled every few metres at best and every 16
+// to 32 in a distant view. Where the ground is steep, a ridged noise in world space, stretched about
+// eight times along the vertical, bumps the normal and shades the albedo. On a steep face the vertical
+// lies nearly in the surface, so the stretch turns into ribs and runnels running down the face, as rock
+// weathers. Two octaves, each faded out once a pixel covers it so it never aliases; flat ground gets
+// none and stays one colour. (Voronoi blocks were tried: from a kilometre away they read as paving.)
+float Hash31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+
+float ValueNoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = p - i;
+    f      = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(Hash31(i), Hash31(i + vec3(1, 0, 0)), f.x),
+                   mix(Hash31(i + vec3(0, 1, 0)), Hash31(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(Hash31(i + vec3(0, 0, 1)), Hash31(i + vec3(1, 0, 1)), f.x),
+                   mix(Hash31(i + vec3(0, 1, 1)), Hash31(i + vec3(1, 1, 1)), f.x), f.y),
+               f.z);
+}
+
+float Ribs(vec3 p, float footprint) {
+    float sum        = 0.0;
+    float wavelength = 40.0;
+    float amplitude  = 1.0;
+    for (int o = 0; o < 2; ++o) {
+        float fade = 1.0 - smoothstep(wavelength * 0.3, wavelength * 0.7, footprint);
+        float n    = ValueNoise(p * vec3(1.0, 0.12, 1.0) / wavelength) * 2.0 - 1.0;
+        sum += (1.0 - 2.0 * abs(n)) * amplitude * fade;
+        wavelength *= 0.4;
+        amplitude *= 0.5;
+    }
+    return sum;
+}
 
 void main() {
     vec3 normal = normalize(vNormal);
@@ -66,11 +103,35 @@ void main() {
 
     float slope  = 1.0 - clamp(normal.y, 0.0, 1.0);
     float height = vWorldPosition.y;
-    vec3  albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
-    albedo       = mix(albedo, kRockColor, smoothstep(0.16, 0.42, slope));
-    float snow   = smoothstep(kSnowLine - 150.0, kSnowLine + 150.0, height)
-                 * (1.0 - smoothstep(0.30, 0.48, slope));
-    albedo       = mix(albedo, kSnowColor, snow);
+    float rocky  = smoothstep(0.16, 0.42, slope);
+    // Snow lies where the ground is smooth enough to hold it and high enough to keep it; the rock
+    // shows through where it is steep. The line wavers with the rock noise so it is not a contour.
+    float footprint = max(length(fwidth(vWorldPosition)), 1e-3);
+    float rock      = rocky > 0.0 ? Ribs(vWorldPosition, footprint) : 0.0;
+    // Snow lies where the ground is smooth enough to hold it and high enough to keep it; the rock
+    // shows through where it is steep. The line wavers with the rock so it is not a contour.
+    float snow = smoothstep(kSnowLine - 150.0, kSnowLine + 150.0, height + rock * 80.0)
+               * (1.0 - smoothstep(0.34, 0.5, slope + rock * 0.08));
+
+    vec3 albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
+    // Rock: darker in the runnels, lighter on the ribs.
+    vec3 rockColor = kRockColor * (0.82 + 0.28 * rock);
+    albedo         = mix(albedo, rockColor, rocky);
+    albedo         = mix(albedo, kSnowColor, snow);
+
+    // Bump the normal with the ribs' gradient (central differences in world space), on rock only, so
+    // snow stays smooth.
+    float weight = rocky * (1.0 - snow);
+    if (weight > 0.0) {
+        const float e = 1.0;
+        vec3 g = vec3(Ribs(vWorldPosition + vec3(e, 0, 0), footprint)
+                          - Ribs(vWorldPosition - vec3(e, 0, 0), footprint),
+                      0.0,
+                      Ribs(vWorldPosition + vec3(0, 0, e), footprint)
+                          - Ribs(vWorldPosition - vec3(0, 0, e), footprint)) / (2.0 * e);
+        g -= dot(g, normal) * normal;
+        normal = normalize(normal - g * (14.0 * weight));
+    }
 
     float sun = max(dot(normal, kSunDirection), 0.0);
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,
