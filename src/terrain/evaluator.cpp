@@ -205,11 +205,13 @@ struct BufferState {
 /// Emits one dependency covering every buffer this dispatch has a hazard on.
 void EmitBarriers(VkCommandBuffer commands, const Dispatch& dispatch,
                   const SectionResources& resources, std::pmr::vector<BufferState>& state) {
-    std::array<VkBufferMemoryBarrier2, kMaxNodeInputs + kMaxNodeChannels> barriers{};
-    u32_t                                                                count = 0;
+    std::array<VkBufferMemoryBarrier2, kMaxNodeInputs + kMaxNodeChannels + 2> barriers{};
+    std::array<u32_t, kMaxNodeInputs + kMaxNodeChannels + 2>                  covered{};
+    u32_t                                                                    count = 0;
 
     const auto push = [&](u32_t buffer) {
         const vulkan::SectionSlot& slot = resources.Slot(buffer);
+        covered[count]                  = buffer;
         barriers[count++] = VkBufferMemoryBarrier2{
             .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
             .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -262,9 +264,12 @@ void EmitBarriers(VkCommandBuffer commands, const Dispatch& dispatch,
                                       .pBufferMemoryBarriers    = barriers.data()};
     vkCmdPipelineBarrier2(commands, &dependency);
 
-    for (BufferState& entry : state) {
-        entry.readSinceBarrier    = false;
-        entry.writtenSinceBarrier = false;
+    // Only the buffers this dependency covers are synchronised. Clearing the others would let a buffer
+    // written earlier be read later with no memory dependency on it: the execution dependency of an
+    // unrelated barrier does not make its writes visible.
+    for (u32_t i = 0; i < count; ++i) {
+        state[covered[i]].readSinceBarrier    = false;
+        state[covered[i]].writtenSinceBarrier = false;
     }
 }
 
