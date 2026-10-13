@@ -11,6 +11,7 @@
 #include "test_support.hpp"
 
 #include <engine/platform.hpp>
+#include <engine/prelude_files.hpp>
 #include <engine/terrain/sha256.hpp>
 
 #include <algorithm>
@@ -546,7 +547,7 @@ void TestPreludeHash() {
     directory.erase(directory.find_last_of("/\\") + 1);
 
     engine::terrain::Sha256 hash;
-    for (const char* name : {"10_shapes.lua", "20_landforms.lua", "30_ranges.lua", "40_dunes.lua", "50_lands.lua"}) {
+    for (const char* name : engine_prelude_files) {
         const std::string text = ReadFile(directory + "lua/prelude/" + name);
         hash.Update(std::string_view{name});
         hash.Update("\n", 1);

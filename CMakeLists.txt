@@ -59,8 +59,20 @@ engine_collect_shaders(ENGINE_SHADER_OUTPUTS)
 add_custom_target(engine_shaders ALL DEPENDS ${ENGINE_SHADER_OUTPUTS})
 
 # The Lua prelude: scripts the engine runs before the user's, copied next to the executable. The list is
-# closed on purpose and matches `kPreludeFiles` in src/lua.cpp, in load order.
+# closed on purpose, in load order, and generates `engine/prelude_files.hpp`.
 set(ENGINE_PRELUDE_FILES 10_shapes.lua 20_landforms.lua 30_ranges.lua 40_dunes.lua 50_lands.lua)
+# The same list as a header, so the engine and the tests do not keep their own copies.
+set(ENGINE_PRELUDE_ENTRIES "")
+foreach(prelude_file ${ENGINE_PRELUDE_FILES})
+    string(APPEND ENGINE_PRELUDE_ENTRIES "\"${prelude_file}\", ")
+endforeach()
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/include/engine/prelude_files.hpp" CONTENT
+"#pragma once
+#include <array>
+// Generated from ENGINE_PRELUDE_FILES in CMakeLists.txt, in load order.
+inline constexpr std::array engine_prelude_files{@ENGINE_PRELUDE_ENTRIES@};
+"
+    @ONLY)
 set(ENGINE_PRELUDE_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/lua/prelude")
 set(ENGINE_PRELUDE_OUTPUTS "")
 foreach(prelude_file ${ENGINE_PRELUDE_FILES})
