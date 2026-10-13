@@ -1252,3 +1252,26 @@ Decisions for `Lands.*`, from two expert reviews of the plan and from the first 
   and faded at the coast. Rivers to the sea wait for `Erosion.StreamPower` to accept it as base level.
 * **The single island's formulas stayed put.** Changing how the interior's reach is derived for groups
   moved every island's heights and its goldens; the single-island expression was kept.
+
+
+## The lands macro, second version: generated shapes, 70 % land
+
+The first version built islands from smooth unions of discs and was too simple against the references.
+It was replaced, keeping the products, the sign convention and the margin.
+
+* **No drawn outline by default.** An outline is the result of bodies with spines, rivers and a sea level,
+  as in the references (Iceland, Austria and the fantasy maps all show dissected coasts and a ridge
+  spine); polygons stay for when they are asked for (`area`, `areas`).
+* **Sea level by quantile.** `land_fraction` is exact on the grid whatever the noise did, and the result is
+  the map's share. Flat ground at the base level counts as sea, so a layout that cannot reach the fraction
+  gets what it has and not an arbitrary patch of plain.
+* **A skirt round each body.** Without it more than 30 % of the grid is at the base level and the quantile
+  has nothing to choose a contour in; the skirt's amplitude per layout is how far an island may fatten
+  before it merges with its neighbour.
+* **70 % for an island or a continent; an archipelago that is one is lower.** Scattered islands kept
+  apart by straits fill 35 to 55 % of a square; asking 70 % turns them into one mass with gulfs. The
+  default is the compromise that still reads as an archipelago and `land_fraction` overrides it.
+* **The signed distance comes from the grid**, as a chamfer transform with one blur, read at the warped
+  position: it carries the drainage-made coast to the GPU and the coast's own warp refines it.
+* **Valleys that reach the sea are the inlets.** They need no separate fjord step: the stream-power
+  valleys are cut to the base level and the sea level cuts the coast above it.

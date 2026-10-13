@@ -1165,55 +1165,61 @@ stacked surfaces. A scarp can be vertical, never undercut.
 
 ### Islands, archipelagos and continents: `Lands.*` (the lands macro)
 
-`Lands.Island`, `Lands.Archipelago` and `Lands.Continent` build land and sea from ONE field, the signed
-distance to the coast in metres, `coast_sdf`, with one sign convention everywhere: **land d < 0, coast
-d = 0, sea d > 0**. Every other product is a function of it, and each can be asked for by name in
-`island:outputs{ ... }` (a script holds at most eight outputs; `height` and `normals` are always there):
+`Lands.Island`, `Lands.Archipelago` and `Lands.Continent` generate land and sea elaborately, not from
+drawn shapes. A coarse grid is built on the CPU the way the references are formed:
+
+1. **Bodies**: elongated, rotated masses (an island, the islands of a chain, the lobes of a continent),
+   each with a bent spine of higher ground, seen through a domain warp and lumps at two scales.
+2. **Rivers**: `Erosion.StreamPower` cuts that into a dendritic drainage with the valleys running to
+   the map edge, which is the base level.
+3. **Sea level by quantile**: `land_fraction` of the map (0.7 by default) is above it, so low valleys
+   become inlets and rias and ridges become peninsulas.
+4. **The signed distance to the coast** is taken on the grid; everything on the GPU is a function of it,
+   plus the coast's own three-band warp and gullies at the scale the grid cannot show.
+
+`size` is the side of the map in metres (24 km by default): export or view it over that window centred on
+the origin and `land_fraction` of it is land. There is **one sign convention: land d < 0, coast d = 0,
+sea d > 0**. Products, each asked for by name in `land:outputs{ ... }` (`height` and `normals` are always
+there; a script holds at most eight outputs):
 
 | Product | Meaning |
 | --- | --- |
 | `coast_sdf` | signed distance to the coast, metres, land negative |
 | `land_mask` | `1 - Smoothstep(-w, w, d)`: 1 on land, 0 at sea |
-| `land_height` | the ground above the sea, from the distance inland |
-| `bathymetry` | the sea floor, negative, from the distance offshore |
+| `land_height` | the eroded ground, shaped as a beach or a cliff at the shore |
+| `bathymetry` | the sea floor, negative: beach face, shelf, break, slope, abyssal |
 | `surface_height` | the two joined at the coast; it is the script's `height` |
 | `shore_mask` | 1 on the coast, falling to 0 `shore_band` metres either side |
-| `coast_type` | 0 a beach, 1 a cliff |
-| `region_id` | which island of a group a cell is nearest to (1 for a single island) |
+| `coast_type` | 0 a beach, 1 a cliff (hardness, sediment, exposure and curvature) |
+| `region_id` | which landmass a cell is nearest to; 1 is the largest |
 
 ```lua
-local island = Lands.Island{ seed = 4, radius = 3000, roughness = 0.6, breakage = 6, coast = "mixed" }
-return island:outputs{ "coast_type", "land_mask" }
+local land = Lands.Island{ seed = 4, size = 24000, height = 700, coast = "rocky" }
+return land:outputs{ "coast_type", "region_id" }
 ```
 
-Main keys of `Lands.Island`: `radius` (generated outline) or `area` (a drawn polygon) or `areas` (several);
-`roughness` 0 to 1 (a warp in three bands of wavelength, macro, meso and micro, each with an amplitude a
-fixed fraction of it, so the coast is the same shape at every scale and never folds; a band shorter than
-about 6 samples is left out); `breakage` (islets, placed on the CPU with a minimum channel so they
-cannot touch the island); `height`, `hypsometry`; `coast` (`mixed`, `rocky`, `sedimentary`, `cliff`) with
-`wave_from`, `hardness`, `sediment`; `margin` (`compressed` for the viewer, with the shelf and slope as
-multiples of the radius, or `geologic` with a shelf under 1 degree out to 40 km).
+Main keys: `size`, `land_fraction`, `height` (the highest point, metres), `roughness` (0 to 1, the coast's
+own warp), `dissection` (0 to 3, the strength of the drainage), `coast` (`mixed`, `rocky`, `sedimentary`,
+`cliff`) with `wave_from`, `hardness`, `sediment`, `margin` (`compressed` for the viewer, or `geologic`
+with a shelf under 1 degree out to 40 km), `aspect` and `count`. `Lands.Archipelago` takes `layout`:
+`"scattered"` (islands of different sizes and orientations, kept apart by straits), `"hotspot"` (elongated
+islands end to end on a bent line, large at one end), `"arc"` (the same on an arc) and `"atoll"` (a ring of
+low islets round a lagoon of a few tens of metres, `lagoon_depth`). `Lands.Continent` is several large
+lobes with ranges along them.
 
-`Lands.Archipelago{ layout = ... }` places `count` islands within `radius` of the centre:
-`"scattered"` (sizes follow a power law, a minimum channel the warp cannot close), `"hotspot"` (a bent
-chain, large at one end), `"arc"` (islands on an arc, each cut to fit its neighbours) and `"atoll"` (a
-ring of low islets round a lagoon of a few tens of metres). `Lands.Continent` is the outline at its most
-irregular with `ranges` (or `ranges_count` generated crest lines) raised across the interior by
-`Ranges.Carve` and faded out towards the coast; its rivers end at the edge of the range grid, not at the
-sea.
+`land_fraction` is the target and the default is 0.7 for an island or a continent. A layout that keeps its
+islands apart cannot fill the map: scattered islands reach 35 to 55 %, a chain or an arc a few per cent, an
+atoll about 12 %. Asking for more merges them into one mass. `area` / `areas` take drawn polygons for when
+a shape must be exactly that; they go through the same rivers and sea level.
 
-The type of coast is an artistic heuristic (hardness, sediment, exposure to the waves and curvature as a
-bias), not a fetch calculation. `terrain_metrics` measures an export (land fraction, masses, lagoons,
-coast length, box-counting dimension, narrowest channel, hypsometry, slope by depth); see
-`docs/commands.md`. The viewer colours these terrains with `look = { palette = "coast" }`.
+`terrain_metrics` measures an export (land fraction, masses, lagoons, coast length, box-counting dimension,
+narrowest gap, hypsometry, slope by depth); see `docs/commands.md`. An island at the defaults measures a
+box dimension of about 1.15 to 1.25 over 2^2..2^7 cells, in the range of the dissected coasts in the
+references. The viewer colours these terrains with `look = { palette = "coast" }`.
 
-![Islands at two sizes](images/lands/island_scales.png)
-
-![Coast type: beach (amber) to cliff (red)](images/lands/coast_types.png)
+![An island and a continent](images/lands/island_continent.png)
 
 ![Archipelagos: scattered, hotspot, arc, atoll](images/lands/archipelagos.png)
-
-![Continent with ranges](images/lands/continent.png)
 
 ## 11. Recipes
 

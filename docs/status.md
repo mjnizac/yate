@@ -43,9 +43,10 @@ three styles: `"procedural"` (default, analytic, no repetition, about 0.6 s), `"
 (`Erosion.Wind`, periodic) and `"star"`; previews in `docs/images/dunes/`.
 
 Islands, archipelagos and continents from `Lands.Island`, `Lands.Archipelago` and `Lands.Continent`, the
-lands macro (`assets/scripts/lands/`): one signed coast distance, a margin with a shelf and a slope, a
-coast type, four archipelago layouts and a continent with ranges; accepted against `terrain_metrics`
-numbers and four golden datasets (`lands_*`); previews in `docs/images/lands/`.
+lands macro (`assets/scripts/lands/`): bodies with spines, drainage by `Erosion.StreamPower`, sea level by
+quantile (70 % land by default), one signed coast distance, a margin with a shelf and a slope, a coast
+type, and four archipelago layouts; measured with `terrain_metrics` and four golden datasets
+(`lands_*`); previews in `docs/images/lands/`.
 
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.

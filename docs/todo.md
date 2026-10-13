@@ -67,18 +67,17 @@ full history is in the git log.
 
 ## Lands macro (`Lands.*`)
 
-- [ ] **No real references measured yet**: per-type acceptance numbers (dimension, shelf, hypsometry)
-      wait for references measured with `terrain_metrics` (protocol in `docs/commands.md`).
-- [ ] **Rivers do not reach the sea** on a continent: `Erosion.StreamPower` takes the edge of its grid
-      as base level; it needs the sea (the coast distance) as a drainage outlet.
-- [ ] **Coast type has no fetch**: exposure is the normal against one wave direction. A CPU pass over
-      the coast could compute a real fetch.
-- [ ] **A ring atoll is not closed**: the islets leave passes and the lagoon counts as open sea; a
-      continuous reef needs a union with a smooth radius that closes the gaps.
-- [ ] **Islands in a group share one warp** tied to a median size, so large ones read smoother and
-      small ones rougher than a per-island warp would.
-- [ ] **`terrain_metrics` box dimension** is a diagnostic per range of scales, not a target; `box` range
-      and window must be fixed per example to compare runs.
+- [ ] **No real references measured yet**: the heightmaps in `docs/references/{islands,archipelagos,
+      continents}` have not been run through `terrain_metrics`; per-type acceptance numbers wait for it.
+- [ ] **A chain, an arc and an atoll reach a few per cent of the map**, not 70 %: the layouts keep their
+      islands apart. A broader chain (islands side by side) would fill more of a square.
+- [ ] **The coast is frayed at the finest scale**: the micro warp and the gullies give a ragged edge on
+      the 70 % island; the references have smoother large coasts with fewer, deeper inlets.
+- [ ] **Coast type has no fetch**: exposure is the normal against one wave direction.
+- [ ] **No lakes or rivers as water**: drowned valleys that do not reach the sea count as lagoons in the
+      metrics (10 to 30 on a default island).
+- [ ] **The grid is 256 cells** (94 m at 24 km): the drainage is as fine as that; a larger map has
+      coarser valleys until the grid is raised (`cells`, up to 512).
 
 ## Dune macro (`Dunes.*`)
 
