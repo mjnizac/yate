@@ -138,10 +138,11 @@ void main() {
         float bend = ValueNoise(vWorldPosition * vec3(1.0, 0.0, 1.0) / 60.0) * 6.2832;
         float gentle = 1.0 - smoothstep(0.03, 0.12, slope);
         vec2  ripple = vec2(0.0);
-        float wavelength = 5.0;
-        float amplitude  = 0.35;
-        for (int o = 0; o < 2; ++o) {
-            float fade  = 1.0 - smoothstep(wavelength * 0.2, wavelength * 0.45, footprint);
+        // Many, fine and faint: a few centimetres of relief on a ripple a metre or two long.
+        float wavelength = 2.4;
+        float amplitude  = 0.1;
+        for (int o = 0; o < 3; ++o) {
+            float fade  = 1.0 - smoothstep(wavelength * 0.15, wavelength * 0.35, footprint);
             float phase = dot(vWorldPosition.xz, dir) / wavelength + bend * 0.35 + float(o) * 1.7;
             // Asymmetric like the dunes themselves: a long gentle back and a short steep front.
             float u     = fract(phase);
@@ -150,7 +151,7 @@ void main() {
             wavelength *= 0.45;
             amplitude  *= 0.6;
         }
-        normal = normalize(normal - vec3(ripple.x, 0.0, ripple.y) * 0.5);
+        normal = normalize(normal - vec3(ripple.x, 0.0, ripple.y) * 0.3);
         vec3 sand = vec3(0.66, 0.45, 0.24)
                   * (0.95 + 0.08 * ValueNoise(vec3(vWorldPosition.x, 0.0, vWorldPosition.z) / 400.0));
         float lee = smoothstep(0.08, 0.22, 1.0 - clamp(normal.y, 0.0, 1.0));

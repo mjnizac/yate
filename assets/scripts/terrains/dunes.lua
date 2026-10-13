@@ -13,6 +13,11 @@ local function main(params)
         wavelength = params.wavelength,
         height     = params.height,
         style      = params.style,
+        sand       = params.sand,
+        variety    = params.variety,
+        cell       = params.cell,
+        cells      = params.cells,
+        iterations = params.iterations,
     }
 end
 
