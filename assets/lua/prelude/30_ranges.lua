@@ -34,7 +34,8 @@ local function check(t)
     local allowed = {
         ridges = true, peaks = true, seed = true, center = true, extent = true, cell = true,
         steps = true, k = true, diffusion = true, talus = true, lift = true, wander = true, cells = true,
-        cirques = true, wobble = true, fill = true, fill_radius = true, repose = true, talus_cones = true,
+        cirques = true, wobble = true, fill = true, fill_radius = true, repose = true, talus_cones = true, shoulders = true, glacial = true,
+        glacier_area = true,
     }
     for key in pairs(t) do
         if not allowed[key] then
@@ -204,12 +205,25 @@ function Ranges.Carve(t)
         return a + (b - a) * fz
     end
 
-    local lift   = t.lift or 2.6
+    local lift   = t.lift or 2.4
+    -- Shoulders: the uplift is gently stepped, so the eroded range keeps broad benches at a few levels
+    -- (alpine pastures, cirque floors) between its steeper walls instead of one slope from crest to
+    -- valley. `shoulders` is the strength, 0 to 1.
+    local shoulders = t.shoulders or 0.6
+    local bench     = tallest * 0.24
+    local function stepped(u)
+        if shoulders <= 0 then return u end
+        local f = u / bench
+        local whole = math.floor(f)
+        local frac = f - whole
+        local s_ = frac < 0.35 and 0.0 or (frac > 0.85 and 1.0 or smooth((frac - 0.35) / 0.5))
+        return u + ((whole + s_) * bench - u) * shoulders
+    end
     local height, uplift = {}, {}
     for z = 0, n - 1 do
         for x = 0, n - 1 do
             local px, pz = originX + x * cell, originZ + z * cell
-            local u = rise_at(x, z)
+            local u = stepped(rise_at(x, z))
             uplift[#uplift + 1] = u / steps * lift
             -- A rough start at several scales, so the first channels form where the ground happens to
             -- be low, bend around the large bumps and the network is irregular.
@@ -222,7 +236,7 @@ function Ranges.Carve(t)
     local k         = t.k or 0.016
     -- Relative to the cell, so the spacing of valleys is the same whatever size the grid has.
     local diffusion = t.diffusion or 0.012 * cell * cell
-    local talus     = t.talus or 1.15
+    local talus     = t.talus or 0.6
     local carved = Erosion.StreamPower{
         size = { n, n }, cell = cell, height = height, uplift = uplift, iterations = steps, k = k,
         m = 0.5, talus = talus, diffusion = diffusion, refresh = 4,
@@ -263,7 +277,7 @@ function Ranges.Carve(t)
         for i = 1, #uplift do still[i] = uplift[i] * 0.3 end
         carved = Erosion.StreamPower{
             size = { n, n }, cell = cell, height = carved, uplift = still, iterations = 40, k = k,
-            m = 0.5, talus = talus * 1.7, diffusion = diffusion * 0.3, refresh = 2,
+            m = 0.5, talus = talus * 2.0, diffusion = diffusion * 0.3, refresh = 2,
         }
     end
 
@@ -307,6 +321,83 @@ function Ranges.Carve(t)
         end
     end
 
+    -- Glacial valleys: the main valleys are widened into a U. The drainage of the carved grid is traced
+    -- (steepest descent, area accumulated from the top), every cell where enough ground drains is a
+    -- valley floor, and the ground around it is lowered to no more than a parabola rising from that
+    -- floor: flat near the river, steepening outwards, until it meets the V the river cut and leaves
+    -- it. The parabola's width grows with the square root of the area, so trunk valleys are broad and
+    -- tributaries narrow; tributaries end higher than the trunk they join, as hanging valleys do.
+    if t.glacial ~= false then
+        local order = {}
+        for i = 1, #carved do order[i] = i end
+        table.sort(order, function(a_, b_) return carved[a_] > carved[b_] end)
+        local area, receiver = {}, {}
+        for i = 1, #carved do area[i] = cell * cell end
+        for _, i in ipairs(order) do
+            local x, z = (i - 1) % n, (i - 1) // n
+            local best, to = 0.0, nil
+            for dz = -1, 1 do
+                for dx = -1, 1 do
+                    local xx, zz = x + dx, z + dz
+                    if (dx ~= 0 or dz ~= 0) and xx >= 0 and zz >= 0 and xx < n and zz < n then
+                        local q = zz * n + xx + 1
+                        local drop = (carved[i] - carved[q]) / ((dx ~= 0 and dz ~= 0) and 1.4142 or 1.0)
+                        if drop > best then best, to = drop, q end
+                    end
+                end
+            end
+            receiver[i] = to
+            if to then area[to] = area[to] + area[i] end
+        end
+        local threshold = (t.glacier_area or 2.5e6)
+        local nearest, floorAt, radius = {}, {}, {}
+        for i = 1, #carved do
+            if area[i] >= threshold and carved[i] < tallest * 0.7 and carved[i] > tallest * 0.02 then
+                nearest[i] = i
+                floorAt[i] = carved[i]
+                radius[i] = math.min(math.max(0.22 * math.sqrt(area[i]), 120.0), 700.0)
+            end
+        end
+        local function cx(i) return ((i - 1) % n) * cell end
+        local function cz(i) return ((i - 1) // n) * cell end
+        local function consider(i, q)
+            local c = nearest[q]
+            if c then
+                local d = (cx(i) - cx(c)) ^ 2 + (cz(i) - cz(c)) ^ 2
+                local mine = nearest[i]
+                if not mine or d < (cx(i) - cx(mine)) ^ 2 + (cz(i) - cz(mine)) ^ 2 then
+                    nearest[i] = c
+                end
+            end
+        end
+        for z = 0, n - 1 do
+            for x = 0, n - 1 do
+                local i = z * n + x + 1
+                if x > 0 then consider(i, i - 1) end
+                if z > 0 then consider(i, i - n) end
+                if x > 0 and z > 0 then consider(i, i - n - 1) end
+                if x < n - 1 and z > 0 then consider(i, i - n + 1) end
+            end
+        end
+        for z = n - 1, 0, -1 do
+            for x = n - 1, 0, -1 do
+                local i = z * n + x + 1
+                if x < n - 1 then consider(i, i + 1) end
+                if z < n - 1 then consider(i, i + n) end
+                if x < n - 1 and z < n - 1 then consider(i, i + n + 1) end
+                if x > 0 and z < n - 1 then consider(i, i + n - 1) end
+            end
+        end
+        for i = 1, #carved do
+            local c = nearest[i]
+            if c then
+                local d2 = (cx(i) - cx(c)) ^ 2 + (cz(i) - cz(c)) ^ 2
+                local u = floorAt[c] + d2 / (2.0 * radius[c])
+                if u < carved[i] then carved[i] = u end
+            end
+        end
+    end
+
     -- Talus: scree cones under the walls. A surface is grown from every cell, lowered by `drop`, down at
     -- the angle of repose; where the ground falls faster than that (a wall) the surface stands above
     -- it at the wall's foot, and the difference is the cone. Thickness is capped, so a cone is a skirt
@@ -346,18 +437,47 @@ function Ranges.Carve(t)
         end
     end
 
+    -- Shadow: whether the sun reaches each cell, for the viewer (see `Ranges.Finish`). The sun is the
+    -- viewer's, `kSunDirection` in viewer/terrain.frag.glsl; the march goes towards it in steps that
+    -- grow with distance, and the horizon it finds is compared with the sun's elevation over a soft
+    -- band, so the edge of a shadow is a penumbra and not a stair.
+    local sx, sy, sz = 0.55, 0.42, 0.40
+    local flat = math.sqrt(sx * sx + sz * sz)
+    local ux, uz, elevation = sx / flat, sz / flat, sy / flat
+    local shadow = {}
+    for z = 0, n - 1 do
+        for x = 0, n - 1 do
+            local i = z * n + x + 1
+            local h = carved[i]
+            local horizon = -1.0
+            local d = cell
+            while d < 9000.0 do
+                local qx = math.floor(x + ux * d / cell + 0.5)
+                local qz = math.floor(z + uz * d / cell + 0.5)
+                if qx < 0 or qz < 0 or qx >= n or qz >= n then break end
+                local slope = (carved[qz * n + qx + 1] - h) / d
+                if slope > horizon then horizon = slope end
+                d = d * 1.18 + cell * 0.5
+            end
+            shadow[i] = smooth((elevation - horizon) / 0.12 + 0.5)
+        end
+    end
+
     -- 4. On the GPU, read through a broad warp: the simulation routes water in eight directions on a
     -- square grid, and a channel that follows one of them for long reads as a ruled line.
     local wobble = t.wobble or 180.0
+    local position = Shapes.Warp{ amplitude = wobble, frequency = 0.0006, octaves = 2, seed = seed + 71 }
+    local sun = Terrain.Grid{
+        values = shadow, size = { n, n }, origin = { originX, originZ }, cell = cell, position = position,
+    }
     return Terrain.Grid{
-        values = carved, size = { n, n }, origin = { originX, originZ }, cell = cell,
-        position = Shapes.Warp{ amplitude = wobble, frequency = 0.0006, octaves = 2, seed = seed + 71 },
-    }, tallest
+        values = carved, size = { n, n }, origin = { originX, originZ }, cell = cell, position = position,
+    }, tallest, sun
 end
 
 -- The finish every range gets on the GPU: low rolling country around it, fine gullies on the steep
 -- walls of the simulated valleys, and the erosion passes. Returns the script's outputs.
-function Ranges.Finish(structure, tallest, seed, options)
+function Ranges.Finish(structure, tallest, seed, options, sun)
     seed    = seed or 0
     options = options or {}
     local country = Noises.fBm{ frequency = 0.0004, octaves = 3, amplitude = 45.0, seed = seed + 5 }
@@ -383,6 +503,12 @@ function Ranges.Finish(structure, tallest, seed, options)
     }
     local band = Curves.Smoothstep{ input = structure, min = tallest * 0.25, max = tallest * 0.5 }
     local strata = Combine.Blend{ a = ground, b = bedded, mask = band * patches * (options.strata or 1.0) }
+    -- Scree under the cliffs: what thermal erosion would shed off the steps, kept only where it lies
+    -- above the ground (a maximum), so the cliffs keep their edges and their feet get cones.
+    local shed = Erosion.Thermal{
+        input = strata, iterations = 48, talus = math.tan(math.rad(35.0)), strength = 0.5,
+    }
+    strata = Combine.Max{ a = strata, b = shed }
 
     -- Few octaves and long cells: streaks running down the walls, not grain.
     local gullied = Erosion.Gullies{
@@ -396,14 +522,23 @@ function Ranges.Finish(structure, tallest, seed, options)
     local carved = Erosion.Hydraulic{
         input = land, iterations = 20, rain = 0.5, capacity = 9.0, evaporation = 0.04,
     }
-    local smoothed = Filters.Blur{ input = carved, radius = 1 }
+    -- The blur that clears the grid ripple of the hydraulic pass is kept off the crests: where the
+    -- ground stands above its surroundings it is a ridge, and a ridge should stay an edge.
+    local blurred = Filters.Blur{ input = carved, radius = 1 }
+    local crest = Curves.Smoothstep{
+        input = carved - Filters.Blur{ input = carved, radius = 3 }, min = 0.5, max = 4.0,
+    }
+    local smoothed = Combine.Blend{ a = blurred, b = carved, mask = crest }
     local settled = Erosion.Thermal{
         input = smoothed, iterations = 12, talus = math.tan(math.rad(42.0)), strength = 0.3,
     }
-    return {
+    local outputs = {
         height  = { value = settled, range = { -tallest * 0.1, tallest * 1.3 } },
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } },
     }
+    -- The viewer darkens what this says is out of the sun; an export writes it as its own map.
+    if sun then outputs.shadow = { value = sun, range = { 0, 1 } } end
+    return outputs
 end
 
 _G.Ranges = Ranges
