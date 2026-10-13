@@ -23,7 +23,7 @@ layout(push_constant, scalar) uniform Push {
     uvec2 heights;
     uvec2 normals;
     vec3  eye;
-    uint  normalStride;
+    uint  pad;
 }
 pc;
 
@@ -37,7 +37,6 @@ const vec3  kShoreColor = vec3(0.86, 0.88, 0.84);
 layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in float vHeight;
-layout(location = 3) in float vScree;
 
 layout(location = 0) out vec4 outColor;
 
@@ -109,31 +108,23 @@ void main() {
 
     float slope  = 1.0 - clamp(normal.y, 0.0, 1.0);
     float height = vWorldPosition.y;
-    // Broad patches, 200 m to 1 km, that move every boundary a little so none of them follows the mesh
-    // or a contour, and vary the shade of the meadows and the rock.
-    float patchy = ValueNoise(vWorldPosition / 900.0) * 0.65 + ValueNoise(vWorldPosition / 210.0) * 0.35;
-    float rocky  = smoothstep(0.17, 0.46, slope + (patchy - 0.5) * 0.12);
+    float rocky  = smoothstep(0.2, 0.42, slope);
+    // Snow lies where the ground is smooth enough to hold it and high enough to keep it; the rock
+    // shows through where it is steep. The line wavers with the rock noise so it is not a contour.
     float footprint = max(length(fwidth(vWorldPosition)), 1e-3);
     float rock      = rocky > 0.0 ? Ribs(vWorldPosition, footprint) : 0.0;
-    // Snow lies where the ground is smooth enough to hold it and high enough to keep it, lower and on
-    // steeper ground on the faces turned from the sun, which it outlasts there.
-    float shade = clamp(-dot(normalize(normal.xz + vec2(1e-5)), normalize(kSunDirection.xz)), 0.0, 1.0)
-                * smoothstep(0.02, 0.15, slope);
-    float line  = kSnowLine - 280.0 * shade + (patchy - 0.5) * 220.0 + rock * 60.0;
-    float snow  = smoothstep(line - 120.0, line + 120.0, height)
-                * (1.0 - smoothstep(0.34 + 0.1 * shade, 0.52 + 0.1 * shade, slope + rock * 0.08));
+    // Snow lies where the ground is smooth enough to hold it and high enough to keep it; the rock
+    // shows through where it is steep. The line wavers with the rock so it is not a contour.
+    float snow = smoothstep(kSnowLine - 150.0, kSnowLine + 150.0, height + rock * 80.0)
+               * (1.0 - smoothstep(0.34, 0.5, slope + rock * 0.08));
 
-    vec3 grass  = mix(kGrassColor * vec3(0.85, 0.92, 0.8), kGrassColor * vec3(1.15, 1.1, 1.0), patchy);
-    vec3 albedo = mix(grass, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
-    // Scree where the terrain says loose rock lies (its fourth normal component), or, for a script
-    // that does not say, on ground at the angle of repose above the valley floors.
-    float repose = vScree >= 0.0
-                 ? smoothstep(0.05, 0.7, vScree + (patchy - 0.5) * 0.3) * smoothstep(0.04, 0.12, slope)
-                 : smoothstep(0.135, 0.17, slope) * smoothstep(900.0, 1200.0, height);
-    albedo       = mix(albedo, mix(kScreeColor, kRockColor, 0.35) * (0.95 + 0.15 * patchy),
-                       repose * (1.0 - rocky * 0.5));
-    // Rock: darker in the runnels, lighter on the ribs, and lighter or darker by patch.
-    vec3 rockColor = kRockColor * (0.82 + 0.12 * rock + 0.25 * patchy);
+    vec3 albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
+    // Talus: ground at the angle of repose (about 30 to 37 degrees) above the valley floors is scree,
+    // pale and bare, whatever its height; grass holds only on gentler slopes.
+    float repose = smoothstep(0.135, 0.17, slope) * smoothstep(900.0, 1200.0, height);
+    albedo       = mix(albedo, kScreeColor * 1.12, repose);
+    // Rock: darker in the runnels, lighter on the ribs.
+    vec3 rockColor = kRockColor * (0.9 + 0.12 * rock);
     albedo         = mix(albedo, rockColor, rocky);
     albedo         = mix(albedo, kSnowColor, snow);
 

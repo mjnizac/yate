@@ -530,14 +530,14 @@ void TestOutputValidation() {
     // An unnamed output.
     CHECK(!graph.RequestOutput("", *height, -1.0f, 1.0f).has_value());
 
-    // A four-component value has no PNG form; it compiles and is written raw.
+    // A four-component value has no PNG form, so it must be rejected at compile time.
     Graph         wide;
     Result<Value> quad =
         wide.AddConst(Mapping{Domain::R2, 4}, {1.0f, 2.0f, 3.0f, 4.0f}, At(1));
     REQUIRE_OK_VOID(quad);
     REQUIRE_OK_VOID(wide.RequestOutput("quad", *quad, 0.0f, 1.0f));
     Result<CompiledGraph> compiledWide = Compile(wide, Options());
-    CHECK(compiledWide.has_value());
+    CHECK(!compiledWide.has_value());
 }
 
 } // namespace

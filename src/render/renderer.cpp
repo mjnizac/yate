@@ -273,37 +273,6 @@ struct LoadedGraph {
         }
         break;
     }
-
-    // Where loose rock lies, an R2->R1 output named "scree" in [0, 1]: it rides along as a fourth
-    // component of the normals, so the viewer paints scree where the terrain says and not wherever a
-    // slope happens to be 30 degrees.
-    for (usize_t i = 0; i < graph.OutputCount(); ++i) {
-        const terrain::OutputRequest& output = graph.Output(i);
-        if (std::string_view{output.name.data()} != "scree"
-            || !(output.value.mapping == Mapping{Domain::R2, 1})) {
-            continue;
-        }
-        const terrain::SourceLocation here{"<viewer>", 0};
-        const Value normals = graph.Output(loaded.normalsOutput).value;
-        std::array<Value, 4> parts{};
-        for (u8_t c = 0; c < 3; ++c) {
-            Result<Value> part = graph.AddExtract(normals, c, here);
-            if (!part) {
-                return std::unexpected(part.error());
-            }
-            parts[c] = *part;
-        }
-        parts[3] = output.value;
-        Result<Value> packed = graph.AddCombine(parts.data(), 4, here);
-        if (!packed) {
-            return std::unexpected(packed.error());
-        }
-        loaded.normalsOutput = graph.OutputCount();
-        if (Status requested = graph.RequestOutput("normals_scree", *packed, -1.0f, 1.0f); !requested) {
-            return requested;
-        }
-        break;
-    }
     return {};
 }
 
@@ -326,8 +295,6 @@ struct Terrain {
     /// Index into `compiled.outputs`.
     usize_t heightOutput  = 0;
     usize_t normalsOutput = 0;
-    /// Components of the normals output: 3, or 4 with the scree in the last.
-    u32_t normalStride = 3;
     /// Halo each output buffer carries, which is not always zero: a value some other op reads with a
     /// radius keeps that halo even when it is also a requested output.
     u32_t heightHalo  = 0;
@@ -450,7 +417,6 @@ struct TileCache {
     built.normalsHalo  = normals.halo;
     built.heightBytes  = terrain::ValueSize(height.mapping, extent, 0);
     built.normalsBytes = terrain::ValueSize(normals.mapping, extent, 0);
-    built.normalStride = normals.mapping.components;
     built.valid        = true;
 
     LOG_INFO("terrain ready at level {}: {} m per sample, {} dispatch(es) per tile of {} samples",
@@ -1179,7 +1145,6 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
     constants.samples        = state.terrain.samples;
-    constants.normalStride   = state.terrain.normalStride;
     constants.eye            = {eye.x, eye.y, eye.z};
     constants.waterLevel     = water.level;
     constants.waterColour    = shadeWater ? PackWater(water) : 0u;
