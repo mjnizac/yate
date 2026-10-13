@@ -1207,9 +1207,10 @@ islands end to end on a bent line, large at one end), `"arc"` (the same on an ar
 low islets round a lagoon of a few tens of metres, `lagoon_depth`). `Lands.Continent` is several large
 lobes with ranges along them.
 
-`land_fraction` is the target and the default is 0.7 for an island or a continent. A layout that keeps its
-islands apart cannot fill the map: scattered islands reach 35 to 55 %, a chain or an arc a few per cent, an
-atoll about 12 %. Asking for more merges them into one mass. `area` / `areas` take drawn polygons for when
+`land_fraction` is the target and the default is 0.7 for an island or a continent, whose outline is the
+lowest 30 % of a field of bodies plus large-scale noise: gulfs, peninsulas and rias, not an oval. A layout that
+keeps its islands apart cannot fill the map: scattered islands default to 0.4, a chain or an arc to 0.12 (they
+reach 6 %) and an atoll about 12 %. Asking for more merges them into one mass. `area` / `areas` take drawn polygons for when
 a shape must be exactly that; they go through the same rivers and sea level.
 
 `terrain_metrics` measures an export (land fraction, masses, lagoons, coast length, box-counting dimension,

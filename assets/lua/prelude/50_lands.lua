@@ -329,7 +329,7 @@ local function macro(o)
     end
 
     -- 1. The uplift: bodies seen through a domain warp, lumpy, with spines on top.
-    local warp_amp = size * 0.06
+    local warp_amp = size * 0.10
     local lumps    = size * 0.22
     local macro_h = {}
     local border = size * 0.5
@@ -337,16 +337,17 @@ local function macro(o)
         local pz = origin + iz * cell
         for ix = 0, n - 1 do
             local px = origin + ix * cell
-            local wx = px + warp_amp * noise(px, pz, size * 0.30, 3, 11)
-            local wz = pz + warp_amp * noise(px, pz, size * 0.30, 3, 12)
+            local wx = px + warp_amp * noise(px, pz, size * 0.40, 3, 11)
+            local wz = pz + warp_amp * noise(px, pz, size * 0.40, 3, 12)
             local v = 0.0
             local ridge = 0.0
+            local gate = 1.0
             if o.polygons then
                 for _, poly in ipairs(o.polygons) do
                     v = math.max(v, smooth(-polygon_distance(poly, wx, wz) / (size * 0.05)))
                 end
             else
-                local keep, tail = 1.0, 0.0
+                local keep, tail, nearest_body = 1.0, 0.0, 1e9
                 for _, b in ipairs(bodies) do
                     local dx, dz = wx - b.x, wz - b.z
                     local u = (dx * b.cos + dz * b.sin) / b.rx
@@ -354,6 +355,7 @@ local function macro(o)
                     local d = math.sqrt(u * u + w * w)
                     -- A low skirt round every body, so the sea level (a quantile) always has ground
                     -- to choose a contour in: where it lands, valleys become inlets.
+                    nearest_body = math.min(nearest_body, d)
                     tail = math.max(tail, o.tail * (1.0 - smooth(d / o.reach)))
                     if d < 1.0 then
                         keep = keep * (1.0 - smooth(1.0 - d) * b.strength)
@@ -364,6 +366,8 @@ local function macro(o)
                     end
                 end
                 v = math.max(1.0 - keep, tail)
+                gate = (o.layout == "single" or o.layout == "continent") and 1.0
+                       or (1.0 - smooth((nearest_body - 0.8) / 0.9))
             end
             if o.layout == "atoll" then
                 -- Only a ring of ground: the lagoon in the middle and the open sea outside are low.
@@ -373,9 +377,17 @@ local function macro(o)
             local lump = 0.5 + 0.5 * noise(px, pz, lumps, 4, 21)
             local fine = noise(px, pz, lumps * 0.25, 3, 22)
             local value = v * (0.55 + 0.75 * lump) + 0.18 * fine * v + 0.55 * ridge * v
-            -- The map edge is sea.
-            local edge = 1.0 - math.max(math.abs(px), math.abs(pz)) / border
-            value = value * smooth(edge / 0.12)
+            -- Large irregular gulfs and peninsulas: a low-frequency field added to the skirt, so the
+            -- contour the sea level picks is not a smooth oval.
+            if not o.polygons and o.layout ~= "atoll" then
+                value = value + gate * o.shape * (0.5 + 0.5 * noise(px, pz, size * 0.30, 5, 41))
+            end
+            -- The edge of the land is a wandering superellipse, nearer the map's edge in some
+            -- directions than in others: land may reach a side of the map in one place and be a day's
+            -- sail from it in another, and the outline is not a disc or a square.
+            local rad = (px ^ 4 + pz ^ 4) ^ 0.25
+            local limit = border * 1.12
+            value = value * smooth((1.0 - rad / limit) / 0.12)
             macro_h[iz * n + ix + 1] = value
         end
     end
@@ -588,11 +600,11 @@ function Lands.Island(t)
     if roughness < 0 or roughness > 1 or resolution <= 0 or relief <= 0 or size <= 0 then
         fail("Lands.Island needs roughness in [0, 1], and resolution, height and size greater than zero")
     end
-    -- 70 % of a map, unless the layout cannot: islands kept apart by straits fill about 55 % of a square, a
+    -- 70 % of a map, unless the layout cannot: islands kept apart by straits fill about 40 % of a square, a
     -- ring round a lagoon or a chain of islands much less. Asking for more merges them into one mass.
     local land_fraction = t.land_fraction
-        or ((layout == "atoll" and 0.4) or (layout == "scattered" and 0.55)
-            or ((layout == "hotspot" or layout == "arc") and 0.45) or 0.7)
+        or ((layout == "atoll" and 0.4) or (layout == "scattered" and 0.4)
+            or ((layout == "hotspot" or layout == "arc") and 0.12) or 0.7)
     if land_fraction <= 0.02 or land_fraction >= 0.95 then
         fail("Lands.Island needs land_fraction between 0.02 and 0.95")
     end
@@ -630,8 +642,9 @@ function Lands.Island(t)
         seed = seed, size = size, cells = cells, layout = layout, count = t.count, aspect = t.aspect,
         land_fraction = land_fraction, height = relief, polygons = polygons,
         lift = 2.4, k = 0.016 * dissection,
-        tail = (layout == "single" or layout == "continent") and 0.35 or (layout == "scattered" and 0.09 or 0.1),
-        reach = (layout == "single" or layout == "continent") and 2.2 or (layout == "scattered" and 1.5 or 1.5),
+        shape = (layout == "single" or layout == "continent") and 0.55 or 0.1,
+        tail = (layout == "single" or layout == "continent") and 0.35 or (layout == "scattered" and 0.04 or 0.1),
+        reach = (layout == "single" or layout == "continent") and 2.2 or (layout == "scattered" and 1.3 or 1.5),
     })
 
     local c = Terrain.Coords{}

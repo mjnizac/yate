@@ -316,3 +316,17 @@
 {"case":"hydraulic_r2","commit":"e3351d4","total_ms":7.2071,"gpu_ms":2.1593}
 {"case":"ridged_r2","commit":"e3351d4","total_ms":5.5474,"gpu_ms":0.0443}
 {"case":"volume_r3","commit":"e3351d4","total_ms":22.4324,"gpu_ms":0.0915}
+{"case":"basic_fbm","commit":"a673ec5","total_ms":30.4626,"gpu_ms":0.1655}
+{"case":"blended_r2","commit":"a673ec5","total_ms":17.7205,"gpu_ms":0.1554}
+{"case":"blurred_r2","commit":"a673ec5","total_ms":11.7696,"gpu_ms":0.1053}
+{"case":"eroded_r2","commit":"a673ec5","total_ms":21.5787,"gpu_ms":3.3341}
+{"case":"gradient_r2","commit":"a673ec5","total_ms":19.7830,"gpu_ms":0.0748}
+{"case":"hydraulic_flow_r2","commit":"a673ec5","total_ms":29.4961,"gpu_ms":9.3108}
+{"case":"hydraulic_r2","commit":"a673ec5","total_ms":36.2663,"gpu_ms":17.7775}
+{"case":"lands_archipelago_atoll","commit":"a673ec5","total_ms":2948.5599,"gpu_ms":2.6931}
+{"case":"lands_archipelago_scattered","commit":"a673ec5","total_ms":2394.6245,"gpu_ms":2.5575}
+{"case":"lands_continent","commit":"a673ec5","total_ms":2417.4828,"gpu_ms":3.6788}
+{"case":"lands_island","commit":"a673ec5","total_ms":3092.1793,"gpu_ms":2.5173}
+{"case":"ridged_r2","commit":"a673ec5","total_ms":13.6915,"gpu_ms":0.0701}
+{"case":"shapes_r2","commit":"a673ec5","total_ms":21.0082,"gpu_ms":0.9690}
+{"case":"volume_r3","commit":"a673ec5","total_ms":30.4876,"gpu_ms":0.1446}

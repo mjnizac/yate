@@ -69,10 +69,10 @@ full history is in the git log.
 
 - [ ] **No real references measured yet**: the heightmaps in `docs/references/{islands,archipelagos,
       continents}` have not been run through `terrain_metrics`; per-type acceptance numbers wait for it.
-- [ ] **A chain, an arc and an atoll reach a few per cent of the map**, not 70 %: the layouts keep their
+- [ ] **A chain, an arc and an atoll reach 6 to 12 % of the map**, not 70 %: the layouts keep their
       islands apart. A broader chain (islands side by side) would fill more of a square.
-- [ ] **The coast is frayed at the finest scale**: the micro warp and the gullies give a ragged edge on
-      the 70 % island; the references have smoother large coasts with fewer, deeper inlets.
+- [ ] **The 70 % island touches the map edge in places**: the land is cropped by the window, as a piece
+      of a larger landmass; the references mostly leave a sea margin.
 - [ ] **Coast type has no fetch**: exposure is the normal against one wave direction.
 - [ ] **No lakes or rivers as water**: drowned valleys that do not reach the sea count as lagoons in the
       metrics (10 to 30 on a default island).
