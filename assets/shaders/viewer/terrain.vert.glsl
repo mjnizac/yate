@@ -34,13 +34,14 @@ layout(push_constant, scalar) uniform Push {
     FloatBuffer heights;
     FloatBuffer normals;
     vec3 eye;
-    uint pad;
+    uint normalStride;
 }
 pc;
 
 layout(location = 0) out vec3 vWorldPosition;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out float vHeight;
+layout(location = 3) out float vScree;
 
 // Which corner of which quad this vertex is. Two triangles wound counter-clockwise when seen from above,
 // which with the pipeline's front face and cull mode is what makes the terrain visible from above and
@@ -65,8 +66,9 @@ void main() {
     uint  index = sampleCoord.y * pc.samples + sampleCoord.x;
 
     float height = pc.heights.values[index];
-    vec3  normal = vec3(pc.normals.values[index * 3u], pc.normals.values[index * 3u + 1u],
-                        pc.normals.values[index * 3u + 2u]);
+    uint  at     = index * pc.normalStride;
+    vec3  normal = vec3(pc.normals.values[at], pc.normals.values[at + 1u], pc.normals.values[at + 2u]);
+    vScree       = pc.normalStride == 4u ? pc.normals.values[at + 3u] : -1.0;
 
     vec3 world = pc.tileOrigin
                  + vec3(float(sampleCoord.x) * pc.resolution, height,

@@ -207,7 +207,8 @@ struct TerrainPushConstants {
     VkDeviceAddress normals     = 0;
     /// World position of the camera, for the length of the ray that runs under the water.
     std::array<f32_t, 3> eye{};
-    u32_t                pad = 0;
+    /// Floats per sample in `normals`: 3, or 4 when the fourth carries where scree lies.
+    u32_t normalStride = 3;
 };
 
 // 128 bytes is the minimum a device must offer, so this fits everywhere. Every offset is asserted:

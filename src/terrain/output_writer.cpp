@@ -186,8 +186,8 @@ Result<OutputFormat> FormatFor(Mapping mapping) {
     if (mapping.components <= 3) {
         return OutputFormat::Rgb16;
     }
-    ENGINE_FAIL(ErrorCode::Unsupported, ErrorStage::Export,
-                "{} has no PNG form; only 1 to 3 components are supported", ToString(mapping));
+    // Four components have no PNG form that keeps them all; they are written raw, like a volume.
+    return OutputFormat::RawF32;
 }
 
 // --- PngWriter ----------------------------------------------------------------------------------
