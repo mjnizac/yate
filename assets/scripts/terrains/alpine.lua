@@ -13,7 +13,8 @@
 --
 -- Parameters: `height` (metres) is the main summit, `scale` enlarges the plan, `warp` (metres) how far it
 -- wanders, `concave` how much the flanks ease into footslopes, `tributaries` and `gullies` (metres) how
--- deep the two generations of drainage cut and `cell` (metres) how far apart the tributaries are.
+-- deep the two generations of drainage cut, `cell` (metres) how far apart the tributaries are, and
+-- `facets` (fraction of `height`) and `facet` (metres) how deep and how large the Voronoi faces are.
 
 local function main(params)
     local height = params.height or 2800.0
@@ -124,9 +125,20 @@ local function main(params)
         input = Curves.Clamp{ input = (block + cut) / height, min = 0.0, max = 2.0 },
         exponent = params.concave or 1.5,
     } * height
+    -- Facets: a Voronoi net (cellular noise, F2 - F1) carved into the high ground. Its cell boundaries
+    -- stay where they are and its cells sink, so every flank breaks into planar faces meeting in sharp
+    -- arêtes around hollows, the solid, faceted forms the noise and the gullies alone cannot make. Only
+    -- cuts (the value is shifted to be at most zero), only where the mountain is high.
+    local facets = Noises.Cellular{
+        frequency = 1.0 / (params.facet or 1800.0), octaves = params.facet_octaves or 1, persistence = 0.4,
+        amplitude = 1.0,
+        seed = seed + 61, position = world,
+    }
+    local high = Curves.Smoothstep{ input = mountain, min = height * 0.08, max = height * 0.45 }
+    local faceted = mountain + (facets.value - 1.0) * (params.facets or 0.16) * height * high
     -- Added, not joined with a maximum: where the country dipped below the clamped foot of the mountain
     -- a maximum left flat patches at zero and a crease along every valley mouth.
-    local structure = mountain + country.value
+    local structure = faceted + country.value
 
     -- Drainage in two generations, as in the references: tributary valleys a kilometre apart cut into
     -- every flank, then gullies cut into the walls of those tributaries. The second pass reads the slope
