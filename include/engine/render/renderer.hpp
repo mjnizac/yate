@@ -93,7 +93,8 @@ public:
     [[nodiscard]] u32_t TilesDrawn() const noexcept;
     /// Tiles resident right now, drawn or not.
     [[nodiscard]] u32_t TileCount() const noexcept;
-    /// Tiles the ring wants that are not resident yet. Zero means streaming has caught up.
+    /// Tiles the ring wants that are not resident yet, plus one while a level change is being built.
+    /// Zero means streaming has caught up.
     [[nodiscard]] u32_t MissingTiles() const noexcept;
     /// Level the ring is at. Sample spacing is `resolution * 2^level`.
     [[nodiscard]] u32_t Level() const noexcept;

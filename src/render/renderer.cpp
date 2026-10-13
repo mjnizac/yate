@@ -1410,7 +1410,13 @@ u32_t ViewerLayer::TileCount() const noexcept {
 }
 
 u32_t ViewerLayer::MissingTiles() const noexcept {
-    return m_state != nullptr ? m_state->missingTiles : 0;
+    if (m_state == nullptr) {
+        return 0;
+    }
+    // A level change being built on the worker will replace the whole ring: until it lands, the ring is
+    // not complete either.
+    const b8_t changing = m_state->levelTarget != m_state->level || m_state->reload.running.load();
+    return m_state->missingTiles + (changing ? 1u : 0u);
 }
 
 u32_t ViewerLayer::Level() const noexcept { return m_state != nullptr ? m_state->level : 0; }
