@@ -35,23 +35,51 @@ Result<SectionResources> SectionResources::Create(vulkan::Context&     context,
         resources.m_slots.push_back(*slot);
     }
 
-    // Grid values: uploaded once, read by every section. Host-visible, so no staging copy; a grid is
-    // read a few times per sample and is small next to the sections.
+    // Grid values: uploaded once, read by every section, many times per sample (a Catmull-Rom read is
+    // sixteen values). Device-local, filled through a staging buffer: left in host memory they are read
+    // over PCIe on a discrete card.
     if (!compiled.gridData.empty()) {
         resources.m_memory       = &context.Memory();
         const VkDeviceSize bytes = compiled.gridData.size() * sizeof(f32_t);
         Result<vulkan::Buffer> grid = resources.m_memory->CreateBuffer(vulkan::BufferDesc{
             .size  = bytes,
-            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                     | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .category    = vulkan::VramCategory::Intermediate,
-            .hostVisible = true});
+            .hostVisible = false});
         if (!grid) {
             return std::unexpected(grid.error());
         }
         resources.m_grid = *grid;
-        std::memcpy(resources.m_grid.mapped, compiled.gridData.data(), bytes);
-        if (Status flushed = resources.m_memory->FlushBuffer(resources.m_grid, 0, bytes); !flushed) {
-            return std::unexpected(flushed.error());
+
+        Result<vulkan::Buffer> staging = resources.m_memory->CreateBuffer(vulkan::BufferDesc{
+            .size = bytes, .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .category = vulkan::VramCategory::Staging, .hostVisible = true});
+        if (!staging) {
+            return std::unexpected(staging.error());
+        }
+        vulkan::Buffer source = *staging;
+        std::memcpy(source.mapped, compiled.gridData.data(), bytes);
+        Status uploaded = resources.m_memory->FlushBuffer(source, 0, bytes);
+        if (uploaded) {
+            vulkan::Queue&          queue    = context.ComputeQueue();
+            Result<VkCommandBuffer> commands = queue.BeginOneShot();
+            if (!commands) {
+                uploaded = std::unexpected(commands.error());
+            } else {
+                const VkBufferCopy copy{.srcOffset = 0, .dstOffset = 0, .size = bytes};
+                vkCmdCopyBuffer(*commands, source.handle, resources.m_grid.handle, 1, &copy);
+                Result<u64_t> submitted = queue.EndAndSubmit(*commands);
+                if (!submitted) {
+                    uploaded = std::unexpected(submitted.error());
+                } else {
+                    uploaded = queue.WaitTimeline(*submitted, 5ull * 1000 * 1000 * 1000);
+                }
+            }
+        }
+        resources.m_memory->DestroyBuffer(source);
+        if (!uploaded) {
+            return std::unexpected(uploaded.error());
         }
         resources.m_totalBytes += bytes;
     }
