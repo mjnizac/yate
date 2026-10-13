@@ -102,6 +102,7 @@ add_library(engine_objects OBJECT
     src/terrain/evaluator.cpp
     src/terrain/output_writer.cpp
     src/terrain/stream_power.cpp
+    src/terrain/wind.cpp
     src/vulkan/allocator.cpp
     src/vulkan/buffer_pool.cpp
     src/vulkan/context.cpp

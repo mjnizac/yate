@@ -454,6 +454,7 @@ Result<Value> Graph::AddGrid(Value position, std::span<const f32_t> values, cons
     PackFloat(node.params, 3, params.originX);
     PackFloat(node.params, 4, params.originZ);
     PackFloat(node.params, 5, params.cell);
+    node.params[6] = params.wrap ? 1u : 0u;
     return Append(node, location);
 }
 

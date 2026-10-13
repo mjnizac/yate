@@ -7,6 +7,7 @@
 #include <engine/platform.hpp>
 #include <engine/terrain/kernels.hpp>
 #include <engine/terrain/stream_power.hpp>
+#include <engine/terrain/wind.hpp>
 #include <engine/vulkan/context.hpp>
 #include <engine/vulkan/swapchain.hpp>
 #include <engine/vulkan/window.hpp>
@@ -317,6 +318,7 @@ Status shutdown(Application* application) {
     }
     if (g_runtime.memoryReady) {
         terrain::ReleaseStreamPowerCache();
+        terrain::ReleaseWindCache();
         memory::Shutdown();
         g_runtime.memoryReady = false;
     }

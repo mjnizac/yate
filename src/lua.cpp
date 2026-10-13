@@ -25,6 +25,7 @@
 #include <engine/terrain/kernels.hpp>
 #include <engine/terrain/sha256.hpp>
 #include <engine/terrain/stream_power.hpp>
+#include <engine/terrain/wind.hpp>
 
 #include <sol/sol.hpp>
 
@@ -1029,6 +1030,7 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.originX = static_cast<f32_t>(origin[0]);
         params.originZ = static_cast<f32_t>(origin[1]);
         params.cell    = args.Float("cell", 1.0);
+        params.wrap    = args.Boolean("wrap", false);
         if (params.width != size[0] || params.depth != size[1] || params.width < 2 || params.depth < 2) {
             Fail(location, "Terrain.Grid expects size as a pair of whole numbers of at least 2");
         }
@@ -1071,6 +1073,44 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         sol::state_view view(lua);
         sol::table      out = view.create_table(static_cast<i32_t>(count), 0);
         for (usize_t i = 0; i < count; ++i) {
+            out[i + 1] = height[i];
+        }
+        return out;
+    });
+
+    // Aeolian sand transport over a whole periodic grid on the CPU (see wind.hpp): dunes from the wind.
+    // Takes and returns a list of sand heights in metres, x fastest; the wind blows along +x.
+    erosion.set_function("Wind", [](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Erosion.Wind", location);
+        const std::array<f64_t, 2> size = args.Pair("size", {0.0, 0.0});
+        terrain::WindParams        params;
+        params.width = static_cast<u32_t>(size[0]);
+        params.depth = static_cast<u32_t>(size[1]);
+        if (params.width != size[0] || params.depth != size[1] || params.width < 8 || params.depth < 8
+            || static_cast<u64_t>(params.width) * params.depth > (4ull << 20)) {
+            Fail(location, "Erosion.Wind expects size as a pair of whole numbers of at least 8");
+        }
+        params.cell       = args.Number("cell", 20.0);
+        params.slab       = args.Number("slab", 3.0);
+        params.iterations = args.Count("iterations", 200, 1, 100000);
+        params.hop        = args.Count("hop", 5, 1, 256);
+        params.pSand      = args.Number("p_sand", 0.6);
+        params.pBare      = args.Number("p_bare", 0.4);
+        params.shadow     = args.Number("shadow", 15.0);
+        params.repose     = args.Number("repose", 33.0);
+        params.creep      = args.Number("creep", 0.2);
+        params.smooth     = args.Count("smooth", 2, 0, 16);
+        params.seed       = args.Count("seed", 0, 0, ~0u);
+        std::pmr::vector<f64_t> height(&memory::General().Resource());
+        args.Numbers("height", static_cast<usize_t>(params.width) * params.depth, height);
+        args.Finish();
+        if (Status moved = terrain::WindErode(height, params); !moved) {
+            Fail(location, "{}", moved.error().Message());
+        }
+        sol::state_view view(lua);
+        sol::table      out = view.create_table(static_cast<i32_t>(height.size()), 0);
+        for (usize_t i = 0; i < height.size(); ++i) {
             out[i + 1] = height[i];
         }
         return out;

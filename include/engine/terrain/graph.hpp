@@ -353,6 +353,8 @@ public:
         f32_t originX = 0.0f;
         f32_t originZ = 0.0f;
         f32_t cell    = 1.0f;
+        /// Repeat the grid in both directions instead of holding its edge: for a periodic field.
+        b8_t wrap = false;
     };
     /// A grid of `width * depth` values, x fastest, sampled with Catmull-Rom interpolation at
     /// `position` (`R2 -> R2`, metres) and held at its edge value outside. The values are copied.

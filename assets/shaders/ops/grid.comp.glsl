@@ -14,12 +14,18 @@
 //   3  origin x  world position of value (0, 0), metres
 //   4  origin z
 //   5  cell      metres between values
+//   6  wrap      1 repeats the grid in both directions, 0 holds its edge
 
 #version 460
 
 #include "lib/kernel.lib.glsl"
 
 float GridAt(FloatBuffer grid, uint offset, uint width, uint depth, int x, int z) {
+    if (ParamUint(6) != 0u) {
+        // GLSL's `%` on a negative int is undefined, so the modulo goes through floor.
+        x -= int(width) * int(floor(float(x) / float(width)));
+        z -= int(depth) * int(floor(float(z) / float(depth)));
+    }
     x = clamp(x, 0, int(width) - 1);
     z = clamp(z, 0, int(depth) - 1);
     return grid.values[offset + uint(z) * width + uint(x)];
@@ -44,7 +50,10 @@ void main() {
     vec2        origin = vec2(ParamFloat(3), ParamFloat(4));
     float       cell   = ParamFloat(5);
 
-    vec2  g = clamp((position - origin) / cell, vec2(0.0), vec2(float(width - 1u), float(depth - 1u)));
+    vec2 g = (position - origin) / cell;
+    if (ParamUint(6) == 0u) {
+        g = clamp(g, vec2(0.0), vec2(float(width - 1u), float(depth - 1u)));
+    }
     ivec2 i = ivec2(floor(g));
     vec2  t = g - vec2(i);
 
