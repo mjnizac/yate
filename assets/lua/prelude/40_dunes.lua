@@ -32,12 +32,12 @@ local ACCEPTED = {
     seed = true, wind = true, wavelength = true, height = true, sinuosity = true, back = true,
     flats = true, small = true, swell = true, style = true, repose = true, sand = true, cell = true,
     cells = true, iterations = true, variety = true, relief = true, small_wavelength = true,
-    small_height = true, smooth = true,
+    small_height = true, smooth = true, draa_wavelength = true, draa_height = true,
 }
 
 -- One family of dunes: the profile along `wind` (degrees), `wavelength` metres between crests, in
 -- [0, 1] with 1 on the crest. `back` is the fraction of a period the windward slope takes.
-local function crests(c, wind, wavelength, back, sinuosity, seed, smooth)
+local function crests(c, wind, wavelength, back, sinuosity, seed, smooth, round)
     local a, b = math.cos(math.rad(wind)), math.sin(math.rad(wind))
     local along  = c.x * a + c.z * b
     local across = c.z * a - c.x * b
@@ -57,7 +57,19 @@ local function crests(c, wind, wavelength, back, sinuosity, seed, smooth)
     local rise    = saw / back
     local windward = 1.0 - (1.0 - rise) * (1.0 - rise)
     local lee      = (1.0 - saw) / (1.0 - back)
-    return Curves.Clamp{ input = Combine.Min{ a = windward, b = lee }, min = 0.0, max = 1.0 }
+    -- `round` > 0 rounds the brink over that fraction of the height: a smooth minimum of the two
+    -- slopes, so the top of a large dune is a curve and not an edge.
+    if round and round > 0 then
+        -- Smooth at the foot as well: both slopes leave the ground tangentially, so the edge between one
+        -- great dune and the next is a curve and not a line.
+        local w = Curves.Clamp{ input = rise, min = 0.0, max = 1.0 }
+        local l = Curves.Clamp{ input = lee, min = 0.0, max = 1.0 }
+        windward = w * w * (3.0 - 2.0 * w)
+        lee      = l * l * (3.0 - 2.0 * l)
+    end
+    local top = round and round > 0 and Combine.SmoothMin{ a = windward, b = lee, k = round }
+                or Combine.Min{ a = windward, b = lee }
+    return Curves.Clamp{ input = top, min = 0.0, max = 1.0 }
 end
 
 -- A dune field: returns the script's outputs, coloured as sand in the viewer.
@@ -170,57 +182,71 @@ function Dunes.Simulated(t)
     local seed    = t.seed or 0
     local wind    = t.wind or 20.0
     local n       = t.cells or 192
-    local cell    = t.cell or 33.0
-    local sand    = t.sand or 55.0
-    local variety = t.variety or 0.85
+    local cell    = t.cell or 30.0
+    local sand    = t.sand or 70.0
+    local variety = t.variety or 0.3
     local repose  = t.repose or 32.0
-    local swell   = t.swell or 30.0
+    local swell   = t.swell or 25.0
     local slab    = math.tan(math.rad(repose)) * cell / 4.0
     local hash, value = make_noise(seed)
 
-    -- Starting sand: thick and thin regions a few kilometres across, then a little grain so the first
-    -- dunes form where they happen to.
+    -- Dunes: the wind simulation on sand that covers everything (thick, varying a little), so the
+    -- dunes are connected ridges with slopes from one crest to the next and no bare flats between them.
     local heights = {}
-    local coarse, fine = n // 16, n // 6
+    local coarse = n // 16
+    local total = 0.0
     for z = 0, n - 1 do
         for x = 0, n - 1 do
-            local supply = value(x / 16.0, z / 16.0, coarse, 1) * 0.65 + value(x / 6.0, z / 6.0, fine, 2) * 0.35
-            local depth  = sand * math.max(0.0, 1.0 + variety * (supply * 2.0 - 1.0) * 1.4)
+            local supply = value(x / 16.0, z / 16.0, coarse, 1)
+            local depth  = sand * (1.0 + variety * (supply * 2.0 - 1.0))
             heights[#heights + 1] = depth + hash(x, z, 3) * slab * 2.0
+            total = total + heights[#heights]
         end
     end
+    local mean  = total / (n * n)
     local moved = Erosion.Wind{
-        size = { n, n }, cell = cell, slab = slab, height = heights, iterations = t.iterations or 300,
-        hop = 5, repose = repose, shadow = 15.0, creep = 0.25, seed = seed, smooth = t.smooth or 1,
+        size = { n, n }, cell = cell, slab = slab, height = heights, iterations = t.iterations or 260,
+        hop = 5, repose = repose, shadow = 15.0, creep = 0.3, seed = seed, smooth = t.smooth or 3,
     }
 
-    -- The grid wraps, so it tiles the plane; it is read in a frame turned to the wind.
+    local c      = Terrain.Coords{}
     local local_ = Terrain.Transform{ rotation = wind }
     local dunes  = Terrain.Grid{
         values = moved, size = { n, n }, origin = { 0, 0 }, cell = cell, wrap = true, position = local_,
+    } - mean
+
+    -- How big the dunes are, by region, a few kilometres across: from almost flat to their full
+    -- height, so a field has low ground with small dunes, and ranges of tall ones.
+    local amplitude = Curves.Smoothstep{
+        input = Noises.fBm{ frequency = 1.0 / 3500.0, octaves = 2, amplitude = 1.0, seed = seed + 8 }.value,
+        min = -0.45, max = 0.45,
     }
-    -- The simulation's dunes are steep for their size (slab heights are coarse); half their height
-    -- keeps the shapes and gives the long, soft transitions sand has.
-    local big = dunes * (t.relief or 0.7)
-    -- Small dunes on the gentle backs of the big ones, a few metres high, as in every real erg: the
-    -- pointwise pattern at a fifth of the scale, on a wind turned 20 degrees, faded off the slip faces.
-    local small  = crests(Terrain.Coords{}, wind + 20.0, t.small_wavelength or 240.0, 0.75, 1.4, seed + 5, true)
-    local gentle = 1.0 - Masks.Slope{ input = Terrain.Gradient{ input = big }, min = 0.06, max = 0.2 }
-    -- Only in patches, and of varying height, so they are not a pattern laid over everything.
+    local size = 0.12 + 1.1 * amplitude
+
+    -- Draa: the great dunes the others ride on, kilometres apart, with rounded crests and long
+    -- slopes, tallest where the dunes are.
+    local draa = crests(c, wind - 10.0, t.draa_wavelength or 2600.0, 0.72, 0.5, seed + 9, false, 0.35)
+    local draaHeight = (t.draa_height or 90.0) * (0.25 + 0.75 * amplitude)
+
+    -- Small dunes in patches on the gentle slopes, a couple of metres.
+    local small  = crests(c, wind + 20.0, t.small_wavelength or 200.0, 0.75, 1.4, seed + 5, true, 0.3)
     local patches = Curves.Smoothstep{
         input = Noises.fBm{ frequency = 1.0 / 1400.0, octaves = 2, amplitude = 1.0, seed = seed + 7 }.value,
         min = -0.2, max = 0.4,
     }
-    gentle = gentle * patches
-    local sea = Noises.fBm{ frequency = 1.0 / 9000.0, octaves = 2, amplitude = swell, seed = seed + 6 }
-    local land = big + small * gentle * (t.small_height or 4.0) + sea.value
-    -- A light settling: the slip faces are already at repose; this only takes the grid out of them.
+
+    local sea  = Noises.fBm{ frequency = 1.0 / 9000.0, octaves = 2, amplitude = swell, seed = seed + 6 }
+    local land = dunes * size * (t.relief or 0.75) + draa * draaHeight + sea.value
+    local gentle = 1.0 - Masks.Slope{ input = Terrain.Gradient{ input = land }, min = 0.05, max = 0.18 }
+    land = land + small * gentle * patches * (t.small_height or 2.5)
+
+    -- Settling, and a light rounding: crests are curves, not edges.
     local settled = Erosion.Thermal{
-        input = land, iterations = 8, talus = math.tan(math.rad(repose)), strength = 0.3,
+        input = land, iterations = 12, talus = math.tan(math.rad(repose)), strength = 0.3,
     }
-    local top = sand * (1.0 + variety) * 2.5
+    local top = (t.draa_height or 90.0) + sand * 1.5 + swell
     return {
-        height  = { value = settled, range = { -swell * 1.5, top + swell * 1.5 } },
+        height  = { value = settled, range = { -sand - swell * 1.5, top } },
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } },
         look    = { palette = "sand", wind = wind },
     }
