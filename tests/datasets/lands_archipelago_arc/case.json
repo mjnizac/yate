@@ -1,0 +1,22 @@
+{
+  "description": "Lands.Archipelago, arc layout: islands placed on the CPU, one outline each, the region id per cell and the signed distance end to end.",
+  "seed": 3,
+  "resolution": 32.0,
+  "section": 128,
+  "bounds": {
+    "min_x": -16384.0,
+    "min_z": -16384.0,
+    "max_x": 16384.0,
+    "max_z": 16384.0
+  },
+  "outputs": [
+    "height.png",
+    "region_id.png"
+  ],
+  "tolerance": 0,
+  "performance": {
+    "passes": 3,
+    "warn_slower": 0.1,
+    "fail_slower": 0.25
+  }
+}
