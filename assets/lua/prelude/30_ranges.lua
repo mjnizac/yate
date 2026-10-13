@@ -34,7 +34,7 @@ local function check(t)
     local allowed = {
         ridges = true, peaks = true, seed = true, center = true, extent = true, cell = true,
         steps = true, k = true, diffusion = true, talus = true, lift = true, wander = true, cells = true,
-        cirques = true, wobble = true, fill = true, fill_radius = true,
+        cirques = true, wobble = true, fill = true, fill_radius = true, repose = true, talus_cones = true,
     }
     for key in pairs(t) do
         if not allowed[key] then
@@ -231,26 +231,34 @@ function Ranges.Carve(t)
     -- 3. Cirques under the peaks: bowls with a steep headwall (`u (2 - u)`), each on the side of the
     -- peak away from the next one, then a short second run that keeps the walls (steeper talus) and
     -- lets the rivers reach the floors. `cirques = false` skips this.
+    local cuts_ = {}
     if t.cirques ~= false and #peaks > 0 then
-        for z = 0, n - 1 do
-            for x = 0, n - 1 do
-                local px, pz = originX + x * cell, originZ + z * cell
-                local i = z * n + x + 1
-                local cut = 0.0
-                for j, p in ipairs(peaks) do
-                    local radius = (p.radius or 3000.0) * 0.32
-                    for c = 0, 2 do
-                        local a = (j * 2.1 + c * 2.094) + 0.6 * fbm(j * 31.0, c * 17.0, 1.0, 1, 80)
-                        local cx = p.at[1] + math.cos(a) * radius * 1.15
-                        local cz = p.at[2] + math.sin(a) * radius * 1.15
-                        local d = math.sqrt((px - cx) ^ 2 + (pz - cz) ^ 2)
-                        local u = smooth(1.0 - d / radius) ^ 0.5
-                        cut = math.max(cut, u * (2.0 - u) * p.height * 0.28)
+        -- Each cirque touches only the cells inside its radius, so it is visited there and nowhere
+        -- else: walking every cell for every cirque was most of the time this function took.
+        for j, p in ipairs(peaks) do
+            local radius = (p.radius or 3000.0) * 0.32
+            for c = 0, 2 do
+                local a  = (j * 2.1 + c * 2.094) + 0.6 * fbm(j * 31.0, c * 17.0, 1.0, 1, 80)
+                local cx = p.at[1] + math.cos(a) * radius * 1.15
+                local cz = p.at[2] + math.sin(a) * radius * 1.15
+                local depth = p.height * 0.28
+                local x0 = math.max(0, math.floor((cx - radius - originX) / cell))
+                local x1 = math.min(n - 1, math.ceil((cx + radius - originX) / cell))
+                local z0 = math.max(0, math.floor((cz - radius - originZ) / cell))
+                local z1 = math.min(n - 1, math.ceil((cz + radius - originZ) / cell))
+                for z = z0, z1 do
+                    for x = x0, x1 do
+                        local d = math.sqrt((originX + x * cell - cx) ^ 2 + (originZ + z * cell - cz) ^ 2)
+                        if d < radius then
+                            local u = smooth(1.0 - d / radius) ^ 0.5
+                            local i = z * n + x + 1
+                            cuts_[i] = math.max(cuts_[i] or 0.0, u * (2.0 - u) * depth)
+                        end
                     end
                 end
-                carved[i] = carved[i] - cut
             end
         end
+        for i, cut in pairs(cuts_) do carved[i] = carved[i] - cut end
         local still = {}
         for i = 1, #uplift do still[i] = uplift[i] * 0.3 end
         carved = Erosion.StreamPower{
@@ -299,6 +307,45 @@ function Ranges.Carve(t)
         end
     end
 
+    -- Talus: scree cones under the walls. A surface is grown from every cell, lowered by `drop`, down at
+    -- the angle of repose; where the ground falls faster than that (a wall) the surface stands above
+    -- it at the wall's foot, and the difference is the cone. Thickness is capped, so a cone is a skirt
+    -- and not a burial. Two chamfer passes over the grid compute it exactly enough for straight cones.
+    local repose = math.tan(math.rad(t.repose or 33.0))
+    if repose > 0 and (t.talus_cones ~= false) then
+        local drop  = tallest * 0.1
+        local cap   = tallest * 0.12
+        local D = {}
+        for i = 1, #carved do D[i] = carved[i] - drop end
+        local straight, diagonal = repose * cell, repose * cell * math.sqrt(2.0)
+        local function relax(x, z, dx, dz, step)
+            local xx, zz = x + dx, z + dz
+            if xx >= 0 and zz >= 0 and xx < n and zz < n then
+                local v = D[zz * n + xx + 1] - step
+                local i = z * n + x + 1
+                if v > D[i] then D[i] = v end
+            end
+        end
+        for z = 0, n - 1 do
+            for x = 0, n - 1 do
+                relax(x, z, -1, 0, straight); relax(x, z, 0, -1, straight)
+                relax(x, z, -1, -1, diagonal); relax(x, z, 1, -1, diagonal)
+            end
+        end
+        for z = n - 1, 0, -1 do
+            for x = n - 1, 0, -1 do
+                relax(x, z, 1, 0, straight); relax(x, z, 0, 1, straight)
+                relax(x, z, 1, 1, diagonal); relax(x, z, -1, 1, diagonal)
+            end
+        end
+        for i = 1, #carved do
+            local h = carved[i]
+            if D[i] > h then
+                carved[i] = h + math.min(D[i] - h, cap)
+            end
+        end
+    end
+
     -- 4. On the GPU, read through a broad warp: the simulation routes water in eight directions on a
     -- square grid, and a channel that follows one of them for long reads as a ruled line.
     local wobble = t.wobble or 180.0
@@ -328,8 +375,8 @@ function Ranges.Finish(structure, tallest, seed, options)
     local tilt   = (c.x * math.cos(strike) + c.z * math.sin(strike)) * math.tan(dip)
     local bend   = Noises.fBm{ frequency = 0.0005, octaves = 3, amplitude = 220.0, seed = seed + 81 }
     local plane  = tilt + bend.value
-    local step   = options.bed or 180.0
-    local bedded = Curves.Terrace{ input = ground + plane, step = step, sharpness = 0.82 } - plane
+    local step   = options.bed or 220.0
+    local bedded = Curves.Terrace{ input = ground + plane, step = step, sharpness = 0.5 } - plane
     local patches = Curves.Smoothstep{
         input = Noises.fBm{ frequency = 0.00035, octaves = 2, amplitude = 1.0, seed = seed + 83 }.value,
         min = 0.0, max = 0.35,
