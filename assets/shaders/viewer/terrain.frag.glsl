@@ -53,15 +53,13 @@ const vec3 kGrassColor = vec3(0.22, 0.32, 0.16);
 const vec3 kScreeColor = vec3(0.47, 0.45, 0.42);
 const vec3 kRockColor  = vec3(0.30, 0.29, 0.28);
 const vec3 kSnowColor  = vec3(0.90, 0.92, 0.96);
-const float kScreeLine = 1250.0;
-const float kSnowLine  = 1500.0;
+const float kScreeLine = 1700.0;
+const float kSnowLine  = 2100.0;
 
 // Rock texture, which the heightfield cannot carry: it is sampled every few metres at best and every 16
-// to 32 in a distant view. Where the ground is steep, a ridged noise in world space, stretched about
-// eight times along the vertical, bumps the normal and shades the albedo. On a steep face the vertical
-// lies nearly in the surface, so the stretch turns into ribs and runnels running down the face, as rock
-// weathers. Two octaves, each faded out once a pixel covers it so it never aliases; flat ground gets
-// none and stays one colour. (Voronoi blocks were tried: from a kilometre away they read as paving.)
+// to 32 in a distant view. Where the ground is steep, streaks down the fall line bump the normal and
+// shade the albedo; flat ground gets none and stays one colour. (Voronoi blocks read as paving from a
+// kilometre away, and a 3D noise stretched vertically as pitted holes; streaks read as erosion.)
 float Hash31(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.zyx + 31.32);
@@ -79,13 +77,17 @@ float ValueNoise(vec3 p) {
                f.z);
 }
 
+// Streaks running down the face: a ridged noise stretched seven times along the vertical. On a steep
+// face the vertical lies nearly in the surface, so every crease follows the fall line, as runnels and
+// gullies do. (Projecting on the contour direction instead aliases: the direction moves with the normal
+// and the position is thousands of metres.) Two octaves, each faded out once a pixel covers it.
 float Ribs(vec3 p, float footprint) {
     float sum        = 0.0;
-    float wavelength = 40.0;
+    float wavelength = 26.0;
     float amplitude  = 1.0;
     for (int o = 0; o < 2; ++o) {
-        float fade = 1.0 - smoothstep(wavelength * 0.3, wavelength * 0.7, footprint);
-        float n    = ValueNoise(p * vec3(1.0, 0.12, 1.0) / wavelength) * 2.0 - 1.0;
+        float fade = 1.0 - smoothstep(wavelength * 0.25, wavelength * 0.55, footprint);
+        float n    = ValueNoise(p * vec3(1.0, 1.0 / 7.0, 1.0) / wavelength) * 2.0 - 1.0;
         sum += (1.0 - 2.0 * abs(n)) * amplitude * fade;
         wavelength *= 0.4;
         amplitude *= 0.5;
@@ -130,7 +132,7 @@ void main() {
                       Ribs(vWorldPosition + vec3(0, 0, e), footprint)
                           - Ribs(vWorldPosition - vec3(0, 0, e), footprint)) / (2.0 * e);
         g -= dot(g, normal) * normal;
-        normal = normalize(normal - g * (7.0 * weight));
+        normal = normalize(normal - g * (4.0 * weight));
     }
 
     float sun = max(dot(normal, kSunDirection), 0.0);
