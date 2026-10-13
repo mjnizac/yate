@@ -116,6 +116,10 @@ void main() {
                * (1.0 - smoothstep(0.34, 0.5, slope + rock * 0.08));
 
     vec3 albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
+    // Talus: ground at the angle of repose (about 28 to 38 degrees) above the valley floors is scree,
+    // pale and bare, whatever its height; grass holds only on gentler slopes.
+    float repose = smoothstep(0.09, 0.13, slope) * smoothstep(600.0, 900.0, height);
+    albedo       = mix(albedo, kScreeColor * 1.12, repose);
     // Rock: darker in the runnels, lighter on the ribs.
     vec3 rockColor = kRockColor * (0.9 + 0.12 * rock);
     albedo         = mix(albedo, rockColor, rocky);
