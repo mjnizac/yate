@@ -358,6 +358,16 @@ public:
     /// `position` (`R2 -> R2`, metres) and held at its edge value outside. The values are copied.
     [[nodiscard]] Result<Value> AddGrid(Value position, std::span<const f32_t> values,
                                         const GridParams& params, SourceLocation location);
+    /// How the viewer should colour the terrain, from the script's `look = { ... }`. Not part of the
+    /// graph: an export ignores it. `palette` 0 is the default (grass, rock, snow), 1 is sand; `wind`
+    /// is the direction the wind blows towards, in degrees from +x towards +z.
+    struct Look {
+        u32_t palette = 0;
+        f32_t wind    = 0.0f;
+    };
+    void                     SetLook(Look look) noexcept { m_look = look; }
+    [[nodiscard]] const Look& GetLook() const noexcept { return m_look; }
+
     /// Every grid's values, back to back; a grid node's parameter word 0 is its offset in here.
     [[nodiscard]] std::span<const f32_t> GridData() const noexcept { return m_gridData; }
 
@@ -471,6 +481,7 @@ private:
     /// The one thing a graph allocates, and only when a script makes a grid: its values are data, not
     /// a node, and can be megabytes. Given the general allocator on first use.
     std::pmr::vector<f32_t> m_gridData;
+    Look                    m_look{};
 };
 
 /// A graph is large, because the spec asks for fixed-capacity storage so that building one never

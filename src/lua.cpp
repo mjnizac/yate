@@ -1341,6 +1341,23 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
                                                    "every output must be named"));
         }
 
+        // `look` is not an output: it tells the viewer how to colour the terrain.
+        if (*name == "look" && entry.second.is<sol::table>()) {
+            const sol::table           look    = entry.second.as<sol::table>();
+            const std::string          palette = look.get_or<std::string>("palette", "default");
+            Graph::Look                parsed;
+            if (palette == "sand") {
+                parsed.palette = 1;
+            } else if (palette != "default") {
+                return std::unexpected(MakeScriptError(
+                    ErrorCode::ScriptError, ErrorStage::Script, location.file, location.line,
+                    "look.palette '{}' is not known; expected 'default' or 'sand'", palette));
+            }
+            parsed.wind = static_cast<f32_t>(look.get_or("wind", 0.0));
+            graph.SetLook(parsed);
+            continue;
+        }
+
         Value value{};
         f32_t rangeMin = -1.0f;
         f32_t rangeMax = 1.0f;
@@ -1415,8 +1432,8 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
 // engine runs before a script is part of what a terrain *is*, so it is named, hashed into the sidecar
 // and never picked up from wherever a path happens to lead.
 
-constexpr std::array<const char*, 3> kPreludeFiles{"10_shapes.lua", "20_landforms.lua",
-                                                   "30_ranges.lua"};
+constexpr std::array<const char*, 4> kPreludeFiles{"10_shapes.lua", "20_landforms.lua",
+                                                   "30_ranges.lua", "40_dunes.lua"};
 
 [[nodiscard]] std::string PreludePath(const char* name) {
     const std::string_view root = platform::ExecutableDirectory();

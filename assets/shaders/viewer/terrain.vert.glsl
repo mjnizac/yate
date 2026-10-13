@@ -34,7 +34,7 @@ layout(push_constant, scalar) uniform Push {
     FloatBuffer heights;
     FloatBuffer normals;
     vec3 eye;
-    uint pad;
+    uint look;
 }
 pc;
 

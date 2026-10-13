@@ -78,6 +78,7 @@ void Graph::Clear() noexcept {
     m_nodeCount   = 0;
     m_outputCount = 0;
     m_gridData.clear();
+    m_look = Look{};
 }
 
 const Graph::Node& Graph::NodeAt(u32_t index) const {

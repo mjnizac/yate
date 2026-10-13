@@ -23,7 +23,7 @@ layout(push_constant, scalar) uniform Push {
     uvec2 heights;
     uvec2 normals;
     vec3  eye;
-    uint  pad;
+    uint  look;
 }
 pc;
 
@@ -127,6 +127,35 @@ void main() {
     vec3 rockColor = kRockColor * (0.9 + 0.12 * rock);
     albedo         = mix(albedo, rockColor, rocky);
     albedo         = mix(albedo, kSnowColor, snow);
+
+    // Sand (`look = { palette = "sand", wind = degrees }`): warm and nearly uniform, a little darker and
+    // redder on the steep lee faces, with ripples across the wind on the gentle slopes. Ripples are a
+    // few metres apart here, larger than in nature so the camera can see them, and fade out as a pixel
+    // grows past them so they never alias.
+    if ((pc.look & 0xFFu) == 1u) {
+        float wind = radians(float(pc.look >> 8u));
+        vec2  dir  = vec2(cos(wind), sin(wind));
+        float bend = ValueNoise(vWorldPosition * vec3(1.0, 0.0, 1.0) / 60.0) * 6.2832;
+        float gentle = 1.0 - smoothstep(0.03, 0.12, slope);
+        vec2  ripple = vec2(0.0);
+        float wavelength = 5.0;
+        float amplitude  = 0.35;
+        for (int o = 0; o < 2; ++o) {
+            float fade  = 1.0 - smoothstep(wavelength * 0.2, wavelength * 0.45, footprint);
+            float phase = dot(vWorldPosition.xz, dir) / wavelength + bend * 0.35 + float(o) * 1.7;
+            // Asymmetric like the dunes themselves: a long gentle back and a short steep front.
+            float u     = fract(phase);
+            float dh    = u < 0.75 ? 1.0 / 0.75 : -1.0 / 0.25;
+            ripple += dir * dh * amplitude * fade * gentle;
+            wavelength *= 0.45;
+            amplitude  *= 0.6;
+        }
+        normal = normalize(normal - vec3(ripple.x, 0.0, ripple.y) * 0.5);
+        vec3 sand = vec3(0.66, 0.45, 0.24)
+                  * (0.95 + 0.08 * ValueNoise(vec3(vWorldPosition.x, 0.0, vWorldPosition.z) / 400.0));
+        float lee = smoothstep(0.08, 0.22, 1.0 - clamp(normal.y, 0.0, 1.0));
+        albedo    = mix(sand, sand * vec3(0.86, 0.80, 0.76), lee);
+    }
 
     float sun = max(dot(normal, kSunDirection), 0.0) * sunlit;
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,

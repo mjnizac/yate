@@ -295,6 +295,8 @@ struct Terrain {
     /// Index into `compiled.outputs`.
     usize_t heightOutput  = 0;
     usize_t normalsOutput = 0;
+    /// The script's `look`, packed for the push constants.
+    u32_t look = 0;
     /// Halo each output buffer carries, which is not always zero: a value some other op reads with a
     /// radius keeps that halo even when it is also a requested output.
     u32_t heightHalo  = 0;
@@ -406,6 +408,11 @@ struct TileCache {
     }
     built.timers = std::move(*timers);
 
+    {
+        const Graph::Look look = loaded.graph.GetLook();
+        const f32_t       wind = std::fmod(std::fmod(look.wind, 360.0f) + 360.0f, 360.0f);
+        built.look = (look.palette & 0xFFu) | (static_cast<u32_t>(wind) << 8);
+    }
     built.heightOutput  = loaded.heightOutput;
     built.normalsOutput = loaded.normalsOutput;
     built.heightMinimum = loaded.heightMinimum;
@@ -1145,6 +1152,7 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
     constants.samples        = state.terrain.samples;
+    constants.look           = state.terrain.look;
     constants.eye            = {eye.x, eye.y, eye.z};
     constants.waterLevel     = water.level;
     constants.waterColour    = shadeWater ? PackWater(water) : 0u;
