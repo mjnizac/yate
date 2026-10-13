@@ -1472,8 +1472,8 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
 // engine runs before a script is part of what a terrain *is*, so it is named, hashed into the sidecar
 // and never picked up from wherever a path happens to lead.
 
-constexpr std::array<const char*, 4> kPreludeFiles{"10_shapes.lua", "20_landforms.lua",
-                                                   "30_ranges.lua", "40_dunes.lua"};
+constexpr std::array<const char*, 5> kPreludeFiles{"10_shapes.lua", "20_landforms.lua",
+                                                   "30_ranges.lua", "40_dunes.lua", "50_lands.lua"};
 
 [[nodiscard]] std::string PreludePath(const char* name) {
     const std::string_view root = platform::ExecutableDirectory();

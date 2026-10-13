@@ -60,7 +60,7 @@ add_custom_target(engine_shaders ALL DEPENDS ${ENGINE_SHADER_OUTPUTS})
 
 # The Lua prelude: scripts the engine runs before the user's, copied next to the executable. The list is
 # closed on purpose and matches `kPreludeFiles` in src/lua.cpp, in load order.
-set(ENGINE_PRELUDE_FILES 10_shapes.lua 20_landforms.lua 30_ranges.lua 40_dunes.lua)
+set(ENGINE_PRELUDE_FILES 10_shapes.lua 20_landforms.lua 30_ranges.lua 40_dunes.lua 50_lands.lua)
 set(ENGINE_PRELUDE_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/lua/prelude")
 set(ENGINE_PRELUDE_OUTPUTS "")
 foreach(prelude_file ${ENGINE_PRELUDE_FILES})
