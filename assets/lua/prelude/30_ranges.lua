@@ -227,7 +227,10 @@ function Ranges.Carve(t)
             uplift[#uplift + 1] = u / steps * lift
             -- A rough start at several scales, so the first channels form where the ground happens to
             -- be low, bend around the large bumps and the network is irregular.
-            height[#height + 1] = u * 0.02 + 80.0 * fbm(px, pz, 3000.0, 2, 50) + 6.0 * hash(x, z, 70)
+            -- Only where the ground rises: beyond the range the plain stays flat.
+            local rough = smooth(u / (tallest * 0.05))
+            height[#height + 1] = u * 0.02
+                                  + (80.0 * fbm(px, pz, 3000.0, 2, 50) + 6.0 * hash(x, z, 70)) * rough
         end
     end
     for i = 1, #height do height[i] = math.max(height[i], 0.0) end
@@ -475,13 +478,13 @@ function Ranges.Carve(t)
     }, tallest, sun
 end
 
--- The finish every range gets on the GPU: low rolling country around it, fine gullies on the steep
+-- The finish every range gets on the GPU: a flat plain around it, fine gullies on the steep
 -- walls of the simulated valleys, and the erosion passes. Returns the script's outputs.
 function Ranges.Finish(structure, tallest, seed, options, sun)
     seed    = seed or 0
     options = options or {}
-    local country = Noises.fBm{ frequency = 0.0004, octaves = 3, amplitude = 45.0, seed = seed + 5 }
-    local ground  = structure + country.value
+    -- The plain around the range is flat: the mountains stand on it, nothing else does.
+    local ground  = structure
     local mountain = Curves.Smoothstep{ input = structure, min = tallest * 0.05, max = tallest * 0.25 }
 
     -- Strata: rock laid down in beds that were then tilted. The height is cut into steps along planes
