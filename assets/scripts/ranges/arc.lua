@@ -9,7 +9,7 @@ local function main(params)
         local a = math.rad(200 + i * 17.5)
         arc[#arc + 1] = { math.cos(a) * 8000.0, math.sin(a) * 8000.0 + 5000.0 }
     end
-    local structure, tallest, extras = Ranges.Carve{
+    local structure, tallest, sun = Ranges.Carve{
         seed = params.seed,
         ridges = {
             { points = arc, height = h, width = 4200 },
@@ -21,7 +21,7 @@ local function main(params)
             { at = arc[7], height = h * 1.15, radius = 2800 },
         },
     }
-    return Ranges.Finish(structure, tallest, params.seed, { resolution = params.resolution }, extras)
+    return Ranges.Finish(structure, tallest, params.seed, nil, sun)
 end
 
 return main

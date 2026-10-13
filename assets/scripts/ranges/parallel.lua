@@ -5,7 +5,7 @@
 
 local function main(params)
     local h = params.height or 2000.0
-    local structure, tallest, extras = Ranges.Carve{
+    local structure, tallest, sun = Ranges.Carve{
         seed = params.seed,
         ridges = {
             { points = { { -10000, 3000 }, { -3000, 4200 }, { 3500, 3200 }, { 10000, 4400 } },
@@ -18,7 +18,7 @@ local function main(params)
             { at = { 5500, -3800 }, height = h * 1.05, radius = 2600 },
         },
     }
-    return Ranges.Finish(structure, tallest, params.seed, { resolution = params.resolution }, extras)
+    return Ranges.Finish(structure, tallest, params.seed, nil, sun)
 end
 
 return main

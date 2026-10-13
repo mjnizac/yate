@@ -114,11 +114,11 @@ function Ranges.Carve(t)
     local minX, minZ, maxX, maxZ = math.huge, math.huge, -math.huge, -math.huge
     for _, r in ipairs(t.ridges) do
         for _, p in ipairs(r.points) do
-            minX, maxX = math.min(minX, p[1] - r.width * 2.0), math.max(maxX, p[1] + r.width * 2.0)
-            minZ, maxZ = math.min(minZ, p[2] - r.width * 2.0), math.max(maxZ, p[2] + r.width * 2.0)
+            minX, maxX = math.min(minX, p[1] - r.width), math.max(maxX, p[1] + r.width)
+            minZ, maxZ = math.min(minZ, p[2] - r.width), math.max(maxZ, p[2] + r.width)
         end
     end
-    local margin   = (t.wander or 1300.0) + 1500.0
+    local margin   = (t.wander or 1300.0) + 2500.0
     local center   = t.center or { (minX + maxX) * 0.5, (minZ + maxZ) * 0.5 }
     local extent   = t.extent or (math.max(maxX - minX, maxZ - minZ) + 2.0 * margin)
     local n        = t.cells or 230
@@ -178,10 +178,6 @@ function Ranges.Carve(t)
             local d, s = along(wx, wz, r.points, r.lengths)
             local h = r.height * (0.85 + 0.25 * fbm(s, i * 977.0, 4000.0, 2, 30 + i))
             best = math.max(best, h * smooth(1.0 - d / r.width))
-            -- The piedmont: low foothills beyond the range, patchy, falling off over another width and
-            -- a half, so the rivers that leave the mountains keep cutting valleys on the way out.
-            local foot = r.height * 0.16 * (0.55 + 0.45 * fbm(wx, wz, 2200.0, 2, 60 + i))
-            best = math.max(best, foot * smooth(1.0 - (d - r.width * 0.6) / (r.width * 1.5)))
         end
         for _, p in ipairs(peaks) do
             local d = math.sqrt((wx - p.at[1]) ^ 2 + (wz - p.at[2]) ^ 2)
@@ -406,9 +402,6 @@ function Ranges.Carve(t)
     -- the angle of repose; where the ground falls faster than that (a wall) the surface stands above
     -- it at the wall's foot, and the difference is the cone. Thickness is capped, so a cone is a skirt
     -- and not a burial. Two chamfer passes over the grid compute it exactly enough for straight cones.
-    -- Where the cones lie, 0 to 1, for the viewer to paint as scree (see `Ranges.Finish`).
-    local scree = {}
-    for i = 1, #carved do scree[i] = 0.0 end
     local repose = math.tan(math.rad(t.repose or 33.0))
     if repose > 0 and (t.talus_cones ~= false) then
         local drop  = tallest * 0.1
@@ -440,7 +433,6 @@ function Ranges.Carve(t)
             local h = carved[i]
             if D[i] > h then
                 carved[i] = h + math.min(D[i] - h, cap)
-                scree[i] = math.min((D[i] - h) / (cap * 0.25), 1.0)
             end
         end
     end
@@ -478,50 +470,18 @@ function Ranges.Carve(t)
     local sun = Terrain.Grid{
         values = shadow, size = { n, n }, origin = { originX, originZ }, cell = cell, position = position,
     }
-    -- Blurred twice over a cell, so the edge of a cone fades instead of drawing its outline.
-    for _ = 1, 2 do
-        local soft = {}
-        for z = 0, n - 1 do
-            for x = 0, n - 1 do
-                local sum, count = 0.0, 0
-                for dz = -1, 1 do
-                    for dx = -1, 1 do
-                        local xx, zz = x + dx, z + dz
-                        if xx >= 0 and zz >= 0 and xx < n and zz < n then
-                            sum, count = sum + scree[zz * n + xx + 1], count + 1
-                        end
-                    end
-                end
-                soft[z * n + x + 1] = sum / count
-            end
-        end
-        scree = soft
-    end
-    local loose = Terrain.Grid{
-        values = scree, size = { n, n }, origin = { originX, originZ }, cell = cell, position = position,
-    }
     return Terrain.Grid{
         values = carved, size = { n, n }, origin = { originX, originZ }, cell = cell, position = position,
-    }, tallest, { sun = sun, scree = loose }
+    }, tallest, sun
 end
 
 -- The finish every range gets on the GPU: low rolling country around it, fine gullies on the steep
 -- walls of the simulated valleys, and the erosion passes. Returns the script's outputs.
--- `extras` is the third thing `Ranges.Carve` returns (the shadow and the scree), and `options` may carry
--- the script's `params.resolution`, which keeps the strata from stairstepping on a coarse level.
-function Ranges.Finish(structure, tallest, seed, options, extras)
-    extras = extras or {}
+function Ranges.Finish(structure, tallest, seed, options, sun)
     seed    = seed or 0
     options = options or {}
-    -- The country around is not one texture: broad zones of hills between plains, the hills coming
-    -- and going over 6 to 8 km. The piedmont itself comes from the simulation.
-    local zone = Curves.Smoothstep{
-        input = Noises.fBm{ frequency = 0.00014, octaves = 2, amplitude = 1.0, seed = seed + 7 }.value,
-        min = -0.15, max = 0.35,
-    }
-    local hills  = Noises.fBm{ frequency = 0.0007, octaves = 5, amplitude = 150.0, seed = seed + 9 }
-    local plains = Noises.fBm{ frequency = 0.0004, octaves = 3, amplitude = 25.0, seed = seed + 5 }
-    local ground = structure + plains.value + (hills.value + 60.0) * zone
+    local country = Noises.fBm{ frequency = 0.0004, octaves = 3, amplitude = 45.0, seed = seed + 5 }
+    local ground  = structure + country.value
     local mountain = Curves.Smoothstep{ input = structure, min = tallest * 0.05, max = tallest * 0.25 }
 
     -- Strata: rock laid down in beds that were then tilted. The height is cut into steps along planes
@@ -536,11 +496,7 @@ function Ranges.Finish(structure, tallest, seed, options, extras)
     local bend   = Noises.fBm{ frequency = 0.0005, octaves = 3, amplitude = 220.0, seed = seed + 81 }
     local plane  = tilt + bend.value
     local step   = options.bed or 220.0
-    -- A riser is never steeper than a few samples allow: on a coarse level a sharp step aliases into a
-    -- saw along every crest it crosses.
-    local spacing = options.resolution or 4.0
-    local sharp   = math.max(0.1, math.min(0.5, 0.5 - spacing / 80.0))
-    local bedded = Curves.Terrace{ input = ground + plane, step = step, sharpness = sharp } - plane
+    local bedded = Curves.Terrace{ input = ground + plane, step = step, sharpness = 0.5 } - plane
     local patches = Curves.Smoothstep{
         input = Noises.fBm{ frequency = 0.00035, octaves = 2, amplitude = 1.0, seed = seed + 83 }.value,
         min = 0.0, max = 0.35,
@@ -552,7 +508,6 @@ function Ranges.Finish(structure, tallest, seed, options, extras)
     local shed = Erosion.Thermal{
         input = strata, iterations = 48, talus = math.tan(math.rad(35.0)), strength = 0.5,
     }
-    local fallen = Curves.Smoothstep{ input = shed - strata, min = 0.5, max = 6.0 }
     strata = Combine.Max{ a = strata, b = shed }
 
     -- Few octaves and long cells: streaks running down the walls, not grain.
@@ -582,12 +537,7 @@ function Ranges.Finish(structure, tallest, seed, options, extras)
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } },
     }
     -- The viewer darkens what this says is out of the sun; an export writes it as its own map.
-    if extras.sun then outputs.shadow = { value = extras.sun, range = { 0, 1 } } end
-    -- Where loose rock lies: the cones of the simulation and what the strata shed. The viewer paints
-    -- scree there and nowhere else.
-    local scree = fallen * mountain
-    if extras.scree then scree = Combine.Max{ a = extras.scree, b = scree } end
-    outputs.scree = { value = Curves.Clamp{ input = scree, min = 0.0, max = 1.0 }, range = { 0, 1 } }
+    if sun then outputs.shadow = { value = sun, range = { 0, 1 } } end
     return outputs
 end
 
