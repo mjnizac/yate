@@ -577,4 +577,64 @@ function Lands.Archipelago(t)
     return Lands.Island(copy)
 end
 
+-- A continent, as a region and not as a planet: a large lumpy mass (the outline of `Lands.Island` at
+-- its most irregular) with mountain ranges raised across its interior by `Ranges.Carve`. The ranges are
+-- given as `ranges` (a list of { points, height, width }, as in `Ranges.Carve`) or generated: `ranges_count`
+-- crest lines of a few segments, wandering inside the core of the outline. They fade out towards the
+-- coast over the first 5 to 20 % of the radius, so no mountain falls straight into the sea. The rivers
+-- of the ranges end at the edge of their grid, not at the sea: draining to the coast waits for
+-- `Erosion.StreamPower` to take the sea as its base level.
+function Lands.Continent(t)
+    t = t or {}
+    if type(t) ~= "table" then
+        fail("Lands.Continent expects a table of named arguments, as in Lands.Continent{ ... }")
+    end
+    local seed   = t.seed or 0
+    local radius = t.radius or 14000.0
+    local copy = {}
+    for key, value in pairs(t) do
+        if key ~= "ranges" and key ~= "ranges_count" and key ~= "range_height" then copy[key] = value end
+    end
+    copy.radius    = radius
+    copy.lumpiness = copy.lumpiness or 1.0
+    copy.roughness = copy.roughness or 0.7
+    copy.height    = copy.height or 380.0
+    copy.hypsometry = copy.hypsometry or 1.3
+    local continent = Lands.Island(copy)
+
+    local ridges = t.ranges
+    local tallest = t.range_height or 2300.0
+    if ridges == nil then
+        local h = hasher(seed + 8000)
+        ridges = {}
+        local count = t.ranges_count or 2
+        for k = 1, count do
+            local angle = h(k, 1) * 2.0 * math.pi
+            local points = {}
+            -- Crest lines run across the core of the outline, bent and not straight.
+            local step = radius * 0.16
+            local dir = h(k, 2) * 2.0 * math.pi
+            local x0 = math.cos(angle) * radius * 0.2 - math.cos(dir) * step * 2.0
+            local z0 = math.sin(angle) * radius * 0.2 - math.sin(dir) * step * 2.0
+            for i = 0, 4 do
+                dir = dir + (h(k * 10 + i, 3) - 0.5) * 0.7
+                x0, z0 = x0 + math.cos(dir) * step, z0 + math.sin(dir) * step
+                points[#points + 1] = { x0, z0 }
+            end
+            ridges[k] = { points = points, height = tallest * (0.8 + 0.4 * h(k, 4)), width = radius * 0.22 }
+        end
+    end
+    local structure, peak, sun = Ranges.Carve{ seed = seed, ridges = ridges }
+    local range_height = Ranges.Finish(structure, peak, seed, nil, sun).height.value
+
+    local inland = Curves.Smoothstep{ input = -continent.coast_sdf, min = radius * 0.05, max = radius * 0.2 }
+    continent.land_height = continent.land_height + range_height * inland
+    continent.surface_height = Combine.Blend{
+        a = continent.bathymetry, b = continent.land_height, mask = continent.land_mask,
+    }
+    continent.info.height_max = continent.info.height_max + peak
+    continent.info.ranges = ridges
+    return continent
+end
+
 _G.Lands = Lands
