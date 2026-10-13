@@ -61,6 +61,8 @@ public:
         /// Coarsest level the ring may switch to. Each level doubles the sample spacing and so quadruples
         /// the area one tile covers.
         u32_t maxLevel = 4;
+        /// Levels finer than the distance heuristic picks; 0 is the heuristic. For close inspection.
+        u32_t detail = 0;
         /// Tiles evaluated per frame while the camera moves. The bound is what keeps a frame from
         /// stalling; a hole at the edge of the ring for a few frames is the better failure.
         u32_t tilesPerFrame = 2;

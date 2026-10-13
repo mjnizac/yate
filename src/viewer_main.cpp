@@ -29,6 +29,7 @@ void PrintUsage() {
                "  --seed <n>             random seed (default 0)\n"
                "  --ring <n>             tiles kept on each side of the camera (default 3)\n"
                "  --max-level <n>        coarsest level the ring may use (default 4)\n"
+               "  --detail <n>           use n levels finer than the distance calls for (default 0)\n"
                "  --tiles-per-frame <n>  tiles evaluated per frame while moving (default 2)\n"
                "  --resolution <meters>  meters per sample (default 2.0)\n"
                "  --section <n>          samples per tile side (default 128)\n"
@@ -159,6 +160,10 @@ template <typename T>
             }
         } else if (argument == "--ring") {
             if (Status ok = ParseInto(argument, value, options.viewer.ringRadius, 16); !ok) {
+                return std::unexpected(ok.error());
+            }
+        } else if (argument == "--detail") {
+            if (Status ok = ParseInto(argument, value, options.viewer.detail, 8); !ok) {
                 return std::unexpected(ok.error());
             }
         } else if (argument == "--max-level") {

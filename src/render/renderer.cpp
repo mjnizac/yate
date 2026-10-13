@@ -199,7 +199,10 @@ struct LoadedGraph {
     for (usize_t i = 0; i < graph.OutputCount(); ++i) {
         const terrain::OutputRequest& output = graph.Output(i);
         const std::string_view        name{output.name.data()};
-        if (!foundHeight && output.value.mapping == Mapping{Domain::R2, 1}) {
+        // The output named "height" wins; failing that the first R2->R1 that is not the shadow.
+        const b8_t named = name == "height";
+        if ((named || (!foundHeight && name != "shadow"))
+            && output.value.mapping == Mapping{Domain::R2, 1}) {
             loaded.heightOutput  = i;
             loaded.heightMinimum = output.rangeMin;
             loaded.heightMaximum = output.rangeMax;
@@ -233,6 +236,42 @@ struct LoadedGraph {
         }
         // `RequestOutput` keeps outputs in the order they were requested, so the height index is still
         // valid; only a new entry was appended.
+    }
+
+    // A script may say where the sun does not reach, as an R2->R1 output named "shadow" in [0, 1]. The
+    // viewer has no room left in its push constants for another buffer, so the shadow travels in the
+    // length of the normal: the normals the viewer reads are scaled to `0.25 + 0.75 * shadow`, and
+    // terrain.frag.glsl reads the length back before normalising. Exports are untouched.
+    for (usize_t i = 0; i < graph.OutputCount(); ++i) {
+        const terrain::OutputRequest& output = graph.Output(i);
+        if (std::string_view{output.name.data()} != "shadow"
+            || !(output.value.mapping == Mapping{Domain::R2, 1})) {
+            continue;
+        }
+        const terrain::SourceLocation here{"<viewer>", 0};
+        Result<Value> quarter = graph.AddConst(Mapping{Domain::R2, 1}, {0.25f, 0, 0, 0}, here);
+        Result<Value> scale   = graph.AddConst(Mapping{Domain::R2, 1}, {0.75f, 0, 0, 0}, here);
+        if (!quarter || !scale) {
+            return std::unexpected((quarter ? scale : quarter).error());
+        }
+        Result<Value> scaled = graph.AddArith(terrain::ArithOp::Multiply, output.value, *scale, here);
+        if (!scaled) {
+            return std::unexpected(scaled.error());
+        }
+        Result<Value> factor = graph.AddArith(terrain::ArithOp::Add, *scaled, *quarter, here);
+        if (!factor) {
+            return std::unexpected(factor.error());
+        }
+        Result<Value> lit = graph.AddArith(terrain::ArithOp::Multiply,
+                                           graph.Output(loaded.normalsOutput).value, *factor, here);
+        if (!lit) {
+            return std::unexpected(lit.error());
+        }
+        loaded.normalsOutput = graph.OutputCount();
+        if (Status requested = graph.RequestOutput("normals_lit", *lit, -1.0f, 1.0f); !requested) {
+            return requested;
+        }
+        break;
     }
     return {};
 }
@@ -307,14 +346,18 @@ struct TileCache {
 ///
 /// The target is a tile spanning about half the viewing distance, which keeps the visible ring a few
 /// tiles across whatever the altitude.
-[[nodiscard]] u32_t IdealLevel(f32_t distance, u32_t samples, f64_t baseResolution, u32_t maxLevel) {
+///
+/// `detail` asks for that many levels finer than the heuristic picks, to inspect a terrain close up
+/// without the mesh rounding its edges; the ring then covers less ground, which `--ring` makes up for.
+[[nodiscard]] u32_t IdealLevel(f32_t distance, u32_t samples, f64_t baseResolution, u32_t maxLevel,
+                               u32_t detail) {
     const f32_t wanted = distance * 0.5f / static_cast<f32_t>(std::max(samples, 1u));
     const f32_t ratio  = wanted / std::max(static_cast<f32_t>(baseResolution), 1e-6f);
     if (!(ratio > 1.0f)) {
         return 0;
     }
     const u32_t level = static_cast<u32_t>(std::log2(ratio));
-    return std::min(level, maxLevel);
+    return std::min(level > detail ? level - detail : 0u, maxLevel);
 }
 
 /// Builds the compiled graph and the evaluator's resources for one level.
@@ -757,7 +800,8 @@ void ViewerLayer::OnAttach() {
                                 view.yaw * kDegrees, view.pitch * kDegrees, view.distance);
     }
     m_state->level = IdealLevel(m_state->camera.ViewDistance(0.0f), m_state->settings.sectionSize,
-                                m_state->settings.resolution, m_state->settings.maxLevel);
+                                m_state->settings.resolution, m_state->settings.maxLevel,
+                                m_state->settings.detail);
 
     // First load is synchronous: there is nothing to keep rendering yet, so there is no reason to defer
     // it and every reason to fail here rather than after the window has opened on an empty scene.
@@ -1276,7 +1320,8 @@ void ViewerLayer::UpdateLevel() {
     State&      state = *m_state;
     const f32_t ground = (state.terrain.heightMinimum + state.terrain.heightMaximum) * 0.5f;
     const u32_t ideal   = IdealLevel(state.camera.ViewDistance(ground), state.settings.sectionSize,
-                                   state.settings.resolution, state.settings.maxLevel);
+                                   state.settings.resolution, state.settings.maxLevel,
+                                   state.settings.detail);
     if (ideal == state.level) {
         state.disagreeingFrames = 0;
         return;

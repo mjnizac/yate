@@ -54,7 +54,7 @@ const vec3 kScreeColor = vec3(0.47, 0.45, 0.42);
 const vec3 kRockColor  = vec3(0.30, 0.29, 0.28);
 const vec3 kSnowColor  = vec3(0.90, 0.92, 0.96);
 const float kScreeLine = 2600.0;
-const float kSnowLine  = 2250.0;
+const float kSnowLine  = 1450.0;
 
 // Rock texture, which the heightfield cannot carry: it is sampled every few metres at best and every 16
 // to 32 in a distant view. Where the ground is steep, faint streaks down the fall line shade the albedo;
@@ -96,7 +96,10 @@ float Ribs(vec3 p, float footprint) {
 }
 
 void main() {
-    vec3 normal = normalize(vNormal);
+    // The length of the normal carries the shadow (see ResolveOutputs in renderer.cpp): 1 is in the
+    // sun, 0.25 is in shadow. A script with no shadow output gives unit normals, so everything is lit.
+    float sunlit = clamp((length(vNormal) - 0.25) / 0.75, 0.0, 1.0);
+    vec3  normal = normalize(vNormal);
     // A normal buffer that was never written, or a degenerate one, would come through as zero and make
     // everything black. Facing up is the honest fallback: it says "flat", not "broken".
     if (dot(normal, normal) < 1e-6) {
@@ -125,7 +128,7 @@ void main() {
     albedo         = mix(albedo, rockColor, rocky);
     albedo         = mix(albedo, kSnowColor, snow);
 
-    float sun = max(dot(normal, kSunDirection), 0.0);
+    float sun = max(dot(normal, kSunDirection), 0.0) * sunlit;
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,
     // which is most of what makes an unlit slope legible.
     float sky = 0.5 + 0.5 * normal.y;
