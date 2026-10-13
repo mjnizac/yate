@@ -1110,12 +1110,13 @@ void ViewerLayer::UpdateReload() {
 
     state.reload.running.store(true);
     state.reload.failed = false;
-    state.reload.worker = std::thread([&state]() {
+    // The worker gets its own copy of the parameters: the panel may edit them on this thread meanwhile.
+    state.reload.worker = std::thread([&state, params = state.params]() {
         platform::SetThreadName("engine-reload");
         // Emptied every time, so a script that fails halfway cannot leave half its nodes behind.
         state.pending.Reset();
         if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.seed,
-                                       state.params,
+                                       params,
                                        SpacingOf(state.settings.resolution, state.level));
             !loaded) {
             state.reload.error  = loaded.error();
@@ -1332,6 +1333,10 @@ void ViewerLayer::UpdateLevel() {
                                    state.settings.detail);
     if (ideal == state.level) {
         state.disagreeingFrames = 0;
+        return;
+    }
+    // A reload on the worker is building into `pending`; this would write the same graph from two threads.
+    if (state.reload.running.load()) {
         return;
     }
     if (++state.disagreeingFrames < kLevelChangeFrames) {
