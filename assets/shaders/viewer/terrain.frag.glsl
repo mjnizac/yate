@@ -57,9 +57,9 @@ const float kScreeLine = 1700.0;
 const float kSnowLine  = 2100.0;
 
 // Rock texture, which the heightfield cannot carry: it is sampled every few metres at best and every 16
-// to 32 in a distant view. Where the ground is steep, streaks down the fall line bump the normal and
-// shade the albedo; flat ground gets none and stays one colour. (Voronoi blocks read as paving from a
-// kilometre away, and a 3D noise stretched vertically as pitted holes; streaks read as erosion.)
+// to 32 in a distant view. Where the ground is steep, faint streaks down the fall line shade the albedo;
+// flat ground gets none and stays one colour. Only the colour: a normal bumped by noise read as scales
+// or pits at every scale tried, and the relief close up belongs to the heightfield (gullies), not here.
 float Hash31(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.zyx + 31.32);
@@ -117,23 +117,9 @@ void main() {
 
     vec3 albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
     // Rock: darker in the runnels, lighter on the ribs.
-    vec3 rockColor = kRockColor * (0.82 + 0.28 * rock);
+    vec3 rockColor = kRockColor * (0.9 + 0.12 * rock);
     albedo         = mix(albedo, rockColor, rocky);
     albedo         = mix(albedo, kSnowColor, snow);
-
-    // Bump the normal with the ribs' gradient (central differences in world space), on rock only, so
-    // snow stays smooth.
-    float weight = rocky * (1.0 - snow);
-    if (weight > 0.0) {
-        const float e = 1.0;
-        vec3 g = vec3(Ribs(vWorldPosition + vec3(e, 0, 0), footprint)
-                          - Ribs(vWorldPosition - vec3(e, 0, 0), footprint),
-                      0.0,
-                      Ribs(vWorldPosition + vec3(0, 0, e), footprint)
-                          - Ribs(vWorldPosition - vec3(0, 0, e), footprint)) / (2.0 * e);
-        g -= dot(g, normal) * normal;
-        normal = normalize(normal - g * (4.0 * weight));
-    }
 
     float sun = max(dot(normal, kSunDirection), 0.0);
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,
