@@ -17,7 +17,7 @@ Copy the closest example, run it in the viewer, change one thing at a time.
 | Alpine massif, any range | `terrains/alpine.lua`, `ranges/*.lua` | the crest lines given to `Ranges.Carve` (§10) |
 | Eroded rock, gullies | `terrains/badlands.lua` | hydraulic `iterations`, `erosion_rate` |
 | River valleys | `terrains/riverlands.lua` | hydraulic `rain`, `capacity` |
-| Sand | `terrains/dunes.lua` | the warp and the ridge frequency |
+| Sand | `terrains/dunes.lua`, `terrains/star_dunes.lua` | `Dunes.Field` (§10): `wind`, `wavelength`, `style` |
 | Flat-topped hills | `terrains/mesa.lua`, `shapes/mesas.lua` | terrace `steps`, shape size |
 | A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
 | A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
@@ -961,6 +961,52 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/mountain_range.l
 ![Mesas and badlands](images/shapes/mesas.png)
 
 ![Coast with cliffs, a beach and water](images/shapes/coast.png)
+
+### Dune fields: `Dunes.Field` (the dune macro)
+
+`assets/lua/prelude/40_dunes.lua`. One call is a whole sand sea:
+
+```lua
+local function main(params)
+    return Dunes.Field{ seed = params.seed, wind = 20, wavelength = 650, height = 80 }
+end
+return main
+```
+
+What it builds, all pointwise except the final settling:
+
+1. **The dune profile** along the wind: a sawtooth (`x - Terrace(x)`) shaped into a long convex back
+   (`back`, 0.8 of a period) and a short straight slip face, with a sharp brink between them.
+2. **Crescents.** The distance along the wind is bent by a billow noise of the position across it;
+   billow's cusps are where two arcs meet, so the crests bow into barchan crescents with horns
+   downwind (`sinuosity`).
+3. **Vigour and flats.** A slow noise scales the dunes, so some chains are tall and others break into
+   separate barchans; below `flats` of a dune's height the ground is the interdune flat.
+4. **Small dunes** on the backs of the large ones, on a wind turned 25 degrees, cusp-free (`small`).
+5. **The swell** of the sand sea over kilometres (`swell`).
+6. **Settling:** a thermal pass at the angle of repose (`repose`, 33 degrees).
+
+`style = "star"` takes the highest of three fields at 120 degrees, which gives star dunes. The
+result carries `look = { palette = "sand", wind = wind }`, so the viewer draws sand with ripples
+across the wind on the gentle slopes.
+
+| Key | Default | |
+| --- | --- | --- |
+| `wind` | 20 | degrees, the direction the wind blows towards |
+| `wavelength`, `height` | 650 m, 80 m | between crests; dune height |
+| `sinuosity`, `back`, `flats`, `small`, `swell`, `repose` | 0.45, 0.8, 0.28, 0.12, 0.8, 33 | |
+| `style` | `"transverse"` | or `"star"` |
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/dunes.lua --view 200,-30,4000
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/star_dunes.lua
+```
+
+![Dunes](images/dunes/dunes.png)
+
+![Dunes, close](images/dunes/close.png)
+
+![Star dunes](images/dunes/star.png)
 
 ### Mountain ranges: `Ranges.Carve` and `Ranges.Finish` (the alpine macro)
 

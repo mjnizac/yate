@@ -1184,3 +1184,22 @@ are full, so the shadow travels in the length of the normal.
 **Tried and taken back.** A piedmont and varied country around the range, and a scree mask painted from
 the terrain, were judged worse than what they replaced and reverted: the plain around a range is flat.
 The terrain was judged by eye on the user's references throughout; no metric decided it.
+
+## The dune macro
+
+What the references show (`docs/references/dunes/`, not versioned: photographs and five real dune-field
+heightmaps) and how each became a step of `Dunes.Field`:
+
+* **Asymmetry is the dune.** A long windward back and a short slip face at the angle of repose, with a
+  sharp brink. Billow noise, which the old `dunes.lua` used, is symmetric lumps; a sawtooth along the
+  wind gives the profile exactly and stays pointwise.
+* **Crescents, not ridges.** Straight transverse ridges read as corrugated iron. Bending the phase by
+  billow noise across the wind gives cusps where arcs meet, which is a barchan chain. An fBm bend gave
+  sinuous ridges without horns.
+* **Small dunes must not have cusps.** With the same billow bend they read as fish scales; they bend by
+  simplex instead.
+* **Flats between.** Real fields have bare ground between chains; clipping below a fraction of the
+  height and scaling chains by a slow noise gives both the flats and isolated barchans.
+* **Colour does a lot.** Sand needs its own palette; the viewer gets it through a new `look` key in the
+  returned table, with ripples across the wind drawn in the shader (a few metres apart, larger than real,
+  so a camera at 300 m sees them).

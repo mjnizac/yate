@@ -37,6 +37,9 @@ canyon, mesas, coast), with previews in `docs/images/shapes/`. The shape layer i
 `Shapes.*` and `Landforms.*`, which are Lua in `assets/lua/prelude/` that the engine loads before every
 script.
 
+Dune fields from `Dunes.Field` (`terrains/dunes.lua`, `terrains/star_dunes.lua`), previews in
+`docs/images/dunes/`.
+
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.
 

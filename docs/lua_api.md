@@ -94,6 +94,7 @@ numbers drift, and this one is the index.
 | `Curves.Terrace` | the input's mapping | snaps a height to steps; `step` in metres, `sharpness` in `[0, 1]` |
 | `Combine.SmoothMin`, `Combine.SmoothMax` | the shared mapping | `Min` and `Max` with the corner rounded over `k` |
 | `Shapes.*`, `Landforms.*` | `R2->R1` | the prelude: placed shapes, booleans, masks, warps and heights built from them (see below) |
+| `Dunes.Field` | the script's outputs | the prelude's dune macro: crescent chains on one wind (or three, `style = "star"`), slip faces at the angle of repose, interdune flats, smaller dunes on their backs; coloured as sand in the viewer. See `docs/lua_reference.md` §10, "Dune fields" |
 | `Ranges.Carve`, `Ranges.Finish` | `R2->R1` and the script's outputs | the prelude's alpine macro: a range raised along crest lines, carved by `Erosion.StreamPower` and finished on the GPU; see `docs/lua_reference.md` §10, "Mountain ranges" |
 | `Erosion.Thermal` | `Rn -> R1` | material slides past the talus, a **slope** (rise over run); `iterations` **is** the influence radius |
 | `Erosion.Hydraulic` | `Rn -> R1` value, `Rn -> R2` flow | rain, flow, sediment, evaporation; `capacity` is per unit slope; `flow` carries water on `x` and sediment on `y` |
@@ -133,9 +134,15 @@ Reproducibility is `--seed` and `--param key=value`, both recorded in the sideca
 script, the shaders the job ran, the parameters and the prelude. `outputs[].statistics` and
 `timings_ms` in the same sidecar are what a generation reports about itself.
 
+## `look`: how the viewer colours a terrain
+
+A script's returned table may carry `look = { palette = "sand", wind = degrees }` beside its outputs. It
+is not an output and an export ignores it; the viewer uses it to pick a palette (`"default"`: grass,
+rock, snow; `"sand"`: sand with darker lee faces and ripples across `wind`).
+
 ## The prelude
 
-`Shapes.*`, `Landforms.*` and `Ranges.*` are not ops. They are Lua the engine runs before the script
+`Shapes.*`, `Landforms.*`, `Ranges.*` and `Dunes.*` are not ops. They are Lua the engine runs before the script
 (`assets/lua/prelude/`), and every call in them is one of the ops above, so they add no kernel and no
 node type: a landform is a shape, a profile and a multiply.
 
