@@ -29,7 +29,8 @@ Seventeen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular, wi
 `ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies` and `Grid`, plus
 `Erosion.StreamPower`, a whole-grid simulation on the CPU. The script API is
 `Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`, `Erosion.*`,
-`Geometry.*`, and the Lua prelude's `Shapes.*`, `Landforms.*` and `Ranges.*` (the alpine macro), documented with pictures in
+`Geometry.*`, and the Lua prelude's `Shapes.*`, `Landforms.*`, `Ranges.*` (the alpine macro) and `Dunes.*`
+(the dune macro), documented with pictures in
 `docs/lua_reference.md`.
 
 Five reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
@@ -37,8 +38,9 @@ canyon, mesas, coast), with previews in `docs/images/shapes/`. The shape layer i
 `Shapes.*` and `Landforms.*`, which are Lua in `assets/lua/prelude/` that the engine loads before every
 script.
 
-Dune fields from `Dunes.Field` (`terrains/dunes.lua`, `terrains/star_dunes.lua`), previews in
-`docs/images/dunes/`.
+Dune fields from `Dunes.Field`, the dune macro (`terrains/dunes.lua`, `terrains/star_dunes.lua`), in
+three styles: `"procedural"` (default, analytic, no repetition, about 0.6 s), `"simulated"`
+(`Erosion.Wind`, periodic) and `"star"`; previews in `docs/images/dunes/`.
 
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.

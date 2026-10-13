@@ -64,3 +64,17 @@ full history is in the git log.
 - [ ] **Strata steps are regular close up**: one bed thickness and one dip per terrain.
 - [ ] **`test_datasets` `volume_r3` timing** fails intermittently (24 to 29 ms against a 20 ms baseline,
       the same spread the history shows for weeks); the baseline or the tolerance needs a decision.
+
+## Dune macro (`Dunes.*`)
+
+- [ ] **No sections-parallel and sections-perpendicular profiles are measured**, only slope and height
+      histograms; the back (5 to 15 degrees) and the slip face (at most `repose`) are checked by eye in
+      the viewer. A per-direction histogram would make it a criterion.
+- [ ] **Contrast against the references is lower**: the viewer has one fixed sun and no cast shadows, so
+      dunes read softer than in the photographs. The same limit as the alpine macro.
+- [ ] **`"simulated"` repeats every `cells * cell` metres** (5.8 km by default) and costs a few seconds
+      the first time; it is kept as an explicit option, not the default.
+- [ ] **Slopes over 40 degrees (0.03 %)** are the edges of 2 m-high small dunes at a 2 m spacing: two
+      samples wide. A sampling limit, not a construction one.
+- [ ] **`"star"` still uses the first pointwise pattern** (billow bend, `flats`, a thermal pass): it has
+      not been rebuilt on the per-dune profile of `"procedural"`.

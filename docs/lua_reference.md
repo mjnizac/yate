@@ -22,6 +22,11 @@ Copy the closest example, run it in the viewer, change one thing at a time.
 | A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
 | A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
 
+**Macros.** Two terrains are packaged as one call each, in the prelude: `Ranges.Carve` and
+`Ranges.Finish` for mountain ranges (the alpine macro, §10) and `Dunes.Field` for sand seas (the dune
+macro, §10). Start from their examples (`terrains/alpine.lua`, `ranges/*.lua`, `terrains/dunes.lua`)
+before writing a terrain of that kind by hand.
+
 **Judge erosion at the finest level.** Iterations are written for 2 m and scaled to the spacing in use
 (§9), so the default 8 m view shows little of it by design. Look at it with `--max-level 0`, or zoom in
 until the level changes, before adding iterations.
