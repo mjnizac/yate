@@ -11,13 +11,14 @@
 -- their outlines are lobed and not the circles and ellipses they started as. `Erosion.Gullies` then cuts
 -- the drainage pattern across every slope, which the erosion simulations are too local to draw.
 --
--- Parameters (metres): `height` is the main summit, `scale` enlarges the plan, `warp` how far it wanders,
--- `gullies` how deep the gullies cut and `cell` how far apart the largest ones are.
+-- Parameters: `height` (metres) is the main summit, `scale` enlarges the plan, `warp` (metres) how far it
+-- wanders, `concave` how much the flanks ease into footslopes, `tributaries` and `gullies` (metres) how
+-- deep the two generations of drainage cut and `cell` (metres) how far apart the tributaries are.
 
 local function main(params)
-    local height = params.height or 2000.0
+    local height = params.height or 2800.0
     local warp   = params.warp or 220.0
-    local scale  = params.scale or 0.9
+    local scale  = params.scale or 1.2
     local seed   = params.seed
 
     local world = Shapes.Warp{ amplitude = warp, frequency = 0.0005, octaves = 3, seed = seed + 11 }
@@ -114,27 +115,37 @@ local function main(params)
 
     -- 3. The country the valleys open onto: nothing is cut below it.
     local country = Noises.fBm{
-        frequency = 0.0007, octaves = 4, amplitude = height * 0.035, seed = seed + 5, position = world,
+        frequency = 0.0005, octaves = 3, amplitude = height * 0.02, seed = seed + 5, position = world,
     }
-    local structure = Combine.SmoothMax{ a = block + cut, b = country.value, k = 60.0 }
+    -- Concave flanks: a mountain's slope is steepest under its crest and eases into long footslopes, not
+    -- the straight faces of a roof. Raising the normalised height to a power above 1 does exactly that,
+    -- and sharpens the summits on the way.
+    local mountain = Curves.Power{
+        input = Curves.Clamp{ input = (block + cut) / height, min = 0.0, max = 2.0 },
+        exponent = params.concave or 1.5,
+    } * height
+    -- Added, not joined with a maximum: where the country dipped below the clamped foot of the mountain
+    -- a maximum left flat patches at zero and a crease along every valley mouth.
+    local structure = mountain + country.value
 
-    -- Detail: ridged relief stretched along one direction, as rock is jointed along one, on the high
-    -- and steep ground only. Moderate on purpose.
-    local high = Curves.Smoothstep{ input = structure, min = height * 0.15, max = height * 0.7 }
-    local steep = Masks.Slope{ input = Terrain.Gradient{ input = structure }, min = 0.4, max = 0.95 }
-    local jointed = Vec.Combine{ world.x * 0.55 + world.z * 0.25, world.z * 1.3 - world.x * 0.2 }
-    local walls = Noises.Ridged{
-        frequency = 0.0026, octaves = 4, persistence = 0.5, amplitude = height * 0.045,
-        seed = seed + 21, position = jointed,
+    -- Drainage in two generations, as in the references: tributary valleys a kilometre apart cut into
+    -- every flank, then gullies cut into the walls of those tributaries. The second pass reads the slope
+    -- the first left, so its gullies run down the tributaries' sides and join them, which is the nested,
+    -- branching pattern of real relief; one pass at one scale gave combed faces. Drawn on the world
+    -- position, so the scales are metres and not the plan's.
+    local tributaries = Erosion.Gullies{
+        input = structure, position = world, cell = params.cell or 1300.0, octaves = 3,
+        strength = params.tributaries or 170.0, full = 0.35, seed = seed + 51,
     }
-    -- Gullies: the drainage pattern the erosion below is too local to draw, cut across the slope of
-    -- the structure and branching down it. Drawn on the world position, so its scale is metres and
-    -- not the plan's.
     local gullied = Erosion.Gullies{
-        input = structure, position = world, cell = params.cell or 450.0, octaves = 5,
-        strength = params.gullies or 70.0, full = 0.5, seed = seed + 51,
+        input = tributaries, position = world, cell = 360.0, octaves = 4,
+        strength = params.gullies or 45.0, full = 0.5, seed = seed + 53,
     }
-    local land = gullied + walls.value * high * (0.3 + 0.7 * steep)
+    -- On the mountain only: on the country around, the same cut at a gentle slope is a scribble.
+    local land = Combine.Blend{
+        a = structure, b = gullied,
+        mask = Curves.Smoothstep{ input = mountain, min = height * 0.04, max = height * 0.2 },
+    }
 
     local carved = Erosion.Hydraulic{
         input = land, iterations = 24, rain = 0.5, capacity = 9.0, evaporation = 0.04,
