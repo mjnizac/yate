@@ -974,25 +974,42 @@ return main
 ```
 
 **The dunes come from the wind.** `Erosion.Wind` runs Werner's slab model on a periodic grid (192 x 192
-cells of 33 m by default, about 4 s, cached): slabs of sand are lifted and hop downwind, settle more
+cells of 30 m by default, about 3.5 s, cached): slabs of sand are lifted and hop downwind, settle more
 readily on sand than on bare ground and always in the wind shadow behind a crest (15 degrees), and
 avalanche past the angle of repose; a fraction only creeps one cell (reptation), which rounds crests.
 Dunes form, migrate and merge. The starting sand varies over kilometres (`sand`, `variety`): where it is
 thick the wind builds tall sinuous ridges, where it is thin smaller ones and bare flats, so a field has
 dunes of every size. The grid tiles the plane (`Terrain.Grid{ wrap = true }`) in a frame turned to `wind`.
 
-Then, on the GPU: the relief scaled by `relief` (0.7, which softens the transitions without changing the
-shapes), small dunes a few metres high in patches on the gentle backs (`small_wavelength`,
-`small_height`), the swell of the sand sea, and a light settling at the angle of repose. The viewer draws
+Then, on the GPU: the relief scaled by `relief` and by a regional size (from almost flat to full height, so
+a field has low ground and ranges of tall dunes), the great dunes (`draa_*`) with rounded crests under
+them, small dunes a few metres high in patches on the gentle slopes (`small_wavelength`, `small_height`),
+the swell of the sand sea, and a light settling at the angle of repose. The viewer draws
 sand (`look`) with faint ripples across the wind.
 
-| Key | Default | |
-| --- | --- | --- |
-| `wind` | 20 | degrees, the direction the wind blows towards |
-| `sand`, `variety` | 55 m, 0.85 | mean starting sand and how much it varies |
-| `iterations`, `cells`, `cell`, `smooth` | 300, 192, 33 m, 1 | the simulation: more iterations, fewer and larger dunes |
-| `relief`, `small_wavelength`, `small_height`, `swell`, `repose` | 0.7, 240 m, 4 m, 30 m, 32 | the finish |
-| `style` | `"simulated"` | or `"star"`: the older pointwise pattern of three winds (`wavelength`, `height`, `sinuosity`, `back`, `flats`, `small`) |
+**Styles.** `style` is `"simulated"` (the default, described above) or `"star"` (below). `"transverse"` is
+a deprecated alias of `"simulated"` and prints a warning. A key that belongs to the other style is an
+error that names it, not something silently ignored.
+
+Lengths and heights are metres, angles degrees. Defaults are in `Dunes.Field` and `Dunes.Simulated`
+(`assets/lua/prelude/40_dunes.lua`), not in the example scripts.
+
+| Key | Styles | Default | |
+| --- | --- | --- | --- |
+| `seed` | all | 0 | integer, from `--seed` |
+| `wind` | all | 20 | degrees, the direction the wind blows towards |
+| `repose` | all | 33 | the angle slip faces stand at; sets the slab height in `simulated` |
+| `swell` | all | 25 (`simulated`), 64 (`star`) | metres: amplitude of the swell of the sand sea |
+| `sand` | simulated | 70 | metres of starting sand |
+| `variety` | simulated | 0.3 | how much it varies, by region |
+| `cells`, `cell` | simulated | 192, 30 | simulation grid; it tiles every `cells * cell` metres |
+| `iterations` | simulated | 260 | picks per cell: few leave grain, many merge everything |
+| `smooth` | simulated | 3 | 3 x 3 passes over the simulated sand |
+| `relief` | simulated | 0.75 | scale of the simulated dunes' height |
+| `draa_wavelength`, `draa_height` | simulated | 2600, 90 | the great dunes under them, metres |
+| `small_wavelength`, `small_height` | simulated | 200, 2.5 | small dunes on gentle slopes; height 0 turns them off |
+| `wavelength`, `height` | star | 650, 80 | between crests; dune height |
+| `sinuosity`, `back`, `flats`, `small` | star | 0.45, 0.8, 0.28, 0.12 | bend of the crests; windward fraction of a period (0.5 to 0.95); bare ground below this fraction of height; small dunes as a fraction of `height` |
 
 ```bash
 build/Release/bin/terrain_viewer --script assets/scripts/terrains/dunes.lua --view 200,-30,4000
