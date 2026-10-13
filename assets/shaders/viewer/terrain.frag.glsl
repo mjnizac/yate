@@ -53,8 +53,8 @@ const vec3 kGrassColor = vec3(0.22, 0.32, 0.16);
 const vec3 kScreeColor = vec3(0.47, 0.45, 0.42);
 const vec3 kRockColor  = vec3(0.30, 0.29, 0.28);
 const vec3 kSnowColor  = vec3(0.90, 0.92, 0.96);
-const float kScreeLine = 1700.0;
-const float kSnowLine  = 2100.0;
+const float kScreeLine = 1950.0;
+const float kSnowLine  = 2250.0;
 
 // Rock texture, which the heightfield cannot carry: it is sampled every few metres at best and every 16
 // to 32 in a distant view. Where the ground is steep, faint streaks down the fall line shade the albedo;
