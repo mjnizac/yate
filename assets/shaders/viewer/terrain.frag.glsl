@@ -130,7 +130,7 @@ void main() {
                       Ribs(vWorldPosition + vec3(0, 0, e), footprint)
                           - Ribs(vWorldPosition - vec3(0, 0, e), footprint)) / (2.0 * e);
         g -= dot(g, normal) * normal;
-        normal = normalize(normal - g * (14.0 * weight));
+        normal = normalize(normal - g * (7.0 * weight));
     }
 
     float sun = max(dot(normal, kSunDirection), 0.0);
