@@ -1017,6 +1017,20 @@ thick the wind builds tall sinuous ridges, where it is thin smaller ones. The gr
 GPU: relief scaled by `relief` and by a regional size, great dunes (`draa_*`) with rounded crests under
 them, small dunes in patches, the swell of the sand sea and a light settling.
 
+**Regions.** `area = { {x, z}, ... }` (or `areas`, a list of polygons) puts dunes only inside a polygon,
+as `ridges` does for a range: the finished height is multiplied by a mask that is 1 `feather` metres
+inside the edge and 0 on it (a smoothstep of the polygon's signed distance), and the edge wanders by
+`edge_wander` through a warp at the scale of the fade, so a region is a field of sand and not a drawn
+outline. It works with every style and adds a `mask` output (0 to 1). Outside the regions the ground is
+flat. Because the height is scaled, slopes only get gentler towards the edge: on the example, p99.9 of
+the slope is 36 degrees inside and 33 in the fade band. `terrains/dune_regions.lua` has two regions:
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/dune_regions.lua --view 190,-18,5500 --target -800,0,-300
+```
+
+![Dune regions](images/dunes/regions.png)
+
 **What the viewer shows.** Its sun is fixed, so the same field reads differently with the wind: with the
 lee faces turned to the sun (`wind` near 20) the slip faces are thin bright lines and the backs, which
 give the dunes their volume, are barely shaded; with the sun to the side (`wind` near 110, the default)
@@ -1039,6 +1053,8 @@ Lengths and heights are metres, angles degrees. Defaults are in `Dunes.Field` an
 | `wavelength`, `height` | procedural | 700, 95 | between dunes; the tallest dune (the cap is 0.125 x `wavelength`) |
 | `sinuosity`, `windward_angle`, `margin` | procedural | 0.35, 10, 6 | bend of the crests (0 to 0.4); angle of the back; degrees the slip face is built under `repose` |
 | `draa_wavelength`, `draa_height`, `small_wavelength`, `small_height`, `region` | procedural | 2600, 70, 170, 5, 4500 | the other scales and the regional size field, metres |
+| `area` or `areas` | all | none | a polygon, or a list of polygons, as lists of `{ x, z }` metres: dunes only inside (see below) |
+| `feather`, `edge_wander` | all, with `area` | 500, 0.35 x `feather` | metres: the fade to flat ground inside the edge, and how far the edge wanders |
 | `sand` | simulated | 70 | metres of starting sand |
 | `variety` | simulated | 0.3 | how much it varies, by region |
 | `cells`, `cell` | simulated | 192, 30 | simulation grid; it tiles every `cells * cell` metres |
