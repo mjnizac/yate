@@ -1,17 +1,18 @@
--- Island, rocky: hard coast, high roughness and a few islets; cliffs on the exposed side.
+-- Island, rocky coast: hard rock, cliffs on the exposed side.
 --
 --   terrain_viewer --script assets/scripts/lands/island_rocky.lua --water
 --
--- Parameters: radius (metres), height (metres), seed, margin ("compressed" or "geologic").
+-- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
+-- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
+-- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
 
 local function main(params)
-    local island = Lands.Island{
+    local land = Lands.Island{
         seed = params.seed or 3, resolution = params.resolution,
-        radius = params.radius or 3000.0, height = params.height or 420.0,
-        margin = params.margin or "compressed",
-        coast = "rocky", roughness = 0.8, breakage = 6,
+        size = params.size, land_fraction = params.land_fraction, height = params.height,
+        roughness = params.roughness, dissection = params.dissection, margin = params.margin, coast = "rocky",
     }
-    return island:outputs{ "coast_type", "land_mask", "coast_sdf", "shore_mask" }
+    return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end
 
 return main

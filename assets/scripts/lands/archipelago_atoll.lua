@@ -1,17 +1,18 @@
--- Atoll: a ring of low islets around a lagoon a few tens of metres deep, with a steep outer wall.
+-- Atoll: a ring of low islets round a lagoon of a few tens of metres, with a steep outer wall.
 --
 --   terrain_viewer --script assets/scripts/lands/archipelago_atoll.lua --water
 --
--- Parameters: seed, radius (half-size of the whole group, metres), count, roughness, margin.
--- `region_id` (exported) says which island each cell is nearest to.
+-- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
+-- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
+-- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
 
 local function main(params)
-    local group = Lands.Archipelago{
-        seed = params.seed or 4, resolution = params.resolution, layout = "atoll",
-        radius = params.radius or 12000.0, count = params.count, roughness = params.roughness or 0.6,
-        margin = params.margin or "compressed",
+    local land = Lands.Archipelago{
+        seed = params.seed or 4, resolution = params.resolution,
+        size = params.size, land_fraction = params.land_fraction, height = params.height,
+        roughness = params.roughness, dissection = params.dissection, margin = params.margin, layout = "atoll",
     }
-    return group:outputs{ "region_id", "coast_type", "land_mask", "coast_sdf" }
+    return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end
 
 return main

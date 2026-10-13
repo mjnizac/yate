@@ -1,17 +1,18 @@
--- Island, sedimentary: soft coast, low relief and wide beaches facing the waves.
+-- Island, sedimentary coast: soft rock, low relief and wide beaches.
 --
 --   terrain_viewer --script assets/scripts/lands/island_sedimentary.lua --water
 --
--- Parameters: radius (metres), height (metres), seed, margin ("compressed" or "geologic").
+-- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
+-- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
+-- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
 
 local function main(params)
-    local island = Lands.Island{
+    local land = Lands.Island{
         seed = params.seed or 5, resolution = params.resolution,
-        radius = params.radius or 3000.0, margin = params.margin or "compressed",
-        coast = "sedimentary", roughness = 0.5, breakage = 3,
-        height = params.height or 220.0, wave_from = 225.0,
+        size = params.size, land_fraction = params.land_fraction, height = params.height,
+        roughness = params.roughness, dissection = params.dissection, margin = params.margin, coast = "sedimentary",
     }
-    return island:outputs{ "coast_type", "land_mask", "coast_sdf", "shore_mask" }
+    return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end
 
 return main
