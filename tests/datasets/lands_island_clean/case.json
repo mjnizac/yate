@@ -1,0 +1,21 @@
+{
+  "description": "Lands.Island (island_clean): the signed distance, the margin and the coast type end to end. Golden for the height and, with a mixed coast, the coast type.",
+  "seed": 1,
+  "resolution": 16.0,
+  "section": 128,
+  "bounds": {
+    "min_x": -4096.0,
+    "min_z": -4096.0,
+    "max_x": 4096.0,
+    "max_z": 4096.0
+  },
+  "outputs": [
+    "height.png"
+  ],
+  "tolerance": 0,
+  "performance": {
+    "passes": 3,
+    "warn_slower": 0.1,
+    "fail_slower": 0.25
+  }
+}
