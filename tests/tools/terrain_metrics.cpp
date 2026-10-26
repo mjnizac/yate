@@ -1,12 +1,16 @@
-// terrain_metrics: measures an exported height field as land and sea.
+// terrain_metrics: measures an exported height field as land and sea, and its relief.
 //
 //   terrain_metrics <export dir or height.raw> [--width N --depth N --resolution M] [--level L]
-//                   [--box kmin,kmax] [--json]
+//                   [--no-sea] [--box kmin,kmax] [--block M] [--channel M2] [--json]
+//                   [--hillshade out.png [--sun azimuth,elevation]]
 //
-// Given a directory it reads `metadata.json` for the size and the spacing. The numbers are the ones
-// `test_lands` accepts the Lands macros against (see tests/unit/terrain_metrics.hpp).
+// Given a directory it reads `metadata.json` for the size and the spacing. The land and sea numbers are
+// the ones `test_lands` accepts the Lands macros against (tests/unit/terrain_metrics.hpp); the relief
+// ones are tests/unit/relief_metrics.hpp. `--no-sea` treats every sample as land. `--hillshade` writes
+// the field as a grey image lit from `--sun` (default 315,35: the top left, 35 degrees up), with cast
+// shadows, so the geometry can be judged without the viewer's lighting.
 
-#include "terrain_metrics.hpp"
+#include "relief_metrics.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -34,13 +38,17 @@ namespace {
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "usage: terrain_metrics <export dir or height.raw> [--width N --depth N "
-                     "--resolution M] [--level L] [--box kmin,kmax] [--json]\n";
+                     "--resolution M] [--level L] [--no-sea] [--box kmin,kmax] [--block M] [--channel M2] "
+                     "[--json] [--hillshade out.png [--sun azimuth,elevation]]\n";
         return 2;
     }
     std::string path = argv[1];
     double      width = 0, depth = 0, resolution = 0, level = 0;
     int         boxMin = 2, boxMax = 7;
     bool        json = false;
+    metrics::ReliefOptions options;
+    std::string hillshade;
+    double      azimuth = 315.0, elevation = 35.0;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto        next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : "0"; };
@@ -61,8 +69,24 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--json") {
             json = true;
+        } else if (arg == "--no-sea") {
+            level = -std::numeric_limits<double>::infinity();
+        } else if (arg == "--block") {
+            options.block = std::atof(next());
+        } else if (arg == "--channel") {
+            options.channelArea = std::atof(next());
+        } else if (arg == "--hillshade") {
+            hillshade = next();
+        } else if (arg == "--sun") {
+            const std::string sun   = next();
+            const std::size_t comma = sun.find(',');
+            if (comma != std::string::npos) {
+                azimuth   = std::atof(sun.substr(0, comma).c_str());
+                elevation = std::atof(sun.substr(comma + 1).c_str());
+            }
         }
     }
+    options.level = level;
 
     const bool isRaw = path.size() > 4 && path.compare(path.size() - 4, 4, ".raw") == 0;
     const std::string directory = isRaw ? path.substr(0, path.find_last_of("/\\")) : path;
@@ -93,10 +117,17 @@ int main(int argc, char** argv) {
         return 2;
     }
     const metrics::Report r = metrics::Measure(field, level, boxMin, boxMax);
+    const metrics::Relief relief = metrics::MeasureRelief(field, options);
 
     const double shelf = metrics::MeanSlopeInDepth(field, level, 0.0, 120.0);
     const double slope = metrics::MeanSlopeInDepth(field, level, 120.0, 2500.0);
     const double flat  = metrics::MeanSlopeInDepth(field, level, 2500.0, 1e9);
+
+    if (!hillshade.empty()
+        && !metrics::WriteGreyPng(hillshade, metrics::Hillshade(field, azimuth, elevation), field.width, field.depth)) {
+        std::cerr << "terrain_metrics: cannot write " << hillshade << "\n";
+        return 2;
+    }
 
     if (json) {
         std::printf("{\"width\": %zu, \"depth\": %zu, \"resolution\": %g, \"level\": %g,\n", field.width,
@@ -113,8 +144,20 @@ int main(int argc, char** argv) {
                     r.boxFit, boxMin, boxMax);
         std::printf(" \"min_channel_m\": %.1f,\n \"hypsometry_m\": {\"p10\": %.1f, \"p50\": %.1f, \"p90\": %.1f, \"p99\": %.1f},\n",
                     r.minChannel, r.hypsometry[0], r.hypsometry[1], r.hypsometry[2], r.hypsometry[3]);
-        std::printf(" \"slope_deg\": {\"shelf_0_120m\": %.2f, \"slope_120_2500m\": %.2f, \"abyssal_2500m_up\": %.2f}}\n",
+        std::printf(" \"slope_deg\": {\"shelf_0_120m\": %.2f, \"slope_120_2500m\": %.2f, \"abyssal_2500m_up\": %.2f},\n",
                     shelf, slope, flat);
+        std::printf(" \"relief\": {\"slope_p50\": %.2f, \"slope_p90\": %.2f, \"slope_p99\": %.2f, \"slope_p999\": %.2f,\n",
+                    relief.slope[0], relief.slope[1], relief.slope[2], relief.slope[3]);
+        std::printf("  \"steep35\": %.4f, \"steep45\": %.4f, \"local_relief_m\": %.1f, \"block_m\": %g,\n",
+                    relief.steep35, relief.steep45, relief.localRelief, options.block);
+        std::printf("  \"hypsometric_integral\": %.4f, \"curvature_p90\": %.6f,\n", relief.hypsometricIntegral,
+                    relief.curvatureP90);
+        std::printf("  \"pits\": %zu, \"pit_share\": %.5f, \"pit_depth_m\": %.2f,\n", relief.pits, relief.pitShare,
+                    relief.pitDepth);
+        std::printf("  \"drainage_density\": %.4f, \"channel_area_m2\": %g,\n", relief.drainageDensity,
+                    options.channelArea);
+        std::printf("  \"spectral_slope\": %.3f, \"spectral_fit\": %.3f, \"axis_diagonal_ratio\": %.3f}}\n",
+                    relief.spectralSlope, relief.spectralFit, relief.axisDiagonalRatio);
         return 0;
     }
     std::printf("%zu x %zu at %g m, sea level %g\n", field.width, field.depth, resolution, level);
@@ -126,5 +169,15 @@ int main(int argc, char** argv) {
                 r.minChannel, r.hypsometry[0], r.hypsometry[1], r.hypsometry[2], r.hypsometry[3]);
     std::printf("mean slope: shelf (0-120 m deep) %.2f deg, slope (120-2500 m) %.2f deg, below %.2f deg\n", shelf,
                 slope, flat);
+    std::printf("relief: slope p50 %.1f p90 %.1f p99 %.1f p99.9 %.1f deg; %.2f %% over 35 deg, %.2f %% over 45 deg\n",
+                relief.slope[0], relief.slope[1], relief.slope[2], relief.slope[3], relief.steep35 * 100.0,
+                relief.steep45 * 100.0);
+    std::printf("relief %.0f m per %g m block; hypsometric integral %.3f; |laplacian| p90 %.2e per m\n",
+                relief.localRelief, options.block, relief.hypsometricIntegral, relief.curvatureP90);
+    std::printf("%zu closed depression(s), %.3f %% of the land, deepest %.1f m; drainage %.2f km per km2 "
+                "(channels from %g m2)\n",
+                relief.pits, relief.pitShare * 100.0, relief.pitDepth, relief.drainageDensity, options.channelArea);
+    std::printf("spectral slope %.2f (R2 %.3f); axis/diagonal power %.2f\n", relief.spectralSlope,
+                relief.spectralFit, relief.axisDiagonalRatio);
     return 0;
 }
