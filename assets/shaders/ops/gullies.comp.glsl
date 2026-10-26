@@ -2,6 +2,7 @@
 //
 // Class: pointwise (halo 0). Inputs: 0 the height (R2 -> R1), 1 its gradient (R2 -> R2), 2 the position
 // the pattern is drawn at, in metres (R2 -> R2). Output: the height with the gullies cut (R2 -> R1).
+// Channel 1: the drainage mask in [0, 1], 1 at the bottom of a first-octave gully (R2 -> R1).
 //
 // Clay John's eroded-terrain noise. Each octave is a sum of cosine stripes centred on jittered lattice
 // points and blended with a Gaussian weight; a stripe varies along the contour direction, so its crests
@@ -74,15 +75,25 @@ void main() {
     float frequency = 1.0;
     float sum       = 0.0;
     vec2  bend      = vec2(0.0);
+    // The drainage mask: how close this point is to the bottom of a gully. Each octave's trough is a
+    // band where its stripe is near its lowest; the first octave is the trunk and the finer ones the
+    // branches, so each counts in proportion to its amplitude and the widest wins.
+    float drain     = 0.0;
     for (uint o = 0u; o < octaves; ++o) {
         vec3 e = GullyOctave(position / cell * frequency, dir + vec2(bend.y, -bend.x),
                              seed + o * ENGINE_HASH_PHI);
         sum += e.x * amplitude;
         bend += e.yz * amplitude * frequency;
+        drain = max(drain, smoothstep(0.6, 0.9, -e.x) * amplitude * 2.0);
         amplitude *= gain;
         frequency *= lacunarity;
     }
 
     float steep = clamp(length(gradient) / full, 0.0, 1.0);
-    StoreScalar(0u, index, height + sum * strength * steep);
+    if (WantsChannel(0)) {
+        StoreScalar(0u, index, height + sum * strength * steep);
+    }
+    if (WantsChannel(1)) {
+        StoreScalar(1u, index, drain * steep);
+    }
 }

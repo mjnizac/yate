@@ -495,8 +495,10 @@ Result<Value> Graph::AddGullies(Value height, Value gradient, Value position,
     node.inputs[0]    = height;
     node.inputs[1]    = gradient;
     node.inputs[2]    = position;
-    node.channelCount = 1;
+    // Channel 1 is where the gullies run: the bottom of their troughs, a drainage mask.
+    node.channelCount = 2;
     node.channels[0]  = scalar;
+    node.channels[1]  = scalar;
     PackFloat(node.params, 0, params.cell);
     node.params[1] = params.octaves;
     PackFloat(node.params, 2, params.strength);

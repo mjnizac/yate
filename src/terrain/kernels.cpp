@@ -186,7 +186,9 @@ constexpr OpInfo kOps[] = {
      .nodeClass      = NodeClass::Pointwise,
      // The height, its gradient and the position the pattern is drawn at, in metres.
      .maxInputs      = 3,
-     .maxChannels    = 1,
+     // Channel 1 is the drainage mask: the bottom of the gullies, wider for the larger octaves.
+     .maxChannels    = 2,
+     .channelNames   = {"value", "channels"},
      .resolutionWord = kMaxNodeParams,
      .hasReference   = false, // Hashes the job seed, which the pointwise reference does not receive.
      .specFieldCount = 0},
