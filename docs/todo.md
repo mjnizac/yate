@@ -49,6 +49,54 @@ full history is in the git log.
 - [ ] **Slope statistics.** The sidecar reports min, max, mean and the count of non-finite samples. Slope
       percentiles are computed by `test_geometry` from the raw export and are not in the sidecar.
 
+## Terrain quality (in this order)
+
+The goal is that a terrain is composed from validated examples and judged by numbers, not only by a
+viewer screenshot. Each item is done when it is in `ctest`.
+
+- [ ] **Geomorphometry in `terrain_metrics`**: slope percentiles and the share over 35 and 45 degrees,
+      local relief, hypsometric integral, curvature, the count and area of closed depressions, D8
+      drainage density, spectral slope, and the axis-to-diagonal ratio of second differences.
+- [ ] **A hillshade with cast shadows** written from `height.raw`, so a geometric defect is not judged
+      through the viewer's lighting (the viewer has no cast shadows).
+- [ ] **Metric acceptance in cases**: a `"metrics"` block in `case.json` and cases under
+      `tests/library/`, with ranges measured on at least two references per family.
+- [ ] **Cliffs, then the alpine family, rebuilt in stages**: shapes and profiles without noise first,
+      then structure, erosion, and detail noise last with a declared amplitude budget.
+- [ ] **Rivers and lakes from `Erosion.StreamPower`**: it computes the drainage area and the filled
+      surface and discards both; return them, add `rivers` and `lakes` outputs, and draw lake water at
+      its outlet level in the viewer.
+- [ ] **Later, if the above justifies it**: erosion by a hardness map, environmental layers for biomes
+      as outputs, more cells and threads for `StreamPower`.
+
+## Viewer and performance
+
+- [ ] **Tiles are evaluated one submit and wait at a time** (`EvaluateTile`): batch several tiles per
+      submission and add them to the cache when their timeline value is reached.
+- [ ] **Lua work is repeated on every level change**: the macros rebuild resolution-independent CPU grids
+      each time. Either an `engine.memo(key, fn)` cleared on hot reload, or a `Terrain.Bake` op that
+      evaluates a GPU subgraph on a coarse grid, which would also remove the three `make_noise` copies.
+- [ ] **One global level limits the view distance**: CDLOD-style per-tile levels with geomorphing. A
+      design, after the two items above.
+- [ ] **Normals take three floats per sample** in the viewer; an octahedral 2 x 16-bit encoding is a
+      third of it.
+- [ ] **`StreamPower` costs ~145 ns per cell and step** on one thread; profile first. `Erosion.Wind` has
+      no result cache.
+- [ ] **Export is bound by PNG encoding** at 16k; measure the zlib level on 16-bit heights.
+- [ ] **Eight outputs per script** (`Graph::kMaxOutputs`); 16 would cost readback space only when used.
+
+## Prelude and tooling
+
+- [ ] **`make_noise`, the hash and `smooth` are written three times** (`30_ranges`, `40_dunes`,
+      `50_lands`) with small differences.
+- [ ] **Macro argument checks are hand-written per macro**; a data-driven `check_args` would make errors
+      uniform and start the API catalogue.
+- [ ] **A golden failure reports a count**, not where: print the bounding box and the largest difference.
+- [ ] **The suite takes three to six minutes**, mostly macro cases paying their own simulation; a
+      `cells` key per case would cut it.
+- [ ] **`docs/architecture.md` does not describe the CPU ops** (`StreamPower`, `Wind`, `Grid`), their cost
+      or their caches.
+
 ## Not yet decided
 
 - [ ] **The standard's catalog.** The draft `terrain_engine_spec_terrain_standard.md` (on the Desktop, not in the repo) describes a 25-node catalog with macros, file
