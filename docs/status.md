@@ -57,12 +57,14 @@ reference's plates.
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` passes 15 of 15 in each:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has 16 suites:
 `test_allocators`, `test_mapping`, `test_errors`, `test_compiler`, `test_lua_errors`,
-`test_output_files`, `test_cli`, `test_geometry`, `test_compute_roundtrip`, `test_noise`,
-`test_kernels`, `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`.
+`test_output_files`, `test_cli`, `test_geometry`, `test_lands`, `test_compute_roundtrip`, `test_noise`,
+`test_kernels`, `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. Debug passes 16 of 16;
+Release fails only the intermittent `volume_r3` timing in `test_datasets` (see known defects). Run one
+suite at a time: two runs share `out/` and fail each other.
 
-Three of those look at something the engine did not itself produce, which is the property the earlier
+Four of those look at something the engine did not itself produce, which is the property the earlier
 suite lacked:
 
 * `test_output_files` checks a written PNG against values worked out by hand (`0.0` over
@@ -114,6 +116,8 @@ Open, with the measurements, in `docs/todo.md`:
   carves are at the scale of the cell and differ. Finer than 2 m the count is capped at 96.
 * **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
   it. Adding diagonal neighbours was tried and measured worse.
+* **`volume_r3` timing in `test_datasets`** runs 21 to 52 % over its 20 ms baseline in Release, against a
+  25 % failure threshold; the baseline or the tolerance needs a decision.
 * **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not
   reproduce locally; Linux has never built. Both need the log of the failing step.
 * **Water at the ring's edge** shows a plate where the surface stands above a lower floor (todo).

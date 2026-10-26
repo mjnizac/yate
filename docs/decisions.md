@@ -9,6 +9,10 @@ something is the way it is — read the section you need, not the whole thing.
 Everything here was true when it was written. Where a later section contradicts an earlier one, the
 later one wins, and both are kept because the correction is usually the interesting part.
 
+This file is closed to experiment logs. A new entry is a decision that stays true (a convention, a
+rejected design with its measurement, a defect class); what an experiment teaches belongs in code, in a
+validated example or in a test.
+
 ## 1. Skeleton
 
 Build system with an `OBJECT` library linked as a DLL or a static library, generated export header,
@@ -1230,9 +1234,10 @@ sawtooth, with a height per period. Three findings, all from numbers or from cha
   ends of its period left a crease wherever two dunes of different heights met; subtracting k / 4 fixed it.
 
 
-## The lands macro: islands, archipelagos and continents
+## The lands macro: islands, archipelagos and continents (superseded)
 
-Decisions for `Lands.*`, from two expert reviews of the plan and from the first runs:
+Superseded by the second version below; kept for the conventions it still shares (one signed field,
+the margin). Decisions for `Lands.*`, from two expert reviews of the plan and from the first runs:
 
 * **One field, one sign.** Everything is a function of `coast_sdf` with land negative. Mixing the two
   conventions between products is the usual source of inverted shelves.
