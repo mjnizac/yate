@@ -512,6 +512,8 @@ Status Context::CreateDevice(const ContextCreateInfo& info) {
     const RequiredFeature required[] = {
         {"synchronization2", features13.synchronization2},
         {"maintenance4", features13.maintenance4},
+        // A fragment shader's `discard` compiles to OpDemoteToHelperInvocation for a 1.3 target.
+        {"shaderDemoteToHelperInvocation", features13.shaderDemoteToHelperInvocation},
         {"timelineSemaphore", features12.timelineSemaphore},
         {"bufferDeviceAddress", features12.bufferDeviceAddress},
         {"scalarBlockLayout", features12.scalarBlockLayout},
@@ -529,10 +531,11 @@ Status Context::CreateDevice(const ContextCreateInfo& info) {
     VkPhysicalDeviceVulkan14Features enable14{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES};
     VkPhysicalDeviceVulkan13Features enable13{
-        .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-        .pNext            = &enable14,
-        .synchronization2 = VK_TRUE,
-        .maintenance4     = VK_TRUE};
+        .sType                          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+        .pNext                          = &enable14,
+        .shaderDemoteToHelperInvocation = VK_TRUE,
+        .synchronization2               = VK_TRUE,
+        .maintenance4                   = VK_TRUE};
     VkPhysicalDeviceVulkan12Features enable12{
         .sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext               = &enable13,
