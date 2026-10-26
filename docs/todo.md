@@ -64,7 +64,18 @@ viewer screenshot. Each item is done when it is in `ctest`.
       terrace of height plus a tilted plane, which stripes the cliffs' plateau in the hillshade;
       irregular bed thickness by terracing a monotone remap of height; a convexity mask
       (`h - Blur(h)`) to confine detail and erosion to walls and ridges; detail octaves above the
-      stream-power grid scale with an amplitude ratio set from the target spectral slope.
+      stream-power grid scale with an amplitude ratio set from the target spectral slope; erosion
+      passes ordered coarse to fine; the difference between a terrain before and after an erosion
+      recombined as debris and broken terraces; terraces cracked by cells before erosion; cells with
+      F3 - F1 (more break points than the current F2 - F1) for cliff edges.
+- [ ] **Drainage made valid by breaching as well as filling.** `Erosion.StreamPower` only fills
+      depressions. World Machine's Flow Restructure carves through ridges and fills basins with the
+      least change until every cell has a lower outlet, and goes right before the water; a
+      breach-and-fill pass (Lindsay's hybrid) would serve the rivers and lakes item and the pit metric.
+- [ ] **Vector displacement for real cliffs (roadmap, not now).** A heightfield cannot hold overhangs
+      and stretches detail above about 45 degrees. World Machine 4059/4065 added vector displacement
+      maps that erosion, thermal weathering and strata run on, converted back to a heightfield plus
+      cliff meshes. YATE's mappings already have `R2->R3`; an offset output is the natural form.
 - [ ] **References with a known scale.** The usable alpine references are 8-bit heightmaps of unknown
       size and height, so only scale-free numbers (spectral slope, hypsometric integral) can be targets;
       `heightmap1.jpg` and `heightmap2.jpg` are shaded relief, not heights. The cliffs family has no
