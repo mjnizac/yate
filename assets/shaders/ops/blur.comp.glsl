@@ -5,6 +5,7 @@
 // Parameters:
 //   0  radius      taps on each side, at least 1
 //   1  components
+//   2  mode        0 the mean, 1 the largest value, 2 the smallest (a dilation or an erosion)
 //
 // This is the first op that reads anything other than its own sample, so it is what makes halo
 // propagation real: its input is allocated with `output halo + radius`, which is a wider border and
@@ -28,6 +29,7 @@ void main() {
     uint index  = SampleIndex(local);
     int  radius = max(ParamInt(0), 1);
     uint count  = max(ParamUint(1), 1u);
+    uint mode   = ParamUint(2);
 
     FloatBuffer source = FloatBuffer(pc.inputs[0]);
     FloatBuffer target = FloatBuffer(pc.outputs[0]);
@@ -38,6 +40,8 @@ void main() {
     for (uint c = 0u; c < count; ++c) {
         float sum  = 0.0;
         float taps = 0.0;
+        float most = -3.402823e38;
+        float least = 3.402823e38;
         for (int dy = -spanY; dy <= spanY; ++dy) {
             for (int dz = -radius; dz <= radius; ++dz) {
                 for (int dx = -radius; dx <= radius; ++dx) {
@@ -46,11 +50,15 @@ void main() {
                         continue;
                     }
                     uint at = InputIndexOffset(0u, local, offset);
-                    sum += source.values[at * count + c];
+                    float v = source.values[at * count + c];
+                    sum += v;
+                    most  = max(most, v);
+                    least = min(least, v);
                     taps += 1.0;
                 }
             }
         }
-        target.values[index * count + c] = taps > 0.0 ? sum / taps : 0.0;
+        float result = mode == 1u ? most : mode == 2u ? least : sum / max(taps, 1.0);
+        target.values[index * count + c] = taps > 0.0 ? result : 0.0;
     }
 }

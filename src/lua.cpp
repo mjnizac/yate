@@ -995,6 +995,20 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         args.Finish();
         return Handle{Unwrap(graph.AddBlur(input, radius, location))};
     });
+    // The same window as Blur, taking its largest (`Expand`) or smallest (`Shrink`) value: a mask grows
+    // or shrinks by `radius` samples, a height is dilated or eroded.
+    const auto morphology = [&graph](const char* name, terrain::BlurMode mode) {
+        return [&graph, name, mode](sol::this_state lua, sol::table table) {
+            const SourceLocation location = CallerLocation(lua);
+            Args                 args(std::move(table), name, location);
+            const Value          input  = args.Input("input");
+            const u32_t          radius = args.Count("radius", 1, 1, terrain::kMaxBlurRadius);
+            args.Finish();
+            return Handle{Unwrap(graph.AddBlur(input, radius, location, mode))};
+        };
+    };
+    filters.set_function("Expand", morphology("Filters.Expand", terrain::BlurMode::Maximum));
+    filters.set_function("Shrink", morphology("Filters.Shrink", terrain::BlurMode::Minimum));
 
     // --- Erosion --------------------------------------------------------------------------------
     //

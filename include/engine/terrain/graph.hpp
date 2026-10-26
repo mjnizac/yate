@@ -185,6 +185,10 @@ enum class NoiseKind : u32_t { Simplex = 0, Ridged, Billow, Cellular };
 /// What a `Vector` node does.
 enum class VectorOp : u32_t { Extract = 0, Combine };
 
+/// What a Blur node takes over its window: the mean, or the largest or smallest value (a dilation or an
+/// erosion, World Machine's Expander).
+enum class BlurMode : u32_t { Average = 0, Maximum, Minimum };
+
 /// Where in a script a node was created. Reported by every validation and compilation error.
 struct SourceLocation {
     std::string_view file;
@@ -406,7 +410,8 @@ public:
 
     /// Box blur of `radius` taps on each side. Neighbourhood: this is what gives the producing node
     /// a halo, and the compiler propagates it backwards from here.
-    [[nodiscard]] Result<Value> AddBlur(Value input, u32_t radius, SourceLocation location);
+    [[nodiscard]] Result<Value> AddBlur(Value input, u32_t radius, SourceLocation location,
+                                        BlurMode mode = BlurMode::Average);
 
     struct ThermalParams {
         /// Iterations to run. Also the influence radius, and therefore the halo.

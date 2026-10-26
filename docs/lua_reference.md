@@ -118,7 +118,7 @@ its own section. That border is the halo, and it is the main thing that decides 
 
 | Op | Radius it adds |
 | --- | --- |
-| `Filters.Blur` | `radius` |
+| `Filters.Blur`, `Expand`, `Shrink` | `radius` |
 | `Terrain.Gradient` | 1 |
 | `Erosion.Thermal` | `iterations`, scaled to the spacing (see §9) |
 | `Erosion.Hydraulic` | `iterations`, scaled to the spacing |
@@ -536,6 +536,14 @@ and it does not smear the large scales along with the small.
 | Softening the crease left by `Combine.Min`/`Max` | 1–2 |
 | Smoothing a mask so a blend transition is not pixelated | 3–8 |
 | Building a large-scale "shape" field to drive a mask | 16–32, or better, a 2-octave noise for free |
+
+### `Filters.Expand` and `Filters.Shrink`
+
+The same keys and window as `Filters.Blur`, taking the largest (`Expand`) or smallest (`Shrink`) value
+instead of the mean: World Machine's Expander. On a mask, `Expand` grows the selected region by `radius`
+samples and `Shrink` narrows it; on a height they are a dilation and an erosion. Follow either with a
+small `Blur` for a sloped edge rather than a step. `terrains/cliffs.lua` widens an erosion's flow map
+into channels with it.
 
 ---
 

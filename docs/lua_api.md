@@ -87,6 +87,7 @@ numbers drift, and this one is the index.
 | `Combine.Min`, `Combine.Max` | the shared mapping | `Max` unions landforms, `Min` carves |
 | `Curves.Clamp`, `Remap`, `Power`, `Smoothstep` | the input's mapping | pointwise; `Remap` assumes a `[-1, 1]` input and `Power` only means what you want on a field in `[-1, 1]` |
 | `Filters.Blur` | the input's mapping | radius in **samples**, not metres; its radius becomes halo |
+| `Filters.Expand`, `Filters.Shrink` | the input's mapping | the same window taking its largest or smallest value: grows or shrinks a mask, dilates or erodes a height |
 | `Vec.Combine` | `Rn -> Rm` | a positional list of 2 to 4 scalars |
 | `Terrain.Transform` | `R2->R2` | moves, turns and scales a position field; what places a shape |
 | `Geometry.Circle`, `Ellipse`, `Box`, `BoxChebyshev`, `Segments` | `R2->R1` | signed distance in metres, negative inside, to a primitive in its own local space |

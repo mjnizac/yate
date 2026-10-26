@@ -668,7 +668,7 @@ Result<Value> Graph::AddExtract(Value input, u8_t component, SourceLocation loca
     return Append(node, location);
 }
 
-Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location) {
+Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location, BlurMode mode) {
     if (Status checked = CheckValue(input, "Blur input", location); !checked) {
         return std::unexpected(checked.error());
     }
@@ -689,6 +689,7 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location)
     node.channels[0]  = input.mapping;
     node.params[0]    = radius;
     node.params[1]    = input.mapping.components;
+    node.params[2]    = static_cast<u32_t>(mode);
     return Append(node, location);
 }
 
