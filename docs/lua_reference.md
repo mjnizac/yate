@@ -9,7 +9,20 @@ of the result — organised by what you are trying to build rather than by names
 
 ## Start here: from a kind of terrain to a script
 
-Copy the closest example, run it in the viewer, change one thing at a time.
+**Build a terrain in this order, and check each stage before the next.** Terrains built from
+photographs and videos have tended to go straight to noise, reproducing the texture of the reference
+instead of its forms.
+
+1. **Forms, without any `Noises.*`.** Walls, ridges, valleys and plateaus as shapes and profiles
+   (`Shapes.*`, `Geometry.*`, `Landforms.*`, `Curves.Profile`, `Curves.Terrace`; §10), at the
+   dimensions measured on the reference: wall height, step count, ridge spacing, valley profile. A
+   reference blurred to the same scale should already match.
+2. **Structure**: strata, terraces, faults, buttresses as a sideways displacement of the form.
+3. **Erosion** (§9), and the drainage for anything with valleys (`Erosion.StreamPower`).
+4. **Detail noise last**, with an amplitude stated in metres and small against the relief. Fine
+   detail in a photograph is mostly light, material and erosion; noise added for it hides the forms.
+
+Then copy the closest example, run it in the viewer, change one thing at a time.
 
 | You want | Start from | The part to change |
 | --- | --- | --- |
