@@ -19,6 +19,7 @@ Copy the closest example, run it in the viewer, change one thing at a time.
 | River valleys | `terrains/riverlands.lua` | hydraulic `rain`, `capacity` |
 | Sand | `terrains/dunes.lua`, `terrains/star_dunes.lua` | `Dunes.Field` (§10): `wind`, `wavelength`, `style` |
 | Flat-topped hills | `terrains/mesa.lua`, `shapes/mesas.lua` | terrace `steps`, shape size |
+| Tall sea cliffs, an escarpment | `terrains/cliffs.lua` | `top`, `columns`, `bays` |
 | A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
 | A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
 

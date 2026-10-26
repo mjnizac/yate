@@ -1275,3 +1275,40 @@ It was replaced, keeping the products, the sign convention and the margin.
   position: it carries the drainage-made coast to the GPU and the coast's own warp refines it.
 * **Valleys that reach the sea are the inlets.** They need no separate fjord step: the stream-power
   valleys are cut to the base level and the sea level cuts the coast above it.
+
+
+## Cliffs after a World Machine escarpment
+
+`terrains/cliffs.lua` follows a World Machine graph for a coastal escarpment, read from a timelapse
+frame by frame and kept at its final settings (several were tried and undone on the way). The graph,
+in order: Shapes (a 3.5 km falloff with breakup), a mirrored repeating Gradient with Easy Distortion
+multiplied into the lower slope under a Select Height mask, a sharp Terrace (3 steps, shape 0.87) masked
+by a gradient displaced 200 m by Perlin, two Strata (380 m tilted 30 degrees, then 80 m flat), channels
+cut from an erosion's flow map widened by an Expander, an erosion masked by slope and kept through a
+Smooth Max, then coast erosion, rivers and snow.
+
+What existed, what did not, and what the comparison taught:
+
+* **The Expander had no equivalent.** WM uses it four times (growing the flow map into channels,
+  growing the slope mask, dilating the ground before erosion). `Filters.Expand` and `Filters.Shrink`
+  are the Blur window taking its largest or smallest value; no new op, a mode word on Blur.
+* **Strata and the mirrored gradient** are built in the script: a terrace of the height plus a tilted
+  plane, minus the plane; and `u - Terrace(u, 1, sharpness 1)`, which is `u` minus its nearest integer,
+  whose absolute value is a triangle wave.
+* **An erosion over a wall hundreds of metres high piles sediment against its face**, which `Max` then
+  keeps as arches and spikes. The deposit is capped a few tens of metres above the ground.
+* **Buttresses are a sideways displacement, not erosion.** Moving the ground horizontally by a ridged
+  noise at the scale of a column (150 m) moves the riser by the same amount at every height, so the
+  pattern runs straight down the face.
+* **`Erosion.Gullies` aliases on a steep or noisy gradient.** Its stripe density follows the length of
+  the gradient it is given, so on a ramp carrying the buttress noise the stripes fall under a sample and
+  read as needles. Give it the gradient of a smooth field.
+* **Rivers and coast erosion are not reproduced.** The flow map gives channels on the slopes;
+  `Erosion.StreamPower` is the drainage step and is whole-grid, which this script does not use.
+
+**Defect found on the way: an iterative op read its input with the wrong row stride** when another
+consumer of the same producer asked for a wider halo. The evaluator set the input halo of every
+iteration to the op's state halo, which equals the producer's halo only when the op is that producer's
+widest consumer. `height = Hydraulic(n)` with `normals = Gradient(Thermal(n))` gave different floats at
+section 128 and 512; with the first iteration reading the producer with its own halo they are identical.
+In the viewer it showed as holes and arches in the walls.

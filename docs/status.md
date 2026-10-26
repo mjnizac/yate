@@ -51,8 +51,8 @@ type, and four archipelago layouts; measured with `terrain_metrics` and four gol
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.
 
-Eight sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
-crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the
+Nine sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
+cliffs, crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the
 reference's plates.
 
 ## Verification
