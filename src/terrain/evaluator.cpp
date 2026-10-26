@@ -393,9 +393,10 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
             // dispatch halo and writes the node's own output buffer, whatever the parity of the count,
             // so the rest of the graph is planned around one buffer and sees one result.
             //
-            // The input buffer carries `stateHalo` too, because halo propagation gave the producer this
-            // node's halo plus its radius. That is why the same `inputHalos` works for every iteration:
-            // the state and the input have the same shape, and only the output narrows at the end.
+            // The input buffer carries at least `stateHalo`, because halo propagation gave the producer
+            // this node's halo plus its radius, or more when another consumer asked for more. So the
+            // first iteration reads it with its own halo and the others read the scratch halves with
+            // `stateHalo`; only the output narrows at the end.
             // `outputs[0]` is zero when nothing asked for channel 0, which is legal: a script may want
             // only hydraulic erosion's `flow`. The kernel guards its own write with the channel mask, so
             // the last iteration simply writes nothing there. Resolving the slot for it would not be
@@ -410,8 +411,12 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
                 scratch[k]      = scratchSlots[k]->address;
             }
 
-            constants.inputHalos =
-                (constants.inputHalos & ~0xFFu) | (dispatch.stateHalo & 0xFFu);
+            // The first iteration reads the producer's buffer, whose halo is this node's state halo only
+            // when this node is its widest consumer: another consumer that needs more widens it, and
+            // reading it with the state halo's row stride reads the wrong samples. The scratch halves
+            // every later iteration reads always have the state halo.
+            const u32_t sourceHalos = constants.inputHalos;
+            const u32_t stateHalos  = (sourceHalos & ~0xFFu) | (dispatch.stateHalo & 0xFFu);
 
             const u32_t last = dispatch.iterations - 1;
             for (u32_t iteration = 0; iteration <= last; ++iteration) {
@@ -424,6 +429,7 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
                 constants.halo       = isLast ? dispatch.halo : dispatch.stateHalo;
                 constants.outputs[0] = isLast ? output : scratch[writeAt];
                 constants.inputs[0]  = iteration == 0 ? source0 : scratch[readAt];
+                constants.inputHalos = iteration == 0 ? sourceHalos : stateHalos;
                 constants.params[kIterationCountWord] = dispatch.iterations;
                 constants.params[kIterationParamWord] = iteration;
 
