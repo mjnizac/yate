@@ -57,6 +57,15 @@ add_dependencies(test_geometry terrain_export engine_shaders)
 # Dozens of exports through the executable: 85 s in Release, about 160 s in Debug.
 set_tests_properties(test_geometry PROPERTIES TIMEOUT 300)
 
+# The terrain examples in tests/library/*.json, exported and checked against metric ranges.
+engine_add_unit_test(test_library)
+target_include_directories(test_library PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/runner")
+target_compile_definitions(test_library PRIVATE
+    "TERRAIN_EXPORT_EXE=\"$<TARGET_FILE:terrain_export>\""
+    "ENGINE_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+add_dependencies(test_library terrain_export engine_shaders)
+set_tests_properties(test_library PROPERTIES TIMEOUT 300)
+
 # Needs a Vulkan 1.4 device and the compiled shaders.
 engine_add_unit_test(test_compute_roundtrip)
 engine_add_unit_test(test_noise)
