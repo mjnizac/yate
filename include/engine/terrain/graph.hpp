@@ -366,10 +366,12 @@ public:
                                         const GridParams& params, SourceLocation location);
     /// How the viewer should colour the terrain, from the script's `look = { ... }`. Not part of the
     /// graph: an export ignores it. `palette` 0 is the default (grass, rock, snow), 1 is sand; `wind`
-    /// is the direction the wind blows towards, in degrees from +x towards +z.
+    /// is the direction the wind blows towards, in degrees from +x towards +z; `snow` is the altitude in
+    /// metres where snow begins, 0 for the shader's default.
     struct Look {
         u32_t palette = 0;
         f32_t wind    = 0.0f;
+        f32_t snow    = 0.0f;
     };
     void                     SetLook(Look look) noexcept { m_look = look; }
     [[nodiscard]] const Look& GetLook() const noexcept { return m_look; }

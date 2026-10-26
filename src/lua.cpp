@@ -1405,12 +1405,23 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
                 parsed.palette = 1;
             } else if (palette == "coast") {
                 parsed.palette = 2;
+            } else if (palette == "elevation") {
+                parsed.palette = 3;
             } else if (palette != "default") {
                 return std::unexpected(MakeScriptError(
                     ErrorCode::ScriptError, ErrorStage::Script, location.file, location.line,
-                    "look.palette '{}' is not known; expected 'default', 'sand' or 'coast'", palette));
+                    "look.palette '{}' is not known; expected 'default', 'sand', 'coast' or 'elevation'",
+                    palette));
             }
             parsed.wind = static_cast<f32_t>(look.get_or("wind", 0.0));
+            // Carried in the 15 bits above the wind: whole metres, 1 to 32767.
+            const f64_t snow = look.get_or("snow", 0.0);
+            if (!(snow >= 0.0 && snow <= 32767.0)) {
+                return std::unexpected(MakeScriptError(
+                    ErrorCode::ScriptError, ErrorStage::Script, location.file, location.line,
+                    "look.snow must be an altitude between 0 and 32767 m, got {}", snow));
+            }
+            parsed.snow = static_cast<f32_t>(snow);
             graph.SetLook(parsed);
             continue;
         }

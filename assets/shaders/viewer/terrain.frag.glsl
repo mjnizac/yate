@@ -115,7 +115,9 @@ void main() {
     float rock      = rocky > 0.0 ? Ribs(vWorldPosition, footprint) : 0.0;
     // Snow lies where the ground is smooth enough to hold it and high enough to keep it; the rock
     // shows through where it is steep. The line wavers with the rock so it is not a contour.
-    float snow = smoothstep(kSnowLine - 150.0, kSnowLine + 150.0, height + rock * 80.0)
+    // The script may move the snow line (`look = { snow = metres }`, bits 17 and up); 0 keeps the default.
+    float snowLine = (pc.look >> 17u) != 0u ? float(pc.look >> 17u) : kSnowLine;
+    float snow = smoothstep(snowLine - 150.0, snowLine + 150.0, height + rock * 80.0)
                * (1.0 - smoothstep(0.34, 0.5, slope + rock * 0.08));
 
     vec3 albedo = mix(kGrassColor, kScreeColor, smoothstep(kScreeLine - 300.0, kScreeLine + 200.0, height));
@@ -133,7 +135,7 @@ void main() {
     // few metres apart here, larger than in nature so the camera can see them, and fade out as a pixel
     // grows past them so they never alias.
     if ((pc.look & 0xFFu) == 1u) {
-        float wind = radians(float(pc.look >> 8u));
+        float wind = radians(float((pc.look >> 8u) & 0x1FFu));
         vec2  dir  = vec2(cos(wind), sin(wind));
         float bend = ValueNoise(vWorldPosition * vec3(1.0, 0.0, 1.0) / 60.0) * 6.2832;
         float gentle = 1.0 - smoothstep(0.03, 0.12, slope);
@@ -168,6 +170,23 @@ void main() {
         beach       = mix(beach, beach * vec3(0.62, 0.60, 0.58), wet);
         albedo      = mix(albedo, beach, gentle_shore);
         albedo      = mix(albedo, kRockColor, shore * smoothstep(0.25, 0.45, slope));
+    }
+
+    // Elevation (`look = { palette = "elevation", snow = top }`): colour by height alone, from 0 m to
+    // `top`, in the ramp World Machine's previews use (brown, ochre, green, grey, white), so a terrain
+    // can be compared with one built there node by node. Slope plays no part.
+    if ((pc.look & 0xFFu) == 3u) {
+        // Ground pushed far below is outside the tile: not drawn, as in a World Machine preview.
+        if (height < -1000.0) {
+            discard;
+        }
+        float top = (pc.look >> 17u) != 0u ? float(pc.look >> 17u) : 2600.0;
+        float e   = clamp(height / top, 0.0, 1.0);
+        vec3  ramp = mix(vec3(0.42, 0.30, 0.13), vec3(0.66, 0.46, 0.14), smoothstep(0.00, 0.18, e));
+        ramp       = mix(ramp, vec3(0.22, 0.50, 0.16), smoothstep(0.18, 0.38, e));
+        ramp       = mix(ramp, vec3(0.50, 0.47, 0.43), smoothstep(0.50, 0.70, e));
+        ramp       = mix(ramp, vec3(0.93, 0.93, 0.93), smoothstep(1.0, 1.04, e));
+        albedo     = ramp;
     }
 
     float sun = max(dot(normal, kSunDirection), 0.0) * sunlit;

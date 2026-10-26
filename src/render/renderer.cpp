@@ -412,7 +412,8 @@ struct TileCache {
     {
         const Graph::Look look = loaded.graph.GetLook();
         const f32_t       wind = std::fmod(std::fmod(look.wind, 360.0f) + 360.0f, 360.0f);
-        built.look = (look.palette & 0xFFu) | (static_cast<u32_t>(wind) << 8);
+        built.look = (look.palette & 0xFFu) | (static_cast<u32_t>(wind) << 8)
+                   | ((static_cast<u32_t>(look.snow) & 0x7FFFu) << 17);
     }
     built.heightOutput  = loaded.heightOutput;
     built.normalsOutput = loaded.normalsOutput;

@@ -207,7 +207,8 @@ struct TerrainPushConstants {
     VkDeviceAddress normals     = 0;
     /// World position of the camera, for the length of the ray that runs under the water.
     std::array<f32_t, 3> eye{};
-    /// The script's look: palette in the low byte, wind direction in whole degrees [0, 360) above it.
+    /// The script's look: palette in the low byte, wind direction in whole degrees [0, 360) in the next
+    /// nine bits, and the snow line in whole metres in bits 17 and up (0: the shader's default).
     u32_t look = 0;
 };
 
