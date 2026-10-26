@@ -230,7 +230,10 @@ void SetThreadName(const char* name) noexcept {
     if (name == nullptr) {
         return;
     }
-#ifdef TRACY_ENABLE
+    // On Windows Tracy reads the name back with GetThreadDescription, so it is not given the name
+    // itself: tracy::SetThreadName allocates from rpmalloc, which intermittently returned null on a
+    // newly started deflate worker and crashed test_output_files in Release (8 runs in 8).
+#if defined(TRACY_ENABLE) && !defined(_WIN32)
     tracy::SetThreadName(name);
 #endif
 #if defined(_WIN32)
