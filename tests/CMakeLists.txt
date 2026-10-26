@@ -52,6 +52,8 @@ target_compile_definitions(test_geometry PRIVATE
     "TERRAIN_EXPORT_EXE=\"$<TARGET_FILE:terrain_export>\""
     "ENGINE_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
 add_dependencies(test_geometry terrain_export engine_shaders)
+# Dozens of exports through the executable: 85 s in Release, about 160 s in Debug.
+set_tests_properties(test_geometry PROPERTIES TIMEOUT 300)
 
 # Needs a Vulkan 1.4 device and the compiled shaders.
 engine_add_unit_test(test_compute_roundtrip)
