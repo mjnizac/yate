@@ -223,3 +223,26 @@ Measuring a reference against an example, so the numbers are comparable:
    identical sections), not on a number.
 
 Third-party images and heightmaps stay out of the repository (`docs/references/.gitignore`).
+
+### Relief, and a hillshade
+
+```bash
+build/Release/bin/terrain_metrics out/alpine --no-sea --hillshade out/alpine_shade.png --sun 180,35
+```
+
+The same run reports the relief (`tests/unit/relief_metrics.hpp`, checked by `test_relief`): slope
+percentiles and the share over 35 and 45 degrees, local relief per `--block` metres, the hypsometric
+integral, curvature, closed depressions, drainage density from `--channel` square metres, the spectral
+slope and the axis-to-diagonal power ratio. Cells at or below `--level` are sea; `--no-sea` measures
+everything. `--hillshade` writes a grey image with cast shadows from `--sun azimuth,elevation` (0 is from
+the top of the image, 90 from the right; rounded to 45 degrees): it judges geometry without the viewer's
+lighting. Put the sun in front of the faces you want to see; behind a 2 km wall it shades kilometres.
+
+An 8-bit reference heightmap of unknown size can only be compared on scale-free numbers: the spectral
+slope and the hypsometric integral. Check first that it is heights and not shaded relief.
+
+### Library cases
+
+`tests/library/<name>.json` names a script under `assets/scripts`, its bounds, resolution and seed, and
+metric ranges; `test_library` exports it and checks them. An entry with `"target": true` is a range taken
+from references that the example does not meet yet: printed with `->`, not failed.

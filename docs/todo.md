@@ -54,15 +54,14 @@ full history is in the git log.
 The goal is that a terrain is composed from validated examples and judged by numbers, not only by a
 viewer screenshot. Each item is done when it is in `ctest`.
 
-- [ ] **Geomorphometry in `terrain_metrics`**: slope percentiles and the share over 35 and 45 degrees,
-      local relief, hypsometric integral, curvature, the count and area of closed depressions, D8
-      drainage density, spectral slope, and the axis-to-diagonal ratio of second differences.
-- [ ] **A hillshade with cast shadows** written from `height.raw`, so a geometric defect is not judged
-      through the viewer's lighting (the viewer has no cast shadows).
-- [ ] **Metric acceptance in cases**: a `"metrics"` block in `case.json` and cases under
-      `tests/library/`, with ranges measured on at least two references per family.
 - [ ] **Cliffs, then the alpine family, rebuilt in stages**: shapes and profiles without noise first,
-      then structure, erosion, and detail noise last with a declared amplitude budget.
+      then structure, erosion, and detail noise last with a declared amplitude budget. The alpine case
+      (`tests/library/alpine.json`) already shows the first measured gap: a spectral slope of 5.3 against
+      3.9 on the four reference heightmaps, so it lacks fine relief for its large forms.
+- [ ] **References with a known scale.** The usable alpine references are 8-bit heightmaps of unknown
+      size and height, so only scale-free numbers (spectral slope, hypsometric integral) can be targets;
+      `heightmap1.jpg` and `heightmap2.jpg` are shaded relief, not heights. The cliffs family has no
+      heightmap reference at all.
 - [ ] **Rivers and lakes from `Erosion.StreamPower`**: it computes the drainage area and the filled
       surface and discards both; return them, add `rivers` and `lakes` outputs, and draw lake water at
       its outlet level in the viewer.

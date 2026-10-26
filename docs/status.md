@@ -57,11 +57,11 @@ reference's plates.
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has 16 suites:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has 18 suites:
 `test_allocators`, `test_mapping`, `test_errors`, `test_compiler`, `test_lua_errors`,
-`test_output_files`, `test_cli`, `test_geometry`, `test_lands`, `test_compute_roundtrip`, `test_noise`,
-`test_kernels`, `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. Debug passes 16 of 16;
-Release fails only the intermittent `volume_r3` timing in `test_datasets` (see known defects). Run one
+`test_output_files`, `test_cli`, `test_geometry`, `test_lands`, `test_relief`, `test_library`, `test_compute_roundtrip`, `test_noise`,
+`test_kernels`, `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. Both passed 18 of 18 on the last run;
+Release can fail the intermittent `volume_r3` timing in `test_datasets` (see known defects). Run one
 suite at a time: two runs share `out/` and fail each other.
 
 Four of those look at something the engine did not itself produce, which is the property the earlier
