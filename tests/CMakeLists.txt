@@ -30,6 +30,8 @@ engine_add_unit_test(test_output_files)
 # The land/sea metrics the Lands macros are accepted against, on fields with known answers. Standard
 # library only, but it uses test_support like the rest.
 engine_add_unit_test(test_lands)
+# The relief metrics and the hillshade the terrain examples are accepted against, the same way.
+engine_add_unit_test(test_relief)
 
 # The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only,
 # standard library only, so it links nothing from the engine.
