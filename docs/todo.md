@@ -58,6 +58,13 @@ viewer screenshot. Each item is done when it is in `ctest`.
       then structure, erosion, and detail noise last with a declared amplitude budget. The alpine case
       (`tests/library/alpine.json`) already shows the first measured gap: a spectral slope of 5.3 against
       3.9 on the four reference heightmaps, so it lacks fine relief for its large forms.
+- [ ] **Hypotheses from World Machine and Gaea practice**, to test on the cliffs and alpine cases, each
+      a prelude function or a script change only if it measures better:
+      strata as a sideways displacement along the slope (exposed on faces, none on flats) instead of a
+      terrace of height plus a tilted plane, which stripes the cliffs' plateau in the hillshade;
+      irregular bed thickness by terracing a monotone remap of height; a convexity mask
+      (`h - Blur(h)`) to confine detail and erosion to walls and ridges; detail octaves above the
+      stream-power grid scale with an amplitude ratio set from the target spectral slope.
 - [ ] **References with a known scale.** The usable alpine references are 8-bit heightmaps of unknown
       size and height, so only scale-free numbers (spectral slope, hypsometric integral) can be targets;
       `heightmap1.jpg` and `heightmap2.jpg` are shaded relief, not heights. The cliffs family has no
