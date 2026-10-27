@@ -56,11 +56,7 @@ end
 
 -- Hashed value noise, the same on every machine: integers and floats only.
 local function make_noise(seed)
-    local function hash(ix, iz, salt)
-        local v = (ix * 374761393 + iz * 668265263 + salt * 2246822519 + seed * 3266489917) & 0xffffffff
-        v = ((v ~ (v >> 13)) * 1274126177) & 0xffffffff
-        return ((v ~ (v >> 16)) & 0xffff) / 65535.0
-    end
+    local hash = engine.lattice_hash(seed)
     local function value(px, pz, wavelength, salt)
         local fx, fz = px / wavelength, pz / wavelength
         local ix, iz = math.floor(fx), math.floor(fz)
@@ -82,10 +78,7 @@ local function make_noise(seed)
     return hash, fbm
 end
 
-local function smooth(x)
-    x = math.min(math.max(x, 0.0), 1.0)
-    return x * x * (3 - 2 * x)
-end
+local smooth = engine.smooth
 
 -- Distance from (px, pz) to a polyline, and how far along it the nearest point is, in metres.
 local function along(px, pz, points, lengths)

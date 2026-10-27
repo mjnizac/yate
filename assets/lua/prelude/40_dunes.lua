@@ -336,11 +336,7 @@ end
 
 -- Hashed value noise in plain Lua, for the starting sand.
 local function make_noise(seed)
-    local function hash(ix, iz, salt)
-        local v = (ix * 374761393 + iz * 668265263 + salt * 2246822519 + seed * 3266489917) & 0xffffffff
-        v = ((v ~ (v >> 13)) * 1274126177) & 0xffffffff
-        return ((v ~ (v >> 16)) & 0xffff) / 65535.0
-    end
+    local hash = engine.lattice_hash(seed)
     -- Periodic with `period` lattice cells, so the starting sand wraps like the simulation does.
     local function value(fx, fz, period, salt)
         local ix, iz = math.floor(fx), math.floor(fz)

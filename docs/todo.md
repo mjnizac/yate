@@ -130,8 +130,9 @@ viewer screenshot. Each item is done when it is in `ctest`.
 
 ## Prelude and tooling
 
-- [ ] **`make_noise`, the hash and `smooth` are written three times** (`30_ranges`, `40_dunes`,
-      `50_lands`) with small differences.
+- [x] **`make_noise`, the hash and `smooth` were written three times**: the hash and `smooth` live in
+      `05_common.lua` (`engine.lattice_hash`, `engine.hasher`, `engine.smooth`); each macro keeps its own
+      value noise, which differs on purpose (periodic for dunes, its own lacunarity for lands).
 - [ ] **Macro argument checks are hand-written per macro**; a data-driven `check_args` would make errors
       uniform and start the API catalogue.
 - [ ] **A golden failure reports a count**, not where: print the bounding box and the largest difference.

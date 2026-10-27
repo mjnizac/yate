@@ -82,28 +82,12 @@ local COASTS = {
 
 -- --- Plain Lua helpers ----------------------------------------------------------------------------
 
-local function hasher(seed)
-    return function(i, salt)
-        local v = (i * 374761393 + (salt or 0) * 668265263 + seed * 2246822519) & 0xffffffff
-        v = ((v ~ (v >> 13)) * 1274126177) & 0xffffffff
-        return ((v ~ (v >> 16)) & 0xffff) / 65535.0
-    end
-end
-
-local function smooth(x)
-    if x <= 0.0 then return 0.0 end
-    if x >= 1.0 then return 1.0 end
-    return x * x * (3.0 - 2.0 * x)
-end
+local hasher, smooth = engine.hasher, engine.smooth
 
 -- Hashed value noise: the same on every machine. `noise(x, z, wavelength, octaves, salt)` is in [-1, 1].
 local function make_noise(seed)
     local floor = math.floor
-    local function corner(ix, iz, salt)
-        local v = (ix * 374761393 + iz * 668265263 + salt * 2246822519 + seed * 3266489917) & 0xffffffff
-        v = ((v ~ (v >> 13)) * 1274126177) & 0xffffffff
-        return ((v ~ (v >> 16)) & 0xffff) / 65535.0
-    end
+    local corner = engine.lattice_hash(seed)
     local function value(x, z, salt)
         local ix, iz = floor(x), floor(z)
         local fx, fz = x - ix, z - iz
