@@ -32,6 +32,8 @@ engine_add_unit_test(test_output_files)
 engine_add_unit_test(test_lands)
 # The relief metrics and the hillshade the terrain examples are accepted against, the same way.
 engine_add_unit_test(test_relief)
+# Rivers and lakes on grids with known answers.
+engine_add_unit_test(test_hydrology)
 
 # The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only
 # metrics and nothing from the engine; libspng only to read reference heightmaps given as PNG.
@@ -102,6 +104,6 @@ set_tests_properties(test_datasets PROPERTIES TIMEOUT 900)
 # `ctest -L fast` while iterating (seconds), the whole suite before a commit (minutes). The slow ones
 # export whole terrains through the executables or run the viewer.
 set_tests_properties(test_allocators test_mapping test_errors test_compiler test_lua_errors
-                     test_output_files test_lands test_relief test_compute_roundtrip test_noise
+                     test_output_files test_lands test_relief test_hydrology test_compute_roundtrip test_noise
                      test_kernels test_seams test_erosion PROPERTIES LABELS fast)
 set_tests_properties(test_cli test_geometry test_library test_viewer test_datasets PROPERTIES LABELS slow)

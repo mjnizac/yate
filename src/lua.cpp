@@ -25,6 +25,7 @@
 #include <engine/terrain/graph.hpp>
 #include <engine/terrain/kernels.hpp>
 #include <engine/terrain/sha256.hpp>
+#include <engine/terrain/hydrology.hpp>
 #include <engine/terrain/stream_power.hpp>
 #include <engine/terrain/wind.hpp>
 
@@ -1094,6 +1095,66 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         for (usize_t i = 0; i < count; ++i) {
             out[i + 1] = height[i];
         }
+        return out;
+    });
+
+    // Rivers and lakes of a whole grid on the CPU (see hydrology.hpp): the grid made to drain, its drainage
+    // area, its lakes and the distance to its rivers, as plain lists of numbers, x fastest, for
+    // `Terrain.Grid`. The `Water.*` prelude turns them into carved channels and water surfaces.
+    sol::table hydrology = state.create_named_table("Hydrology");
+    hydrology.set_function("Drain", [](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Hydrology.Drain", location);
+        const std::array<f64_t, 2> size = args.Pair("size", {0.0, 0.0});
+        terrain::HydrologyParams   params;
+        params.width = static_cast<u32_t>(size[0]);
+        params.depth = static_cast<u32_t>(size[1]);
+        if (params.width != size[0] || params.depth != size[1] || params.width < 3 || params.depth < 3
+            || static_cast<u64_t>(params.width) * params.depth > (16ull << 20)) {
+            Fail(location, "Hydrology.Drain expects size as a pair of whole numbers of at least 3");
+        }
+        params.cell        = args.Number("cell", 50.0);
+        params.seaLevel    = args.Number("sea_level", -1e30);
+        params.breachDepth = args.Number("breach", 3.0);
+        params.lakeArea    = args.Number("lake_area", 2e5);
+        params.lakeDepth   = args.Number("lake_depth", 2.0);
+        params.channelArea = args.Number("channel_area", 1e6);
+        params.widthScale  = args.Number("width_scale", 10.0);
+        params.depthScale  = args.Number("depth_scale", 1.5);
+        const usize_t count = static_cast<usize_t>(params.width) * params.depth;
+        std::pmr::vector<f64_t> height(&memory::General().Resource());
+        args.Numbers("height", count, height);
+        args.Finish();
+        terrain::HydrologyResult drained{
+            .height        = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .area          = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .lake          = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .riverDistance = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .riverWidth    = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .riverDepth    = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .riverLevel    = std::pmr::vector<f64_t>(&memory::General().Resource()),
+        };
+        if (Status ok = terrain::Drain(height, params, drained); !ok) {
+            Fail(location, "{}", ok.error().Message());
+        }
+        sol::state_view view(lua);
+        const auto      list = [&](const std::pmr::vector<f64_t>& values) {
+            sol::table out = view.create_table(static_cast<i32_t>(values.size()), 0);
+            for (usize_t i = 0; i < values.size(); ++i) {
+                out[i + 1] = values[i];
+            }
+            return out;
+        };
+        sol::table out = view.create_table();
+        out["height"]         = list(drained.height);
+        out["area"]           = list(drained.area);
+        out["lake"]           = list(drained.lake);
+        out["river_distance"] = list(drained.riverDistance);
+        out["river_width"]    = list(drained.riverWidth);
+        out["river_depth"]    = list(drained.riverDepth);
+        out["river_level"]    = list(drained.riverLevel);
+        out["lakes"]          = drained.lakes;
+        out["rivers"]         = drained.rivers;
         return out;
     });
 
