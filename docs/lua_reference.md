@@ -1353,8 +1353,12 @@ duplicate.
 **Lakes.** `points` (an outline) or `at` and `radius`; `level` in metres, anywhere, under the sea level
 too, or `"auto"` (the lowest ground on the shore); `depth`, `islands` (0 to 1) and `kind`: `bowl`,
 `trench` (a shelf then cliffs down to a deep floor), `shelf` (shallow out to a drop-off), `crater` (a
-raised rim), `cirque`. The floor carries relief, a low rim keeps the water in and the ground around falls
-towards the lake at the kind's angle (cliffs for a trench).
+raised rim), `cirque` (a headwall on its uphill side), `moraine` (dammed by a ridge across its downhill
+side). The floor carries relief, a low rim keeps the water in and the ground around falls towards the lake
+at the kind's angle, or at its `shore`'s: `beach`, `rock` or `cliff`. `outlet = true` (or a width) lets it
+spill where its shore is lowest, a river leaving there at its level. Generated lakes take the shore of their
+water: the contour of their level over the ground. A glacial river strings two lakes down its valley
+(paternoster lakes, dammed by moraines; `lakes` on a drawn river for another number).
 
 **The sea** is the ground under `sea_level` connected to the edge of the region. A closed depression
 under the sea level is not the sea: it stays dry or holds a lake. The `sea` output is its surface; with

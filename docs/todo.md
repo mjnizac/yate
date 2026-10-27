@@ -96,16 +96,17 @@ viewer screenshot. Each item is done when it is in `ctest`.
       before channels are cut, detail kept out of the water, duplicates dropped; `net:audit` measures it.
 - [x] **Water plan, phase 2**: sine-generated meanders with Kinoshita skew, cut banks and point bars,
       width from drainage summed at confluences, falls with plunge pools and rapids, deltas and estuaries.
-- [ ] **Water plan, phases 3 and 5**: lake outlines from contours, outlets at the lowest shore point, more
-      basins; generation per world cell; texture masks. A delta's fan is a plain sector, not lobed.
+- [x] **Water plan, phase 3**: lake outlines from contours, outlets at the lowest shore point, cirque
+      headwalls and moraine dams, paternoster lakes, shore kinds, a lobed delta fan.
+- [ ] **Water plan, phases 4 and 5**: generation per world cell, levels sampled on the course; texture
+      masks, water colour by body, foam.
 - [ ] **Generation over an unbounded world**: drawn elements work anywhere, but `generate` analyses one
       `region`; the same region gives the same rivers in the viewer and in any export inside it. Rivers
       everywhere without a region needs the analysis per fixed world cell, a river owned by the cell of
       its source.
 - [x] **The graph's 1024 nodes capped a script at about twenty rivers and lakes**: the fused `Water` op
       carves each in one node, its channel measured exactly on its course; `test_water` holds 35 elements.
-- [ ] **Lakes found by the generator have star-shaped outlines** (the farthest cell in 32 directions),
-      which overreach in long, branching depressions.
+- [x] **Lakes found by the generator had star-shaped outlines**: now the contour of their level.
 - [ ] **The macros do not drain yet**: `Lands`, `Ranges` and the cliffs leave their pits; give them
       `Water.Drain` and their own `lakes` and `rivers`.
 - [ ] **Later, if the above justifies it**: erosion by a hardness map, environmental layers for biomes

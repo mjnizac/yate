@@ -68,14 +68,18 @@ local LAKE_KINDS = {
     trench = { wall = 0.06, shelf = 0.18, shelf_depth = 0.12, basin = 70 },
     shelf  = { wall = 0.08, shelf = 0.45, shelf_depth = 0.3, basin = 10 },
     crater = { wall = 0.25, rim = 40, basin = 35 },
-    cirque = { wall = 0.15, basin = 55 },
+    cirque = { wall = 0.15, basin = 55, headwall = 1.5 },
+    -- A lake behind a terminal moraine, as a glacier leaves them: a ridge across its downhill side.
+    moraine = { wall = 0.3, basin = 18, moraine = 18 },
     -- A delta's fan: not water but land just over it, built where a river spreads at its mouth.
     fan    = { wall = 0.2, basin = 0 },
 }
 
 -- The codes `water.comp.glsl` knows the kinds by.
 local RIVER_CODES = { mountain = 0, canyon = 1, gorge = 2, glacial = 3, lowland = 4, braided = 5 }
-local LAKE_CODES  = { bowl = 0, trench = 1, shelf = 2, crater = 3, cirque = 4, fan = 5 }
+local LAKE_CODES  = { bowl = 0, trench = 1, shelf = 2, crater = 3, cirque = 4, fan = 5, moraine = 0 }
+-- How steep the ground around a lake falls to it, by its shore, in degrees: a sandy beach, rock, a cliff.
+local SHORES = { beach = 4, rock = 30, cliff = 72 }
 
 local function kind_list(kinds)
     local list = {}
@@ -298,24 +302,138 @@ local function natural_lakes(g)
     return lakes, label
 end
 
--- A star-shaped outline of a lake's cells: the farthest cell in each of 32 directions from the centre,
--- smoothed. Lakes in valleys are rarely star-shaped from far out, but close enough for a shore.
-local function outline_of(g, lake)
-    local rays, out = 32, {}
-    local reach = {}
-    for k = 1, rays do
-        reach[k] = g.cell * 0.75
+-- Douglas-Peucker on a closed outline: the points that matter to within `tolerance` metres.
+local function simplify(points, tolerance)
+    if #points <= 8 then
+        return points
     end
+    local keep = { [1] = true, [#points] = true }
+    local function walk(a, b)
+        local ax, az, bx, bz = points[a][1], points[a][2], points[b][1], points[b][2]
+        local dx, dz = bx - ax, bz - az
+        local l2 = math.max(1e-9, dx * dx + dz * dz)
+        local far, at = 0.0, nil
+        for i = a + 1, b - 1 do
+            local t = math.max(0.0, math.min(1.0, ((points[i][1] - ax) * dx + (points[i][2] - az) * dz) / l2))
+            local ex, ez = points[i][1] - ax - dx * t, points[i][2] - az - dz * t
+            local d = ex * ex + ez * ez
+            if d > far then
+                far, at = d, i
+            end
+        end
+        if at and far > tolerance * tolerance then
+            keep[at] = true
+            walk(a, at)
+            walk(at, b)
+        end
+    end
+    walk(1, #points)
+    local out = {}
+    for i = 1, #points do
+        if keep[i] then
+            out[#out + 1] = points[i]
+        end
+    end
+    return out
+end
+
+-- A lake's shore as the contour of its level over the sampled ground (marching squares over its cells,
+-- the crossing placed where the water meets the ground between two of them), the longest loop, simplified
+-- to under 120 points.
+local function outline_of(g, lake, label)
+    local n = g.n
+    local minx, maxx, minz, maxz = math.huge, -math.huge, math.huge, -math.huge
     for _, c in ipairs(lake.cells) do
-        local p = g.at(c)
-        local dx, dz = p[1] - lake.cx, p[2] - lake.cz
-        local k = math.floor((math.atan(dz, dx) / (2.0 * math.pi) + 0.5) * rays) % rays + 1
-        reach[k] = math.max(reach[k], math.sqrt(dx * dx + dz * dz) + g.cell * 0.6)
+        local x, z = (c - 1) % n, (c - 1) // n
+        minx, maxx = math.min(minx, x), math.max(maxx, x)
+        minz, maxz = math.min(minz, z), math.max(maxz, z)
     end
-    for k = 1, rays do
-        local a = ((k - 0.5) / rays - 0.5) * 2.0 * math.pi
-        local r = (reach[(k - 2) % rays + 1] + 2.0 * reach[k] + reach[k % rays + 1]) * 0.25
-        out[k] = { lake.cx + math.cos(a) * r, lake.cz + math.sin(a) * r }
+    minx, maxx, minz, maxz = minx - 1, maxx + 1, minz - 1, maxz + 1
+    -- Positive under the water, negative above it or outside this lake.
+    local function v(x, z)
+        if x < 0 or z < 0 or x >= n or z >= g.m then
+            return -1.0
+        end
+        local c = z * n + x + 1
+        if label[c] ~= lake then
+            return math.min(-0.25, lake.level - g.h[c])
+        end
+        return math.max(0.25, lake.level - g.h[c])
+    end
+    local function pos(x, z)
+        return g.x0 + x * g.cell, g.z0 + z * g.cell
+    end
+    local function cross(x1, z1, a, x2, z2, b)
+        local t = a / (a - b)
+        local px, pz = pos(x1 + (x2 - x1) * t, z1 + (z2 - z1) * t)
+        return { px, pz }
+    end
+    -- Segments, each from one edge crossing to another, chained by their ends.
+    local ends = {}
+    local function key(p)
+        return math.floor(p[1] * 8.0 + 0.5) .. ":" .. math.floor(p[2] * 8.0 + 0.5)
+    end
+    local segments = {}
+    for z = minz, maxz - 1 do
+        for x = minx, maxx - 1 do
+            local a, b, c, d = v(x, z), v(x + 1, z), v(x + 1, z + 1), v(x, z + 1)
+            local edges = {}
+            if (a > 0) ~= (b > 0) then edges[#edges + 1] = cross(x, z, a, x + 1, z, b) end
+            if (b > 0) ~= (c > 0) then edges[#edges + 1] = cross(x + 1, z, b, x + 1, z + 1, c) end
+            if (c > 0) ~= (d > 0) then edges[#edges + 1] = cross(x + 1, z + 1, c, x, z + 1, d) end
+            if (d > 0) ~= (a > 0) then edges[#edges + 1] = cross(x, z + 1, d, x, z, a) end
+            for k = 1, #edges - 1, 2 do
+                segments[#segments + 1] = { edges[k], edges[k + 1] }
+            end
+        end
+    end
+    for i, s in ipairs(segments) do
+        for side = 1, 2 do
+            local kk = key(s[side])
+            ends[kk] = ends[kk] or {}
+            table.insert(ends[kk], { i, side })
+        end
+    end
+    local used, best = {}, {}
+    for i = 1, #segments do
+        if not used[i] then
+            local loop = { segments[i][1] }
+            local at, side = i, 2
+            while true do
+                used[at] = true
+                local p = segments[at][side]
+                loop[#loop + 1] = p
+                local next_at = nil
+                for _, e in ipairs(ends[key(p)] or {}) do
+                    if not used[e[1]] then
+                        next_at = e
+                        break
+                    end
+                end
+                if not next_at then
+                    break
+                end
+                at, side = next_at[1], 3 - next_at[2]
+            end
+            if #loop > #best then
+                best = loop
+            end
+        end
+    end
+    if #best < 4 then
+        -- Too small to trace: a square round its cells.
+        local x0, z0 = pos(minx + 0.5, minz + 0.5)
+        local x1, z1 = pos(maxx - 0.5, maxz - 0.5)
+        return { { x0, z0 }, { x1, z0 }, { x1, z1 }, { x0, z1 } }
+    end
+    local tolerance = g.cell * 0.35
+    local out = simplify(best, tolerance)
+    while #out > 120 do
+        tolerance = tolerance * 1.5
+        out = simplify(best, tolerance)
+    end
+    if #out > 2 and out[1][1] == out[#out][1] and out[1][2] == out[#out][2] then
+        out[#out] = nil
     end
     return out
 end
@@ -378,7 +496,7 @@ end
 -- --- Elements ---------------------------------------------------------------------------------------
 
 local RIVER_KEYS = { "points", "source", "kind", "width", "depth", "roughness", "valley", "slope", "grade", "mouth", "name" }
-local LAKE_KEYS  = { "points", "at", "radius", "level", "depth", "kind", "islands", "basin", "name" }
+local LAKE_KEYS  = { "points", "at", "radius", "level", "depth", "kind", "islands", "basin", "shore", "outlet", "name" }
 
 -- The kind a river takes from the ground it runs through, when it is not given.
 local function river_kind_auto(g, points, levels)
@@ -494,7 +612,7 @@ function Water.Network(t)
             elseif type(kind) == "table" then
                 kind = kind[(k - 1) % #kind + 1]
             end
-            add_lake{ points = outline_of(g, l), level = l.level, depth = math.max(l.depth, 8.0) * 1.6,
+            add_lake{ points = outline_of(g, l, label), level = l.level, depth = math.max(l.depth, 8.0) * 1.6,
                       kind = kind, islands = glakes.islands, generated = true }
         end
     end
@@ -525,8 +643,11 @@ function Water.Network(t)
                 level = math.min(level, g.height(p[1], p[2]))
             end
         end
+        if l.shore ~= nil and SHORES[l.shore] == nil then
+            fail(where .. ": shore '" .. tostring(l.shore) .. "' is not one of beach, rock, cliff")
+        end
         add_lake{ points = points, level = level, depth = l.depth or 25.0, kind = l.kind or "bowl",
-                  islands = l.islands, basin = l.basin, name = l.name }
+                  islands = l.islands, basin = l.basin, shore = l.shore, outlet = l.outlet, name = l.name }
     end
     for i, l in ipairs(t.lakes or {}) do
         drawn_lake(l, "Water.Network lake " .. i)
@@ -534,7 +655,7 @@ function Water.Network(t)
     for i, s in ipairs(t.shapes or {}) do
         if s.kind == "lake" and s.geometry == "polygon" then
             drawn_lake({ points = s.points, level = s.level, depth = s.depth, kind = s.lake_kind,
-                         islands = s.islands, name = s.name }, "shape " .. i)
+                         islands = s.islands, shore = s.shore, outlet = s.outlet, name = s.name }, "shape " .. i)
         end
     end
 
@@ -887,7 +1008,7 @@ function Water.Network(t)
             width = { widths[1], widths[n] }, deep = deep, skews = skews, falls = #falls,
             depth = r.depth, roughness = roughness, valley = r.valley or k.valley,
             name = r.name, generated = r.generated, receiver = receiver, join = hit and hit.index or nil,
-            mouth = r.mouth, distributary = r.distributary,
+            mouth = r.mouth, distributary = r.distributary, lakes = r.lakes,
         }
         register(net.rivers[#net.rivers])
         return net.rivers[#net.rivers]
@@ -953,6 +1074,37 @@ function Water.Network(t)
         if s.kind == "river" and (s.geometry == "line" or s.geometry == "point") then
             drawn_river({ points = s.points, kind = s.river_kind, width = s.width, depth = s.depth,
                           roughness = s.roughness, name = s.name }, "shape " .. i)
+        end
+    end
+    -- Outlets: a lake with `outlet = true` (or a width in metres) spills where its shore is lowest, and a
+    -- river leaves it there at its level, traced down the terrain.
+    for _, l in ipairs(net.lakes) do
+        if l.outlet then
+            local lowest, at = math.huge, nil
+            local cx, cz = 0.0, 0.0
+            for _, p in ipairs(l.points) do
+                cx, cz = cx + p[1] / #l.points, cz + p[2] / #l.points
+            end
+            for _, p in ipairs(l.points) do
+                local h = g.height(p[1], p[2])
+                if h < lowest then
+                    lowest, at = h, p
+                end
+            end
+            local dx, dz = at[1] - cx, at[2] - cz
+            local dl = math.max(1.0, math.sqrt(dx * dx + dz * dz))
+            drawn_river({ source = { at[1] + dx / dl * 80.0, at[2] + dz / dl * 80.0 },
+                          width = type(l.outlet) == "number" and l.outlet or 12.0 },
+                        "the outlet of a lake")
+            local r = net.rivers[#net.rivers]
+            if r then
+                for i = 1, #r.levels do
+                    r.levels[i] = math.min(r.levels[i], l.level)
+                end
+                for i = 1, #r.axis_levels do
+                    r.axis_levels[i] = math.min(r.axis_levels[i], l.level)
+                end
+            end
         end
     end
 
@@ -1054,8 +1206,39 @@ function Water.Network(t)
         end
     end
 
-    -- Lakes on rivers: a valley dammed behind a sill, its water at the river's level there plus a few
-    -- metres, the river held at that level through it.
+    -- A valley dammed behind a sill: a lake on river `r` whose downstream end is at `share` of its course,
+    -- `size` metres long, its water at the river's level there plus a few metres and the river held at that
+    -- level through it. A glacial river's are dammed by moraines.
+    local function dam(r, share, size, kind)
+        local i_end = math.max(3, math.floor(#r.points * share))
+        local i_mid = i_end
+        local s = 0.0
+        while i_mid > 2 and s < size * 0.5 do
+            s = s + math.sqrt((r.points[i_mid][1] - r.points[i_mid - 1][1]) ^ 2 + (r.points[i_mid][2] - r.points[i_mid - 1][2]) ^ 2)
+            i_mid = i_mid - 1
+        end
+        local a, b = r.points[math.max(1, i_mid - 3)], r.points[math.min(#r.points, i_mid + 3)]
+        local ax, az = b[1] - a[1], b[2] - a[2]
+        local al = math.max(1e-6, math.sqrt(ax * ax + az * az))
+        ax, az = ax / al, az / al
+        local c = r.points[i_mid]
+        local level = r.levels[i_end] + 6.0
+        local outline = {}
+        for k = 1, 20 do
+            local t = (k - 1) / 20 * 2.0 * math.pi
+            local along = math.cos(t) * size * 0.5
+            local across = math.sin(t) * size * 0.2 * (1.0 + 0.25 * jitter(k, 9 + #net.lakes))
+            outline[k] = { c[1] + ax * along - az * across, c[2] + az * along + ax * across }
+        end
+        add_lake{ points = outline, level = level, depth = 30.0, kind = kind or "bowl", generated = true, dam = true,
+                  downhill = { ax, az } }
+        for i = 1, math.min(#r.levels, i_end + 2) do
+            r.levels[i] = math.max(r.levels[i], level)
+        end
+        for i = 1, math.floor(#r.axis_levels * (i_end + 2) / #r.levels) do
+            r.axis_levels[i] = math.max(r.axis_levels[i], level)
+        end
+    end
     local on_rivers = (gen.lakes and gen.lakes.on_rivers) or 0
     local placed = 0
     for _, r in ipairs(net.rivers) do
@@ -1063,39 +1246,21 @@ function Water.Network(t)
             break
         end
         local length = length_of(r.points)
-        if r.generated and length > 4000.0 then
-            local size = math.max(500.0, math.min(2500.0, length * 0.14))
-            -- Its downstream end two thirds of the way down, where the valley is already a valley.
-            local i_end = math.floor(#r.points * 0.66)
-            local i_mid = i_end
-            local s = 0.0
-            while i_mid > 2 and s < size * 0.5 do
-                s = s + math.sqrt((r.points[i_mid][1] - r.points[i_mid - 1][1]) ^ 2 + (r.points[i_mid][2] - r.points[i_mid - 1][2]) ^ 2)
-                i_mid = i_mid - 1
-            end
-            local a, b = r.points[math.max(1, i_mid - 3)], r.points[math.min(#r.points, i_mid + 3)]
-            local ax, az = b[1] - a[1], b[2] - a[2]
-            local al = math.sqrt(ax * ax + az * az)
-            ax, az = ax / al, az / al
-            local c = r.points[i_mid]
-            local level = r.levels[i_end] + 6.0
-            local outline = {}
-            for k = 1, 20 do
-                local t = (k - 1) / 20 * 2.0 * math.pi
-                local along = math.cos(t) * size * 0.5
-                local across = math.sin(t) * size * 0.2 * (1.0 + 0.25 * jitter(k, 9))
-                outline[k] = { c[1] + ax * along - az * across, c[2] + az * along + ax * across }
-            end
-            add_lake{ points = outline, level = level, depth = 30.0, kind = "bowl", generated = true, dam = true }
-            for i = 1, #r.levels do
-                if i <= i_end + 2 then
-                    r.levels[i] = math.max(r.levels[i], level)
-                end
-            end
-            for i = 1, math.floor(#r.axis_levels * (i_end + 2) / #r.levels) do
-                r.axis_levels[i] = math.max(r.axis_levels[i], level)
-            end
+        if r.generated and r.kind ~= "glacial" and length > 4000.0 then
+            dam(r, 0.66, math.max(500.0, math.min(2500.0, length * 0.14)))
             placed = placed + 1
+        end
+    end
+    -- Paternoster lakes: a glacial valley's string of rock basins and moraine-dammed lakes, two by default,
+    -- `lakes` on a drawn river for another number. From the mouth up, so each lake holds the river over the
+    -- next one down.
+    for _, r in ipairs(net.rivers) do
+        local count = r.lakes or (r.kind == "glacial" and 2 or 0)
+        local length = length_of(r.points)
+        if count > 0 and length > 4000.0 then
+            for k = 1, count do
+                dam(r, 0.85 - 0.6 * (k - 1) / math.max(1, count), math.max(400.0, math.min(1800.0, length * 0.09)), "moraine")
+            end
         end
     end
     -- Mouths. A river that ends in the sea or a lake, not in another river, spreads there: into a delta
@@ -1215,12 +1380,17 @@ function Water.Network(t)
             dx, dz = dx / dl, dz / dl
             local level0, base0 = r.levels[i0], r.base[i0]
             cut(r, i0)
-            -- The fan: a sector of land round the mouth, its apex at the split.
+            -- The fan: land round the mouth from its apex at the split, a lobe pushed out by each distributary
+            -- (ahead and 32 degrees either side), as a delta builds where its channels carry the sediment.
             local fan = { { p0[1], p0[2] } }
-            for k = 0, 12 do
-                local a = (k / 12 - 0.5) * math.rad(120.0)
+            for k = 0, 24 do
+                local a = (k / 24 - 0.5) * math.rad(130.0)
                 local cx, cz = dx * math.cos(a) - dz * math.sin(a), dx * math.sin(a) + dz * math.cos(a)
-                local rr = reach * (1.35 + 0.15 * jitter(k, #net.lakes))
+                local lobes = 0.0
+                for _, lobe in ipairs({ 0.0, 32.0, -32.0 }) do
+                    lobes = lobes + math.exp(-((a - math.rad(lobe)) / 0.22) ^ 2)
+                end
+                local rr = reach * (0.8 + 0.6 * lobes + 0.08 * jitter(k, #net.lakes))
                 fan[#fan + 1] = { p0[1] + cx * rr, p0[2] + cz * rr }
             end
             add_lake{ points = fan, level = water, depth = 1.0, kind = "fan", generated = true }
@@ -1303,10 +1473,28 @@ function Network:apply(height, opts)
             cell = cell * 1.25
         end
         lake_budget = lake_budget - span(cell)
+        -- Which way is uphill: along a dammed valley, against its flow; otherwise from the ground around.
+        local cx, cz = 0.0, 0.0
+        for _, p in ipairs(l.points) do
+            cx, cz = cx + p[1] / #l.points, cz + p[2] / #l.points
+        end
+        local ux, uz
+        if l.downhill then
+            ux, uz = -l.downhill[1], -l.downhill[2]
+        else
+            local g, e = self.g, math.max(200.0, size * 0.5)
+            ux = g.height(cx + e, cz) - g.height(cx - e, cz)
+            uz = g.height(cx, cz + e) - g.height(cx, cz - e)
+            local ul = math.max(1e-6, math.sqrt(ux * ux + uz * uz))
+            ux, uz = ux / ul, uz / ul
+        end
+        local basin = math.tan(math.rad(l.shore and SHORES[l.shore] or k.basin))
         local block = Hydrology.LakeBlock{
             xs = xs, zs = zs, cell = cell, margin = basin_reach + 4.0 * cell,
             params = { LAKE_CODES[l.kind], l.level, l.depth, size, k.wall, k.shelf or 0.0, k.shelf_depth or 0.0,
-                       math.tan(math.rad(k.basin)), basin_reach, l.islands or 0.0, k.rim or 0.0 },
+                       basin, basin_reach, l.islands or 0.0, k.rim or 0.0 },
+            basin = basin, headwall = k.headwall or 0.0, moraine = k.moraine or 0.0,
+            uphill = { ux, uz }, centre = { cx, cz },
         }
         -- The bed is not smooth: ridges and hollows under the water, and islands where they rise above it.
         local bed = Noises.Ridged{ frequency = 1.0 / math.max(150.0, size * 0.25), octaves = 3,

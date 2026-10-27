@@ -10,7 +10,8 @@
 //   channel its deepest line runs, -1 to 1, positive to the left looking downstream)
 //   cells, 4 values each, x fastest:
 //       river  squared distance to the channel, its nearest segment, its level, the valley axis's level
-//       lake   signed distance to the shore (negative inside), unused, unused, unused
+//       lake   signed distance to the shore (negative inside), the slope of the ground around (tan), the
+//              height of a moraine on the downhill side, unused
 //
 // The cells are coarse, a valley's scale. Near the channel its distance, level and half-width are
 // measured exactly on the points, from the cell's nearest segment and the `window` (15) segments either
@@ -211,7 +212,8 @@ void main() {
             float peak  = aux + 0.5;
             float under = smoothstep(size * 0.05, size * 0.3, q);
             floor_ += peak * peak * under * (D * (0.3 + At(data, block, 14u) * 2.2));
-            float around = L + 2.0 + max(s, 0.0) * At(data, block, 12u) + max(s - At(data, block, 13u), 0.0) * 20.0;
+            // The ground around falls to the lake at the cell's own angle: steeper on a cirque's uphill side.
+            float around = L + 2.0 + max(s, 0.0) * Field(data, block, p, 1u) + max(s - At(data, block, 13u), 0.0) * 20.0;
             bound = floor_ * (1.0 - outside) + around * outside;
             water = L - smoothstep(30.0, 60.0, s) * 20000.0;
         } else {
@@ -222,6 +224,13 @@ void main() {
                 // its last 150 m; the distributaries cut through it afterwards.
                 float land = L + 1.5 - (1.0 - smoothstep(0.0, 150.0, q)) * 5.0;
                 bound = land * (1.0 - outside) + (L - 20000.0) * outside;
+            }
+            // A moraine dams the downhill side: a ridge about 80 m out from the shore.
+            float moraine = Field(data, block, p, 2u);
+            if (moraine > 0.5) {
+                float x     = (s - 80.0) / 40.0;
+                float crest = exp(-0.5 * x * x);
+                bound = max(bound, (L + moraine) * crest + (L - 20000.0) * (1.0 - crest));
             }
             float crater = At(data, block, 15u);
             if (crater > 0.0) {

@@ -198,7 +198,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             }
             const f32_t peak = aux + 0.5f;
             floor += peak * peak * Smooth(size * 0.05f, size * 0.3f, q) * (D * (0.3f + at(block, 14) * 2.2f));
-            const f32_t around = L + 2.0f + std::max(s, 0.0f) * at(block, 12) + std::max(s - at(block, 13), 0.0f) * 20.0f;
+            const f32_t around = L + 2.0f + std::max(s, 0.0f) * field(block, 1) + std::max(s - at(block, 13), 0.0f) * 20.0f;
             bound = floor * (1.0f - outside) + around * outside;
             water = L - Smooth(30.0f, 60.0f, s) * 20000.0f;
         } else {
@@ -207,6 +207,12 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             if (static_cast<u32_t>(at(block, 5)) == 5) {
                 const f32_t land = L + 1.5f - (1.0f - Smooth(0.0f, 150.0f, q)) * 5.0f;
                 bound = land * (1.0f - outside) + (L - 20000.0f) * outside;
+            }
+            const f32_t moraine = field(block, 2);
+            if (moraine > 0.5f) {
+                const f32_t x     = (s - 80.0f) / 40.0f;
+                const f32_t crest = std::exp(-0.5f * x * x);
+                bound = std::max(bound, (L + moraine) * crest + (L - 20000.0f) * (1.0f - crest));
             }
             const f32_t crater = at(block, 15);
             if (crater > 0.0f) {

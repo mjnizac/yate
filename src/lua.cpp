@@ -1378,12 +1378,32 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         args.Numbers("params", args.Length("params"), params);
         const f64_t cell   = args.Number("cell", 20.0);
         const f64_t margin = args.Number("margin", 500.0);
+        // The basin's slope at every cell, steeper on the uphill side (a cirque's headwall) by `headwall`,
+        // and a moraine on the downhill side `moraine` metres high: `uphill` is the direction, `centre` the
+        // lake's middle.
+        const f64_t basin    = args.Number("basin", 0.2);
+        const f64_t headwall = args.Number("headwall", 0.0);
+        const f64_t moraine  = args.Number("moraine", 0.0);
+        const auto  uphill   = args.Pair("uphill", {0.0, 0.0});
+        const auto  centre   = args.Pair("centre", {0.0, 0.0});
         args.Finish();
         terrain::FieldGrid distance = fieldGrid();
         if (Status ok = terrain::PolygonField(xs, zs, cell, margin, distance); !ok) {
             Fail(location, "{}", ok.error().Message());
         }
-        return block({&distance, nullptr, nullptr, nullptr}, params, {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr}, location);
+        terrain::FieldGrid slope = distance;
+        terrain::FieldGrid rim   = distance;
+        for (u32_t z = 0; z < distance.depth; ++z) {
+            for (u32_t x = 0; x < distance.width; ++x) {
+                const f64_t dx = distance.originX + x * cell - centre[0];
+                const f64_t dz = distance.originZ + z * cell - centre[1];
+                const f64_t to = (dx * uphill[0] + dz * uphill[1]) / std::max(1.0, std::sqrt(dx * dx + dz * dz));
+                const usize_t i = static_cast<usize_t>(z) * distance.width + x;
+                slope.values[i] = basin * (1.0 + headwall * std::max(0.0, to));
+                rim.values[i]   = moraine * std::max(0.0, -to) * std::max(0.0, -to);
+            }
+        }
+        return block({&distance, &slope, &rim, nullptr}, params, {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr}, location);
     });
     hydrology.set_function("Carve", [&graph](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
