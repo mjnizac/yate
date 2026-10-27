@@ -35,7 +35,8 @@ struct HydrologyParams {
     u32_t depth = 0;
     /// Metres between grid values.
     f64_t cell = 50.0;
-    /// Cells at or below this height are sea: outlets, as the edge is.
+    /// Cells at or below this height that reach the edge through others like them are sea: outlets, as
+    /// the edge is. A closed basin below it is not the sea, and can be a lake.
     f64_t seaLevel = -1e30;
     /// Deepest cut, metres, that may breach a depression instead of filling it.
     f64_t breachDepth = 3.0;

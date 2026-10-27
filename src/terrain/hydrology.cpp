@@ -66,10 +66,31 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
     const Grid  grid{static_cast<i32_t>(params.width), static_cast<i32_t>(params.depth)};
     const f64_t cell     = params.cell;
     const f64_t cellArea = cell * cell;
-    const auto  isOutlet = [&](u32_t i, const std::pmr::vector<f64_t>& h) {
-        const i32_t x = static_cast<i32_t>(i % params.width);
-        const i32_t z = static_cast<i32_t>(i / params.width);
-        return grid.OnEdge(x, z) || h[i] <= params.seaLevel;
+    // The sea: ground under the sea level connected to the edge through more of it.
+    std::pmr::vector<u8_t>  sea(count, 0, resource);
+    std::pmr::vector<u32_t> wave(resource);
+    for (u32_t i = 0; i < count; ++i) {
+        if (grid.OnEdge(static_cast<i32_t>(i % params.width), static_cast<i32_t>(i / params.width))
+            && input[i] <= params.seaLevel) {
+            sea[i] = 1;
+            wave.push_back(i);
+        }
+    }
+    while (!wave.empty()) {
+        const u32_t c = wave.back();
+        wave.pop_back();
+        for (usize_t d = 0; d < 8; ++d) {
+            const i32_t nx = static_cast<i32_t>(c % params.width) + kDx[d];
+            const i32_t nz = static_cast<i32_t>(c / params.width) + kDz[d];
+            const u32_t q  = static_cast<u32_t>(nz * grid.width + nx);
+            if (grid.Inside(nx, nz) && sea[q] == 0 && input[q] <= params.seaLevel) {
+                sea[q] = 1;
+                wave.push_back(q);
+            }
+        }
+    }
+    const auto isOutlet = [&](u32_t i) {
+        return sea[i] != 0 || grid.OnEdge(static_cast<i32_t>(i % params.width), static_cast<i32_t>(i / params.width));
     };
 
     std::pmr::vector<f64_t> h(input.begin(), input.end(), resource);
@@ -81,7 +102,7 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
     // 1. Priority flood from the outlets: `level` is every cell filled to the lowest way out, plus a
     // small slope across flats so every cell drains.
     for (u32_t i = 0; i < count; ++i) {
-        if (isOutlet(i, h)) {
+        if (isOutlet(i)) {
             level[i] = h[i];
             done[i]  = 1;
             open.Push(level[i], i);
@@ -205,7 +226,7 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
     std::fill(done.begin(), done.end(), u8_t{0});
     open.Clear();
     for (u32_t i = 0; i < count; ++i) {
-        if (isOutlet(i, surfaceHeight)) {
+        if (isOutlet(i)) {
             s[i]    = surfaceHeight[i];
             done[i] = 1;
             open.Push(s[i], i);
@@ -213,7 +234,6 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
     }
     while (!open.Empty()) {
         const u32_t c = open.Pop().second;
-        order.push_back(c);
         const i32_t x = static_cast<i32_t>(c % params.width);
         const i32_t z = static_cast<i32_t>(c / params.width);
         for (usize_t d = 0; d < 8; ++d) {
@@ -232,7 +252,64 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
     }
     std::pmr::vector<i32_t> receiver(count, -1, resource);
     for (u32_t i = 0; i < count; ++i) {
-        receiver[i] = isOutlet(i, surfaceHeight) ? -1 : steepest(i, s);
+        receiver[i] = isOutlet(i) ? -1 : steepest(i, s);
+    }
+    // Across a flat, a filled depression or a lake, steepest descent on the epsilon slope runs in straight
+    // D8 spokes from the way out. Water there follows the drowned valley instead: a shortest path to the
+    // flat's exits where a step costs less the deeper the original ground lies under the surface.
+    const auto flat = [&](u32_t i) { return s[i] > input[i] + 1e-6 && !isOutlet(i); };
+    std::pmr::vector<f64_t> cost(count, 1e300, resource);
+    open.Clear();
+    for (u32_t i = 0; i < count; ++i) {
+        if (flat(i) && receiver[i] >= 0 && !flat(static_cast<u32_t>(receiver[i]))) {
+            cost[i] = 0.0;
+            open.Push(0.0, i);
+        }
+    }
+    while (!open.Empty()) {
+        const auto [at, c] = open.Pop();
+        if (at > cost[c]) {
+            continue;
+        }
+        const i32_t x = static_cast<i32_t>(c % params.width);
+        const i32_t z = static_cast<i32_t>(c / params.width);
+        for (usize_t d = 0; d < 8; ++d) {
+            const i32_t nx = x + kDx[d];
+            const i32_t nz = z + kDz[d];
+            if (!grid.Inside(nx, nz)) {
+                continue;
+            }
+            const u32_t q = static_cast<u32_t>(nz * grid.width + nx);
+            if (!flat(q) || std::fabs(s[q] - s[c]) > 0.1) {
+                continue;
+            }
+            const f64_t step = ((kDx[d] != 0 && kDz[d] != 0) ? 1.41421356237 : 1.0) / (1.0 + s[q] - input[q]);
+            if (at + step < cost[q]) {
+                cost[q]     = at + step;
+                receiver[q] = static_cast<i32_t>(c);
+                open.Push(cost[q], q);
+            }
+        }
+    }
+    // The receivers no longer follow the flood, so the order the area is gathered in is rebuilt from them:
+    // every cell after all of its donors.
+    std::pmr::vector<u32_t> donors(count, 0, resource);
+    for (u32_t i = 0; i < count; ++i) {
+        if (receiver[i] >= 0) {
+            ++donors[static_cast<u32_t>(receiver[i])];
+        }
+    }
+    order.clear();
+    for (u32_t i = 0; i < count; ++i) {
+        if (donors[i] == 0) {
+            order.push_back(i);
+        }
+    }
+    for (usize_t k = 0; k < order.size(); ++k) {
+        const i32_t r = receiver[order[k]];
+        if (r >= 0 && --donors[static_cast<u32_t>(r)] == 0) {
+            order.push_back(static_cast<u32_t>(r));
+        }
     }
     // The lake surface, and 20 m under the ground elsewhere: a smooth field, because the GPU reads it with
     // Catmull-Rom, which overshoots a jump to a far sentinel by a large fraction of the jump.
@@ -241,9 +318,9 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
         result.lake[i] = inLake[i] != 0 ? level[i] : s[i] - 20.0;
     }
     result.area.assign(count, cellArea);
-    for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        if (receiver[*it] >= 0) {
-            result.area[static_cast<u32_t>(receiver[*it])] += result.area[*it];
+    for (const u32_t i : order) {
+        if (receiver[i] >= 0) {
+            result.area[static_cast<u32_t>(receiver[i])] += result.area[i];
         }
     }
 

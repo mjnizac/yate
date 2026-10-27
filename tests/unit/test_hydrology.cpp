@@ -2,8 +2,9 @@
 //
 // A bowl too large to fill is a lake at its rim; a shallow pit is breached by a cut no deeper than the
 // limit; a deep, small pit is filled instead; a V valley drains along its floor into one river whose area
-// is the whole valley's and whose width follows it; ground under the sea level is an outlet. Afterwards
-// nothing but lakes holds water: the drained grid has no closed depression of its own.
+// is the whole valley's and whose width follows it; ground under the sea level is an outlet when it
+// reaches the edge. Afterwards nothing but lakes holds water: the drained grid has no closed depression of
+// its own.
 
 #include "test_support.hpp"
 #include "relief_metrics.hpp"
@@ -128,20 +129,22 @@ void TestValley() {
 }
 
 void TestSea() {
-    test::Section("ground under the sea level is an outlet");
-    // A plane at 5 m with a basin down to -10 m in the middle: under a sea at 0 the basin is sea, not a lake.
-    const auto heights = Make([](f64_t x, f64_t z) {
+    test::Section("ground under the sea level is an outlet when it reaches the edge");
+    // A plane at 5 m with a basin down to -10 m in the middle. Closed, it is a lake even under a sea at 0,
+    // as the Dead Sea is; with a channel under the sea level out to the edge it is the sea.
+    const auto basin = [](f64_t x, f64_t z) {
         const f64_t r = std::hypot(x - 32.0, z - 32.0);
         return r < 20.0 ? -10.0 + 15.0 * r / 20.0 : 5.0;
-    });
+    };
     HydrologyParams p = Params();
     p.seaLevel        = 0.0;
-    HydrologyResult r = Empty();
-    CHECK(terrain::Drain(heights, p, r).has_value());
-    CHECK_EQ(r.lakes, 0u);
-    HydrologyResult dry = Empty();
-    CHECK(terrain::Drain(heights, Params(), dry).has_value());
-    CHECK_EQ(dry.lakes, 1u);
+    HydrologyResult closed = Empty();
+    CHECK(terrain::Drain(Make(basin), p, closed).has_value());
+    CHECK_EQ(closed.lakes, 1u);
+    const auto open = Make([&](f64_t x, f64_t z) { return std::fabs(z - 32.0) < 1.5 && x < 32.0 ? -5.0 : basin(x, z); });
+    HydrologyResult inlet = Empty();
+    CHECK(terrain::Drain(open, p, inlet).has_value());
+    CHECK_EQ(inlet.lakes, 0u);
 }
 
 } // namespace
