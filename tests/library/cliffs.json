@@ -1,5 +1,5 @@
 {
-  "description": "terrains/cliffs.lua at 8 m, rebuilt in stages (forms, structure, erosion, detail). No heightmap reference exists for this family, so these are guards set from the staged rebuild: closed depressions 0.79 % of the land (2.75 % before it), no spikes past 85 degrees (87.4 before), walls kept (over 45 degrees on 5 % of the land).",
+  "description": "terrains/cliffs.lua at 8 m: tiers of cap rock over a softer base with amphitheatre re-entrants and chutes, a lower slope carved by stream power, sea cliffs and beaches, talus aprons. No heightmap reference exists for this family, so these are guards set from the rebuild: closed depressions 0.32 % of the land (2.75 % before the staged rebuild), no spikes past 85 degrees, walls kept (over 45 degrees on 9 % of the land) and scree at its angle of repose (5 % between 30 and 38 degrees).",
   "script": "assets/scripts/terrains/cliffs.lua",
   "seed": 0,
   "resolution": 8,
@@ -7,8 +7,9 @@
   "bounds": { "min_x": -6144, "min_z": -6144, "max_x": 6144, "max_z": 6144 },
   "level": 0,
   "metrics": [
-    { "name": "pit_share", "max": 0.012 },
+    { "name": "pit_share", "max": 0.006 },
     { "name": "slope_p999", "max": 86 },
-    { "name": "steep45", "min": 0.04 }
+    { "name": "steep45", "min": 0.07 },
+    { "name": "talus_share", "min": 0.04 }
   ]
 }

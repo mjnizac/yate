@@ -83,6 +83,17 @@ Learnt rebuilding `terrains/cliffs.lua` in stages (each rule cost a measured fai
 * A modulation meant to vary along one axis must be sampled on that axis only (`position` with a
   constant coordinate), or it ripples everything it touches.
 * Find pits with `terrain_metrics <dir> --pits out.png` before guessing where they come from.
+* Iterative ops are written for 2 m and scaled to the spacing: 30 thermal iterations reach 60 m at 8 m.
+  A thermal pass also relaxes a wall hundreds of metres high far too slowly to build a talus apron;
+  build aprons analytically (a 35 degree wedge from the wall foot, Max with the terrain) and cap the
+  wedge by the wall's rise, not by its local height, which is zero where the apron lies.
+* A field that a regional slope is measured from must not carry fine displacement: cracks of 30 m in
+  the divide rippled a 2 % dip into pits.
+* Drainage-scale forms (valleys of a lower slope) come from `Erosion.StreamPower` on a Lua grid;
+  rebuild what it needs in Lua, seed shallow trenches where valleys must go, put back the ground it
+  should not touch (inland, under the sea), and do shore work on the same grid so it lands on the coast.
+* Distance-space subtraction (`Combine.SmoothMax{ a = land, b = width - capsule }`) cuts re-entrants
+  and chutes into any edge; a circle gives a keyhole, a capsule open seaward a U.
 * The axis/diagonal power measures orientation when the main form runs along an axis (a coast along x
   reads in the thousands); it flags grid artefacts only where the forms are not axis-aligned.
 

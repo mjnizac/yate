@@ -57,9 +57,15 @@ viewer screenshot. Each item is done when it is in `ctest`.
 - [ ] **The alpine family rebuilt in stages**, as the cliffs were (`terrains/cliffs.lua`, cases
       `tests/library/cliffs*.json`). The alpine case (`tests/library/alpine.json`) shows the measured gap:
       a spectral slope of 5.3 against 3.9 on the four reference heightmaps, so it lacks fine relief.
-- [ ] **Cliffs, what is still open**: the lower slope reads soft and its gullies faint; the remaining
-      closed depressions (0.8 % of the land) are on the wall ledges and at tier crossings; there is no
-      heightmap reference for the family, so its case holds guards, not reference ranges.
+- [ ] **Cliffs, what is still open** after the plan from World Machine and Gaea practice (re-entrants,
+      cap rock over a softer base, a lower slope carved by stream power, talus aprons, F3 - F1 cracks and
+      blocks, sea cliffs and beaches, irregular beds, chutes, a texture pass, strata and debris outputs):
+      no heightmap reference with a known scale exists for the family, so its case holds guards, not
+      reference ranges; the chutes' heads are rounded capsules and read drawn; the sea cliffs are low
+      against the escarpment; 0.3 % of the land is still closed depressions, in amphitheatre floors and
+      behind a headland whose sea cliff dams a valley; the `strata` and `debris` outputs are not used by
+      the viewer's palette yet; the stream-power grid covers +-6.4 km, past which the lower slope is held
+      at the grid's edge.
 - [ ] **Hypotheses from World Machine and Gaea practice**, to test on the alpine case next, each a
       prelude function or a script change only if it measures better. Tested on the cliffs and kept:
       strata as a sideways displacement along the slope (the plateau went from 7.2 to 1.6 degrees p90),
