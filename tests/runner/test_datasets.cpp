@@ -9,6 +9,7 @@
 //   test_datasets --case <name>            run one case
 //   test_datasets --update-golden <name>   regenerate the expected outputs of one case
 //   test_datasets --update-baseline        re-record the timing baseline for this machine
+//   test_datasets --record-history         also append the timings to tests/history/<machine>.jsonl
 //   test_datasets --list                   list the cases
 
 #include "json_reader.hpp"
@@ -432,11 +433,16 @@ int main(int argc, char** argv) {
     std::string onlyCase;
     b8_t        listOnly       = false;
     b8_t        updateBaseline = false;
+    // Off by default: the history is versioned, and appending on every run left the tree dirty after
+    // each suite.
+    b8_t recordHistory = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument = argv[i];
         if (argument == "--list") {
             listOnly = true;
+        } else if (argument == "--record-history") {
+            recordHistory = true;
         } else if (argument == "--update-golden" && i + 1 < argc) {
             updateGolden = argv[++i];
         } else if (argument == "--update-baseline") {
@@ -671,6 +677,9 @@ int main(int argc, char** argv) {
                         baseline->Number(name + ".gpu_ms", 0.0));
         }
 
+        if (!recordHistory) {
+            continue;
+        }
         if (Status created = platform::MakeDirectory(root + kHistoryRelative); !created) {
             Warn("%s", created.error().Format().data());
         }
