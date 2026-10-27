@@ -3,8 +3,13 @@
 //   terrain_metrics <export dir or height.raw> [--width N --depth N --resolution M] [--level L]
 //                   [--no-sea] [--box kmin,kmax] [--block M] [--channel M2] [--json]
 //                   [--hillshade out.png [--sun azimuth,elevation]]
+//   terrain_metrics <reference.png> [--resolution M] [--vertical M] ...
 //
-// Given a directory it reads `metadata.json` for the size and the spacing. The land and sea numbers are
+// Given a directory it reads `metadata.json` for the size and the spacing. Given a PNG (8 or 16 bits,
+// grey or colour, read as luminance) it measures it as a reference heightmap: white is `--vertical`
+// metres (default 255, so 8-bit levels read as metres) and a sample is `--resolution` metres (default
+// 1). With an unknown scale only the scale-free numbers (spectral slope, hypsometric integral) mean
+// anything; check first that the image is heights and not shaded relief. The land and sea numbers are
 // the ones `test_lands` accepts the Lands macros against (tests/unit/terrain_metrics.hpp); the relief
 // ones are tests/unit/relief_metrics.hpp. `--no-sea` treats every sample as land. `--hillshade` writes
 // the field as a grey image lit from `--sun` (default 315,35: the top left, 35 degrees up), with cast
@@ -12,11 +17,44 @@
 
 #include "relief_metrics.hpp"
 
+#include <spng.h>
+
 #include <cstdlib>
 #include <iostream>
 #include <string>
 
 namespace {
+
+[[nodiscard]] std::string ReadAll(const std::string& path);
+
+/// Decodes any PNG as 16-bit RGBA and keeps the luminance, white at `vertical`.
+[[nodiscard]] bool LoadPng(const std::string& path, double resolution, double vertical, metrics::Field& out) {
+    const std::string encoded = ReadAll(path);
+    if (encoded.empty()) {
+        return false;
+    }
+    spng_ctx* context = spng_ctx_new(0);
+    spng_ihdr header{};
+    size_t    bytes   = 0;
+    bool      ok      = context != nullptr && spng_set_png_buffer(context, encoded.data(), encoded.size()) == 0
+                        && spng_get_ihdr(context, &header) == 0
+                        && spng_decoded_image_size(context, SPNG_FMT_RGBA16, &bytes) == 0;
+    std::vector<std::uint16_t> rgba(bytes / sizeof(std::uint16_t));
+    ok = ok && spng_decode_image(context, rgba.data(), bytes, SPNG_FMT_RGBA16, 0) == 0;
+    spng_ctx_free(context);
+    if (!ok) {
+        return false;
+    }
+    out.width      = header.width;
+    out.depth      = header.height;
+    out.resolution = resolution;
+    out.values.resize(out.width * out.depth);
+    for (std::size_t i = 0; i < out.values.size(); ++i) {
+        const double luminance = 0.299 * rgba[4 * i] + 0.587 * rgba[4 * i + 1] + 0.114 * rgba[4 * i + 2];
+        out.values[i]          = static_cast<float>(luminance / 65535.0 * vertical);
+    }
+    return true;
+}
 
 [[nodiscard]] std::string ReadAll(const std::string& path) {
     std::ifstream stream(path, std::ios::binary);
@@ -49,6 +87,7 @@ int main(int argc, char** argv) {
     metrics::ReliefOptions options;
     std::string hillshade;
     double      azimuth = 315.0, elevation = 35.0;
+    double      vertical = 255.0;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto        next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : "0"; };
@@ -77,6 +116,8 @@ int main(int argc, char** argv) {
             options.channelArea = std::atof(next());
         } else if (arg == "--hillshade") {
             hillshade = next();
+        } else if (arg == "--vertical") {
+            vertical = std::atof(next());
         } else if (arg == "--sun") {
             const std::string sun   = next();
             const std::size_t comma = sun.find(',');
@@ -88,33 +129,45 @@ int main(int argc, char** argv) {
     }
     options.level = level;
 
-    const bool isRaw = path.size() > 4 && path.compare(path.size() - 4, 4, ".raw") == 0;
-    const std::string directory = isRaw ? path.substr(0, path.find_last_of("/\\")) : path;
-    if (!isRaw) {
-        path += "/height.raw";
-    }
-    const std::string sidecar = ReadAll(directory + "/metadata.json");
-    // An R2 export is `width` x `height` samples with a `depth` of 1: the z axis is "height".
-    if (width == 0 && !Number(sidecar, "width", width)) {
-        width = 0;
-    }
-    if (depth == 0 && !Number(sidecar, "height", depth)) {
-        depth = 0;
-    }
-    if (resolution == 0 && !Number(sidecar, "resolution", resolution)) {
-        resolution = 0;
-    }
-    if (width < 2 || depth < 2 || resolution <= 0) {
-        std::cerr << "terrain_metrics: need the size and the spacing (no usable metadata.json in '"
-                  << directory << "'; pass --width, --depth and --resolution)\n";
-        return 2;
-    }
-
+    const auto endsWith = [&](const char* suffix) {
+        const std::size_t n = std::strlen(suffix);
+        return path.size() > n && path.compare(path.size() - n, n, suffix) == 0;
+    };
     metrics::Field field;
-    if (!metrics::LoadRaw(path, static_cast<std::size_t>(width), static_cast<std::size_t>(depth),
-                          resolution, field)) {
-        std::cerr << "terrain_metrics: cannot read " << width << " x " << depth << " floats from " << path << "\n";
-        return 2;
+    if (endsWith(".png") || endsWith(".PNG")) {
+        if (!LoadPng(path, resolution > 0 ? resolution : 1.0, vertical, field)) {
+            std::cerr << "terrain_metrics: cannot decode " << path << "\n";
+            return 2;
+        }
+        resolution = field.resolution;
+    } else {
+        const bool isRaw = endsWith(".raw");
+        const std::string directory = isRaw ? path.substr(0, path.find_last_of("/\\")) : path;
+        if (!isRaw) {
+            path += "/height.raw";
+        }
+        const std::string sidecar = ReadAll(directory + "/metadata.json");
+        // An R2 export is `width` x `height` samples with a `depth` of 1: the z axis is "height".
+        if (width == 0 && !Number(sidecar, "width", width)) {
+            width = 0;
+        }
+        if (depth == 0 && !Number(sidecar, "height", depth)) {
+            depth = 0;
+        }
+        if (resolution == 0 && !Number(sidecar, "resolution", resolution)) {
+            resolution = 0;
+        }
+        if (width < 2 || depth < 2 || resolution <= 0) {
+            std::cerr << "terrain_metrics: need the size and the spacing (no usable metadata.json in '"
+                      << directory << "'; pass --width, --depth and --resolution)\n";
+            return 2;
+        }
+        if (!metrics::LoadRaw(path, static_cast<std::size_t>(width), static_cast<std::size_t>(depth),
+                              resolution, field)) {
+            std::cerr << "terrain_metrics: cannot read " << width << " x " << depth << " floats from " << path
+                      << "\n";
+            return 2;
+        }
     }
     const metrics::Report r = metrics::Measure(field, level, boxMin, boxMax);
     const metrics::Relief relief = metrics::MeasureRelief(field, options);

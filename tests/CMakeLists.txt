@@ -33,10 +33,11 @@ engine_add_unit_test(test_lands)
 # The relief metrics and the hillshade the terrain examples are accepted against, the same way.
 engine_add_unit_test(test_relief)
 
-# The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only,
-# standard library only, so it links nothing from the engine.
+# The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only
+# metrics and nothing from the engine; libspng only to read reference heightmaps given as PNG.
 add_executable(terrain_metrics tools/terrain_metrics.cpp)
 target_include_directories(terrain_metrics PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit")
+target_link_libraries(terrain_metrics PRIVATE spng_static)
 engine_set_warnings(terrain_metrics)
 set_target_properties(terrain_metrics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
