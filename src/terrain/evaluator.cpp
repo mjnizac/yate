@@ -361,6 +361,9 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
         if (dispatch.kind == OpKind::Grid) {
             constants.inputs[1] = resources.GridAddress();
         }
+        if (dispatch.kind == OpKind::Water) {
+            constants.inputs[3] = resources.GridAddress();
+        }
 
 #ifdef TRACY_ENABLE
         // Labelled with the op and its script line, on the CPU timeline and on the GPU one. The GPU

@@ -101,9 +101,8 @@ viewer screenshot. Each item is done when it is in `ctest`.
       `region`; the same region gives the same rivers in the viewer and in any export inside it. Rivers
       everywhere without a region needs the analysis per fixed world cell, a river owned by the cell of
       its source.
-- [ ] **The graph's 1024 nodes cap a script at about twenty rivers and lakes**: each costs 30 to 45
-      nodes. A fused carve op, or a larger node store (a stack and memory decision, see `graph.hpp`),
-      would lift it.
+- [x] **The graph's 1024 nodes capped a script at about twenty rivers and lakes**: the fused `Water` op
+      carves each in one node, its channel measured exactly on its course; `test_water` holds 35 elements.
 - [ ] **Lakes found by the generator have star-shaped outlines** (the farthest cell in 32 directions),
       which overreach in long, branching depressions.
 - [ ] **The macros do not drain yet**: `Lands`, `Ranges` and the cliffs leave their pits; give them

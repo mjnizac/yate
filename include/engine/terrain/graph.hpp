@@ -89,6 +89,10 @@ enum class OpKind : u16_t {
     /// values live in the graph and are uploaded once; this is how something computed on the CPU over
     /// the whole terrain (a drainage simulation) reaches the sections.
     Grid,
+    /// A river or a lake carved in one pass: the fields and parameters of the element live in the grid
+    /// buffer as a block (see `water.comp.glsl`); channel 0 is what the ground may stand at (or must
+    /// stand over, in the fill modes) and channel 1 the water surface. Pointwise.
+    Water,
     Count,
 };
 
@@ -364,6 +368,17 @@ public:
     };
     /// A grid of `width * depth` values, x fastest, sampled with Catmull-Rom interpolation at
     /// `position` (`R2 -> R2`, metres) and held at its edge value outside. The values are copied.
+    /// Appends `values` to the grid buffer and returns where they start, for an op that reads a block of
+    /// its own there. The same limits as `AddGrid`.
+    [[nodiscard]] Result<u32_t> AddGridBlock(std::span<const f32_t> values, SourceLocation location);
+    /// How a `Water` node reads its block.
+    enum class WaterMode : u32_t { RiverCap = 0, RiverFill, LakeCap, LakeRim };
+    /// A river or lake from the block at `block` (see `AddGridBlock`): `aux` is the spurs factor for a
+    /// river's cap, the ground before for its fill, the bed noise for a lake's cap, unused for a rim.
+    /// `receiver` is the block of the river a river joins, or `kNoBlock`.
+    static constexpr u32_t kNoBlock = ~0u;
+    [[nodiscard]] Result<Value> AddWater(Value position, Value aux, u32_t block, u32_t receiver, WaterMode mode,
+                                         SourceLocation location);
     [[nodiscard]] Result<Value> AddGrid(Value position, std::span<const f32_t> values,
                                         const GridParams& params, SourceLocation location);
     /// How the viewer should colour the terrain, from the script's `look = { ... }`. Not part of the

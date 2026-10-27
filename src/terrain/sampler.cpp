@@ -59,6 +59,158 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
     return CatmullRom(rows[0], rows[1], rows[2], rows[3], gz - static_cast<f32_t>(iz));
 }
 
+[[nodiscard]] f32_t Smooth(f32_t e0, f32_t e1, f32_t x) {
+    const f32_t t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/// `water.comp.glsl` on the CPU, term for term: { the bound, the water surface }.
+[[nodiscard]] std::array<f32_t, 2> EvalWater(const Graph& graph, const Graph::Node& node, f32_t px, f32_t pz,
+                                             f32_t aux) {
+    const std::span<const f32_t> data = graph.GridData();
+    const u32_t                  block = node.params[0];
+    const u32_t                  receiver = node.params[1];
+    const u32_t                  mode = node.params[2];
+    const auto at = [&](u32_t b, u32_t i) { return data[b + i]; };
+    const auto field = [&](u32_t b, u32_t k) {
+        const i32_t w = static_cast<i32_t>(at(b, 0));
+        const i32_t d = static_cast<i32_t>(at(b, 1));
+        const f32_t cell = at(b, 4);
+        const f32_t gx = std::clamp((px - at(b, 2)) / cell, 0.0f, static_cast<f32_t>(w - 1));
+        const f32_t gz = std::clamp((pz - at(b, 3)) / cell, 0.0f, static_cast<f32_t>(d - 1));
+        const i32_t ix = static_cast<i32_t>(std::floor(gx));
+        const i32_t iz = static_cast<i32_t>(std::floor(gz));
+        std::array<f32_t, 4> rows{};
+        for (i32_t j = -1; j <= 2; ++j) {
+            const i32_t z = std::clamp(iz + j, 0, d - 1);
+            std::array<f32_t, 4> v{};
+            for (i32_t m = -1; m <= 2; ++m) {
+                const i32_t x = std::clamp(ix + m, 0, w - 1);
+                v[static_cast<usize_t>(m + 1)] = data[b + static_cast<u32_t>(at(b, 17)) + static_cast<u32_t>(z * w + x) * 4u + k];
+            }
+            rows[static_cast<usize_t>(j + 1)] = CatmullRom(v[0], v[1], v[2], v[3], gx - static_cast<f32_t>(ix));
+        }
+        return CatmullRom(rows[0], rows[1], rows[2], rows[3], gz - static_cast<f32_t>(iz));
+    };
+    // The exact distance to a river's course around the cell's nearest segment: { distance, level, half }.
+    const auto course = [&](u32_t b) {
+        const i32_t w    = static_cast<i32_t>(at(b, 0));
+        const i32_t dd   = static_cast<i32_t>(at(b, 1));
+        const f32_t cell = at(b, 4);
+        const i32_t cx = std::clamp(static_cast<i32_t>(std::floor((px - at(b, 2)) / cell + 0.5f)), 0, w - 1);
+        const i32_t cz = std::clamp(static_cast<i32_t>(std::floor((pz - at(b, 3)) / cell + 0.5f)), 0, dd - 1);
+        const i32_t nearest = static_cast<i32_t>(data[b + static_cast<u32_t>(at(b, 17)) + static_cast<u32_t>(cz * w + cx) * 4u + 1u] + 0.5f);
+        const i32_t window  = static_cast<i32_t>(at(b, 15));
+        const i32_t count   = static_cast<i32_t>(at(b, 16));
+        std::array<f32_t, 3> best{1e30f, 0.0f, 0.5f};
+        for (i32_t s = std::max(0, nearest - window); s <= std::min(count - 2, nearest + window); ++s) {
+            const u32_t a  = b + 20u + static_cast<u32_t>(s) * 4u;
+            const f32_t ax = data[a], az = data[a + 1], bx = data[a + 4], bz = data[a + 5];
+            const f32_t abx = bx - ax, abz = bz - az;
+            const f32_t t   = std::clamp(((px - ax) * abx + (pz - az) * abz) / std::max(abx * abx + abz * abz, 1e-6f), 0.0f, 1.0f);
+            const f32_t ex = px - ax - abx * t, ez = pz - az - abz * t;
+            const f32_t d  = std::sqrt(ex * ex + ez * ez);
+            if (d < best[0]) {
+                best = {d, data[a + 2] + (data[a + 6] - data[a + 2]) * t, data[a + 3] + (data[a + 7] - data[a + 3]) * t};
+            }
+        }
+        return best;
+    };
+    f32_t bound = 0.0f;
+    f32_t water = -1e6f;
+    if (mode <= 1) {
+        const std::array<f32_t, 3> exact = course(block);
+        const f32_t d      = std::min(exact[0], std::sqrt(std::max(field(block, 0), 0.0f)));
+        const f32_t cellW  = at(block, 4);
+        const f32_t level  = field(block, 2) + (exact[1] - field(block, 2)) * (1.0f - Smooth(cellW, 2.0f * cellW, exact[0]));
+        const f32_t half   = std::max(exact[2], 0.5f);
+        const f32_t axis   = field(block, 3);
+        const u32_t kind   = static_cast<u32_t>(at(block, 5));
+        const f32_t depth  = at(block, 6);
+        const f32_t valley = at(block, 7);
+        const f32_t steep  = at(block, 8);
+        const f32_t plain  = at(block, 11);
+        const f32_t e      = d - half;
+        if (mode == 0) {
+            const f32_t u   = d / half;
+            f32_t       cut = std::clamp(1.0f - u * u, 0.0f, 1.0f);
+            if (kind == 5) {
+                cut *= 0.5f + 0.5f * std::cos(u * 9.4248f + 3.0f * std::sin(px * 0.0041f + pz * 0.0033f));
+            }
+            f32_t bed = level - cut * depth;
+            bed += (axis - level) * Smooth(at(block, 14) * 1.5f, at(block, 14) * 6.0f, e);
+            const f32_t open  = std::max(e, 0.0f);
+            f32_t       flare = open;
+            f32_t       rise  = 0.0f;
+            if (kind == 1) {
+                const f32_t step = at(block, 9);
+                const f32_t t    = open * steep / step;
+                const f32_t whole = std::floor(t);
+                const f32_t s     = 1.0f - 0.92f;
+                rise = step * (whole + Smooth(0.5f - 0.5f * s, 0.5f + 0.5f * s, t - whole));
+            } else if (kind == 3) {
+                const f32_t floor = valley * at(block, 10);
+                const f32_t past  = std::max(e - floor, 0.0f);
+                rise  = past * past * (steep / (2.0f * (valley - floor)));
+                flare = past;
+            } else if (kind == 4 || kind == 5) {
+                const f32_t terrace = at(block, 12);
+                rise = Smooth(0.0f, depth * 2.0f, e) + Smooth(plain, plain + 60.0f, e) * terrace
+                       + Smooth(plain * 1.5f, plain * 1.5f + 60.0f, e) * terrace
+                       + std::max(e - plain * 1.5f - 60.0f, 0.0f) * steep;
+            } else {
+                rise = open * steep;
+            }
+            rise += flare * flare * (steep / valley);
+            bound = bed + rise * aux;
+            water = level - Smooth(0.0f, 3.0f, e) * 20000.0f;
+            if (receiver != Graph::kNoBlock) {
+                const std::array<f32_t, 3> r = course(receiver);
+                const f32_t                er = r[0] - std::max(r[2], 0.5f);
+                water -= (1.0f - Smooth(-2.0f, 0.0f, er)) * 20000.0f;
+            }
+        } else {
+            const f32_t levee  = (Smooth(0.0f, depth * 3.0f, e) - Smooth(depth * 3.0f, depth * 12.0f, e)) * at(block, 13);
+            const f32_t within = Smooth(0.0f, depth, e) - Smooth(plain, plain + 30.0f, e);
+            const f32_t fill   = std::min(level + 0.6f + levee, aux + 3.0f);
+            bound = fill * within + (level - 20000.0f) * (1.0f - within);
+        }
+    } else {
+        const f32_t s       = field(block, 0);
+        const f32_t q       = -s;
+        const f32_t L       = at(block, 6);
+        const f32_t D       = at(block, 7);
+        const f32_t size    = at(block, 8);
+        const f32_t outside = Smooth(-at(block, 4), 0.0f, s);
+        if (mode == 2) {
+            const f32_t shelf = size * at(block, 10);
+            f32_t       floor = 0.0f;
+            if (shelf > 0.0f) {
+                const f32_t sd = at(block, 11);
+                floor = L - Smooth(0.0f, shelf * 0.3f, q) * (D * sd)
+                        - Smooth(shelf, shelf + size * at(block, 9), q) * (D * (1.0f - sd));
+            } else {
+                floor = L - Smooth(0.0f, size * at(block, 9), q) * D;
+            }
+            const f32_t peak = aux + 0.5f;
+            floor += peak * peak * Smooth(size * 0.05f, size * 0.3f, q) * (D * (0.3f + at(block, 14) * 2.2f));
+            const f32_t around = L + 2.0f + std::max(s, 0.0f) * at(block, 12) + std::max(s - at(block, 13), 0.0f) * 20.0f;
+            bound = floor * (1.0f - outside) + around * outside;
+            water = L - Smooth(30.0f, 60.0f, s) * 20000.0f;
+        } else {
+            const f32_t rim = (L + 2.0f) - Smooth(0.0f, 120.0f, s) * 20000.0f;
+            bound = rim * outside + (L - 20000.0f) * (1.0f - outside);
+            const f32_t crater = at(block, 15);
+            if (crater > 0.0f) {
+                const f32_t x     = std::fabs(s - size * 0.25f) / (size * 0.12f);
+                const f32_t crest = std::exp(-0.5f * x * x);
+                bound = std::max(bound, (L + crater) * crest + (L - 20000.0f) * (1.0f - crest));
+            }
+        }
+    }
+    return {bound, water};
+}
+
 class Sampler {
 public:
     Sampler(const Graph& graph, u32_t seed, f32_t spacing) : m_graph(graph), m_seed(seed), m_spacing(spacing) {}
@@ -141,6 +293,13 @@ private:
                 }
                 return {};
             }
+            case OpKind::Water:
+                for (usize_t p = 0; p < positions.size(); ++p) {
+                    const std::array<f32_t, 2> w = EvalWater(m_graph, node, input(0, p)[0], input(0, p)[1], input(1, p)[0]);
+                    own[p][0][0] = w[0];
+                    own[p][1][0] = w[1];
+                }
+                return {};
             case OpKind::Grid:
                 for (usize_t p = 0; p < positions.size(); ++p) {
                     own[p][0][0] = SampleGrid(m_graph, node, input(0, p)[0], input(0, p)[1]);

@@ -1299,7 +1299,109 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         }
         return out;
     });
-    hydrology.set_function("PolygonField", [&graph, gridOf, fieldGrid](sol::this_state lua, sol::table table) {
+    // A river or a lake as one block of the grid buffer (see water.comp.glsl): a 16-value header, its
+    // frame and `params` (the element's numbers, kind first), then four values a cell. `Hydrology.Carve`
+    // reads it in one node. Both return the block's offset.
+    // Header: 20 values, the frame, `params` from 5 to 15, the point count in 16 and where the cells
+    // start in 17. Then the points, four values each, then the cells, four values each.
+    const auto block = [&graph](const std::array<const terrain::FieldGrid*, 4>& fields, const std::pmr::vector<f64_t>& params,
+                                const std::array<const std::pmr::vector<f64_t>*, 4>& points, SourceLocation location) {
+        const terrain::FieldGrid& frame = *fields[0];
+        const usize_t             count = points[0] != nullptr ? points[0]->size() : 0;
+        const usize_t             cells = 20 + count * 4;
+        std::pmr::vector<f32_t>   values(cells + frame.values.size() * 4, 0.0f, &memory::General().Resource());
+        values[16] = static_cast<f32_t>(count);
+        values[17] = static_cast<f32_t>(cells);
+        for (usize_t i = 0; i < count; ++i) {
+            for (usize_t k = 0; k < 4; ++k) {
+                values[20 + i * 4 + k] = static_cast<f32_t>((*points[k])[i]);
+            }
+        }
+        values[0] = static_cast<f32_t>(frame.width);
+        values[1] = static_cast<f32_t>(frame.depth);
+        values[2] = static_cast<f32_t>(frame.originX);
+        values[3] = static_cast<f32_t>(frame.originZ);
+        values[4] = static_cast<f32_t>(frame.cell);
+        for (usize_t i = 0; i < params.size() && i < 11; ++i) {
+            values[5 + i] = static_cast<f32_t>(params[i]);
+        }
+        for (usize_t c = 0; c < frame.values.size(); ++c) {
+            for (usize_t k = 0; k < 4; ++k) {
+                values[cells + c * 4 + k] = fields[k] != nullptr ? static_cast<f32_t>(fields[k]->values[c]) : 0.0f;
+            }
+        }
+        Result<u32_t> offset = graph.AddGridBlock(values, location);
+        if (!offset) {
+            Fail(location, "{}", offset.error().Message());
+        }
+        return static_cast<f64_t>(*offset);
+    };
+    hydrology.set_function("RiverBlock", [block, fieldGrid](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Hydrology.RiverBlock", location);
+        const usize_t        count = args.Length("xs");
+        const usize_t        axis  = args.Length("axis_xs");
+        std::pmr::memory_resource* r = &memory::General().Resource();
+        std::pmr::vector<f64_t> xs(r), zs(r), levels(r), halves(r), axisXs(r), axisZs(r), axisLevels(r), params(r);
+        args.Numbers("xs", count, xs);
+        args.Numbers("zs", count, zs);
+        args.Numbers("levels", count, levels);
+        args.Numbers("halves", count, halves);
+        args.Numbers("axis_xs", axis, axisXs);
+        args.Numbers("axis_zs", axis, axisZs);
+        args.Numbers("axis_levels", axis, axisLevels);
+        args.Numbers("params", args.Length("params"), params);
+        const f64_t cell   = args.Number("cell", 10.0);
+        const f64_t margin = args.Number("margin", 500.0);
+        args.Finish();
+        terrain::FieldGrid distance2 = fieldGrid(), along = fieldGrid(), level = fieldGrid(), half = fieldGrid(),
+                           axisLevel = fieldGrid();
+        if (Status ok = terrain::CurveFields(xs, zs, levels, halves, cell, margin, distance2, along, level, half,
+                                             axisLevel, axisXs, axisZs, axisLevels);
+            !ok) {
+            Fail(location, "{}", ok.error().Message());
+        }
+        return block({&distance2, &along, &level, &axisLevel}, params, {&xs, &zs, &levels, &halves}, location);
+    });
+    hydrology.set_function("LakeBlock", [block, fieldGrid](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Hydrology.LakeBlock", location);
+        const usize_t        count = args.Length("xs");
+        std::pmr::memory_resource* r = &memory::General().Resource();
+        std::pmr::vector<f64_t> xs(r), zs(r), params(r);
+        args.Numbers("xs", count, xs);
+        args.Numbers("zs", count, zs);
+        args.Numbers("params", args.Length("params"), params);
+        const f64_t cell   = args.Number("cell", 20.0);
+        const f64_t margin = args.Number("margin", 500.0);
+        args.Finish();
+        terrain::FieldGrid distance = fieldGrid();
+        if (Status ok = terrain::PolygonField(xs, zs, cell, margin, distance); !ok) {
+            Fail(location, "{}", ok.error().Message());
+        }
+        return block({&distance, nullptr, nullptr, nullptr}, params, {nullptr, nullptr, nullptr, nullptr}, location);
+    });
+    hydrology.set_function("Carve", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Hydrology.Carve", location);
+        const f64_t          at       = args.Number("block", -1.0);
+        const f64_t          receiver = args.Number("receiver", -1.0);
+        const std::string    mode     = args.Text("mode", "cap");
+        const Value          aux      = args.Input("aux");
+        const Value          position = PositionOrCoords(args, graph, location);
+        args.Finish();
+        using Mode = Graph::WaterMode;
+        const Mode chosen = mode == "fill" ? Mode::RiverFill : mode == "lake" ? Mode::LakeCap
+                          : mode == "rim"  ? Mode::LakeRim   : Mode::RiverCap;
+        if (mode != "cap" && mode != "fill" && mode != "lake" && mode != "rim") {
+            Fail(location, "Hydrology.Carve expects mode 'cap', 'fill', 'lake' or 'rim', got '{}'", mode);
+        }
+        const u32_t own  = at < 0.0 ? Graph::kNoBlock : static_cast<u32_t>(at);
+        const u32_t into = receiver < 0.0 ? Graph::kNoBlock : static_cast<u32_t>(receiver);
+        return Handle{Unwrap(graph.AddWater(position, aux, own, into, chosen, location))};
+    });
+
+    hydrology.set_function("PolygonField",[&graph, gridOf, fieldGrid](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Hydrology.PolygonField", location);
         const usize_t        count = args.Length("xs");

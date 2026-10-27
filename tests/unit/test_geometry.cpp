@@ -1520,6 +1520,29 @@ void TestErrors() {
 
 } // namespace
 
+/// The Water op on the GPU against its CPU version in the sampler, at the export's own samples: the CPU one
+/// is what `net:audit` and the generator read, so it has to be what is drawn.
+void TestWaterAgreesWithSampler() {
+    test::Section("the Water op draws what the CPU sampler reads");
+    const Field diff = Export("water_agree", R"(
+    local c = Terrain.Coords{}
+    local base = c.x * 0.08 + c.y * 0.03 + 120.0
+    local net = Water.Network{ terrain = base, region = { -1200, -1200, 1200, 1200 }, cell = 40,
+        rivers = { { points = { { -1100, 30 }, { 0, -20 }, { 1100, 40 } }, kind = "lowland", width = 24, depth = 3 },
+                   { points = { { -150, 1100 }, { -60, 0 } }, kind = "canyon", width = 12 } },
+        lakes = { { at = { 150, -160 }, radius = 90, level = 108, depth = 15, kind = "crater", islands = 0.5 } } }
+    local wet = net:apply(base)
+    local s = Terrain.Sample{ value = wet.height, origin = { -256, -256 }, size = { 64, 64 }, cell = 8 }
+    local result = wet.height - Terrain.Grid{ values = s, size = { 64, 64 }, origin = { -256, -256 }, cell = 8 })");
+    CHECK(diff.Ok());
+    float worst = 0.0f;
+    for (const float v : diff.values) {
+        worst = std::max(worst, std::fabs(v));
+    }
+    std::printf("     worst difference %.4f m\n", static_cast<double>(worst));
+    CHECK(worst < 0.01f);
+}
+
 int main() {
     for (const char* path : {"out", kDirectory}) {
         REQUIRE_OK(engine::platform::MakeDirectory(path));
@@ -1541,6 +1564,7 @@ int main() {
     TestLimitsAndInvalidInput();
     TestOriginAndResolution();
     TestContinuity();
+    TestWaterAgreesWithSampler();
     TestSectionsAndInteraction();
     TestTerrainIndicators();
     TestStatistics();

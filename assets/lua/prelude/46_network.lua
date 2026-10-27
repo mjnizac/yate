@@ -70,6 +70,10 @@ local LAKE_KINDS = {
     cirque = { wall = 0.15, basin = 55 },
 }
 
+-- The codes `water.comp.glsl` knows the kinds by.
+local RIVER_CODES = { mountain = 0, canyon = 1, gorge = 2, glacial = 3, lowland = 4, braided = 5 }
+local LAKE_CODES  = { bowl = 0, trench = 1, shelf = 2, crater = 3, cirque = 4 }
+
 local function kind_list(kinds)
     local list = {}
     for name in pairs(kinds) do
@@ -554,7 +558,8 @@ function Water.Network(t)
     end
     -- A river cut down to `level` from point `from` to its mouth, its axis with it, the cut eased in over
     -- a few hundred metres upstream: a knickpoint that has started to retreat, not a step.
-    local function lower(river, from, level)
+    local lower
+    function lower(river, from, level)
         local ease = math.max(1, math.floor(300.0 / math.max(1.0, length_of(river.points) / #river.points)))
         local top = river.levels[math.max(1, from - ease)]
         for i = math.max(1, from - ease), from - 1 do
@@ -567,6 +572,10 @@ function Water.Network(t)
         local start = math.max(1, math.floor(#river.axis_levels * (from - 1) / #river.levels))
         for i = start, #river.axis_levels do
             river.axis_levels[i] = math.min(river.axis_levels[i], level)
+        end
+        -- Its mouth is now lower, so the river it flows into is cut down too, and so on to the sea.
+        if river.receiver and river.levels[#river.levels] < river.receiver.levels[river.join] then
+            lower(river.receiver, river.join, river.levels[#river.levels])
         end
     end
 
@@ -651,7 +660,10 @@ function Water.Network(t)
             end
             local here = levels[#levels]
             if here < B.levels[q] then
-                lower(B, q, here)
+                -- Fully along the stretch the tributary enters by, which for a wide river reaches well
+                -- upstream of its nearest point: eased in there, it would meet water still higher.
+                local step = length_of(B.points) / math.max(1, #B.points - 1)
+                lower(B, math.max(1, q - math.ceil((half_at(B, q) * 2.0 + w) / math.max(1.0, step))), here)
             else
                 local n = #levels
                 local m = math.max(1, n - 8)
@@ -701,7 +713,7 @@ function Water.Network(t)
             axis = averaged, axis_levels = axis_levels,
             points = path, levels = levels, kind = kind, width = { width[1] * (k.widen or 1.0), width[2] * (k.widen or 1.0) },
             depth = r.depth or math.max(2.0, w * 0.08), roughness = roughness, valley = r.valley or k.valley,
-            name = r.name, generated = r.generated, receiver = receiver,
+            name = r.name, generated = r.generated, receiver = receiver, join = hit and hit.index or nil,
         }
         register(net.rivers[#net.rivers])
         return net.rivers[#net.rivers]
@@ -910,13 +922,13 @@ function Water.Network(t)
             placed = placed + 1
         end
     end
-    -- Each river costs the graph about thirty nodes and each lake forty, out of 1024 for the whole
-    -- script; past what fits, say so here rather than with the graph's own error halfway through.
+    -- Each river costs the graph three nodes (five with a floodplain) and each lake five, out of 1024 for
+    -- the whole script; past what fits, say so here rather than with the graph's own error halfway through.
     local cost = 0
     for _, r in ipairs(net.rivers) do
-        cost = cost + ((r.kind == "lowland" or r.kind == "braided") and 44 or 30)
+        cost = cost + ((r.kind == "lowland" or r.kind == "braided") and 5 or 3)
     end
-    cost = cost + 40 * #net.lakes
+    cost = cost + 5 * #net.lakes
     if cost > 820 then
         fail("Water.Network has " .. #net.rivers .. " rivers and " .. #net.lakes .. " lakes, about " .. cost
             .. " graph nodes of the 1024 a script has; generate fewer (count, density, tributaries)")
@@ -925,39 +937,6 @@ function Water.Network(t)
 end
 
 -- --- Shaping the terrain ----------------------------------------------------------------------------
-
--- The envelope over a river's channel: how high the ground may stand at `e` metres beyond the bank.
-local function valley_rise(kind, e, valley, depth, width)
-    local k = RIVER_KINDS[kind]
-    local open = Curves.Clamp{ input = e, min = 0.0, max = 100000.0 }
-    local steep = math.tan(math.rad(k.slope))
-    local rise
-    -- Where the flare below starts: the bank, or the edge of a glacier's flat floor.
-    local flare = open
-    if kind == "canyon" then
-        -- Walls in steps: benches every `step` metres where the terrace holds the height.
-        rise = Curves.Terrace{ input = open * steep, step = k.step, sharpness = 0.92 }
-    elseif kind == "glacial" then
-        -- A flat floor, then the trough's walls steepening as a parabola: a U.
-        local floor = valley * k.floor
-        local past  = Curves.Clamp{ input = e - floor, min = 0.0, max = 100000.0 }
-        rise = past * past * (steep / (2.0 * (valley - floor)))
-        flare = past
-    elseif kind == "lowland" or kind == "braided" then
-        -- The floodplain a metre over the water (from the bank out, not in the channel), then two
-        -- terraces and the valley side.
-        local plain = math.min(valley * k.plain, width * 15.0)
-        rise = Curves.Smoothstep{ input = e, min = 0.0, max = depth * 2.0 }
-            + Curves.Smoothstep{ input = e, min = plain, max = plain + 60.0 } * (k.terrace or 3.0)
-            + Curves.Smoothstep{ input = e, min = plain * 1.5, max = plain * 1.5 + 60.0 } * (k.terrace or 3.0)
-            + Curves.Clamp{ input = e - plain * 1.5 - 60.0, min = 0.0, max = 100000.0 } * steep
-    else
-        rise = open * steep
-    end
-    -- Towards the valley's reach the envelope flares as the square of the distance, so it meets the
-    -- ground on a curve and never as a wall, and past the reach it is soon far above anything.
-    return rise + flare * flare * (steep / valley)
-end
 
 function Network:apply(height, opts)
     if height == nil then
@@ -974,57 +953,48 @@ function Network:apply(height, opts)
         return Combine.Max{ a = a, b = b }
     end
 
-    -- Lakes: the floor under the level, a low rim around it, and the ground around falling to it.
+    -- Lakes: the floor under the level, a low rim around it, and the ground around falling to it. Each
+    -- is one block and two `Hydrology.Carve` nodes (see water.comp.glsl, where the shapes are).
+    -- The grid buffer holds 16 M values for the whole script: lakes get 2.5 M of it, rivers 10 M.
+    local lake_budget = 2.5e6
     for i, l in ipairs(self.lakes) do
         local k = LAKE_KINDS[l.kind]
         local xs, zs = {}, {}
-        local size = 0.0
         local shore = #l.points <= 64 and smooth_closed(l.points, 2) or l.points
         for j, p in ipairs(shore) do
             xs[j], zs[j] = p[1], p[2]
         end
-        size = math.sqrt(math.abs(length_of(l.points) ^ 2 / (4.0 * math.pi)))
+        local size = math.sqrt(math.abs(length_of(l.points) ^ 2 / (4.0 * math.pi)))
         local basin_reach = (l.basin or 1.0) * math.max(300.0, size * 0.8)
         local cell = math.max(8.0, math.min(40.0, size / 60.0))
-        local s = Hydrology.PolygonField{ xs = xs, zs = zs, cell = cell, margin = basin_reach + 4.0 * cell,
-                                          position = position }
-        local q = s * -1.0
-        local L, D = l.level, l.depth
-        local floor
-        if k.shelf then
-            local shelf = size * k.shelf
-            floor = L - Curves.Smoothstep{ input = q, min = 0.0, max = shelf * 0.3 } * (D * k.shelf_depth)
-                - Curves.Smoothstep{ input = q, min = shelf, max = shelf + size * k.wall } * (D * (1.0 - k.shelf_depth))
-        else
-            floor = L - Curves.Smoothstep{ input = q, min = 0.0, max = size * k.wall } * D
+        -- Inside the lakes' share of the grid buffer: four values a cell over the outline grown by the basin.
+        local minx, minz, maxx, maxz = 1e30, 1e30, -1e30, -1e30
+        for j = 1, #xs do
+            minx, maxx = math.min(minx, xs[j]), math.max(maxx, xs[j])
+            minz, maxz = math.min(minz, zs[j]), math.max(maxz, zs[j])
         end
+        local span = function(c) return ((maxx - minx + 2 * (basin_reach + 4 * c)) / c) * ((maxz - minz + 2 * (basin_reach + 4 * c)) / c) * 4.0 end
+        local share = lake_budget / math.max(1, #self.lakes - i + 1)
+        while span(cell) > share do
+            cell = cell * 1.25
+        end
+        lake_budget = lake_budget - span(cell)
+        local block = Hydrology.LakeBlock{
+            xs = xs, zs = zs, cell = cell, margin = basin_reach + 4.0 * cell,
+            params = { LAKE_CODES[l.kind], l.level, l.depth, size, k.wall, k.shelf or 0.0, k.shelf_depth or 0.0,
+                       math.tan(math.rad(k.basin)), basin_reach, l.islands or 0.0, k.rim or 0.0 },
+        }
         -- The bed is not smooth: ridges and hollows under the water, and islands where they rise above it.
         local bed = Noises.Ridged{ frequency = 1.0 / math.max(150.0, size * 0.25), octaves = 3,
-                                   amplitude = 0.5, seed = self.seed + 400 + i }
-        local under = Curves.Smoothstep{ input = q, min = size * 0.05, max = size * 0.3 }
-        local peak = bed.value + 0.5
-        floor = floor + peak * peak * under * (D * (0.3 + (l.islands or 0.0) * 2.2))
-        -- Outside the shore: the ground around falls towards the lake at the kind's angle (a basin, or
-        -- cliffs for a trench), and a rim two metres over the water keeps it in.
-        local out = Curves.Clamp{ input = s, min = 0.0, max = 100000.0 }
-        local around = L + 2.0 + out * math.tan(math.rad(k.basin))
-            + Curves.Clamp{ input = s - basin_reach, min = 0.0, max = 100000.0 } * 20.0
-        local outside = Curves.Smoothstep{ input = s, min = -cell, max = 0.0 }
-        local cap = floor * (outside * -1.0 + 1.0) + around * outside
+                                   amplitude = 0.5, seed = self.seed + 400 + i }.value
+        local cap = Hydrology.Carve{ block = block, mode = "lake", aux = bed, position = position }
         ground = Combine.Min{ a = ground, b = cap }
-        local rim = (L + 2.0) - Curves.Smoothstep{ input = s, min = 0.0, max = 120.0 } * 20000.0
-        ground = Combine.Max{ a = ground, b = rim * outside + (L - 20000.0) * (outside * -1.0 + 1.0) }
-        if k.rim then
-            -- A crater's raised rim.
-            local x     = s - size * 0.25
-            local crest = Curves.Profile{ input = Combine.Max{ a = x, b = x * -1.0 }, kind = "gaussian", sigma = size * 0.12 }
-            ground = Combine.Max{ a = ground, b = (L + k.rim) * crest + (L - 20000.0) * (crest * -1.0 + 1.0) }
-        end
-        lake_water = max_of(lake_water, L - Curves.Smoothstep{ input = s, min = 30.0, max = 60.0 } * 20000.0)
+        ground = Combine.Max{ a = ground, b = Hydrology.Carve{ block = block, mode = "rim", aux = bed, position = position } }
+        lake_water = max_of(lake_water, cap.water)
     end
 
-    -- Rivers: the channel under the level, the valley as an envelope over it.
-    local budget = 12e6
+    -- Rivers: the channel under the level, the valley as an envelope over it, one block each.
+    local budget = 10e6
     -- One field of spurs for every valley side, shared: one node, not one per river.
     local spurs = Noises.fBm{ frequency = 1.0 / 600.0, octaves = 4, amplitude = 0.35, seed = self.seed + 700 }.value + 1.0
     -- Floodplains raise ground and channels lower it; all the raising first, then all the lowering, so a
@@ -1033,8 +1003,11 @@ function Network:apply(height, opts)
     for i, r in ipairs(self.rivers) do
         local w0, w1 = r.width[1], r.width[2]
         local valley = r.valley
-        local cell = self.field_cell or math.max(6.0, math.min(40.0, (w0 + w1) * 0.35))
-        -- Keep every river's fields inside the grid budget: a long river gets coarser cells.
+        local k = RIVER_KINDS[r.kind]
+        -- Cells at the valley's scale: the channel itself is measured exactly on the course (see
+        -- water.comp.glsl), so the cells only carry the valley and say which segment is near.
+        local cell = self.field_cell or math.max(15.0, math.min(80.0, valley / 25.0))
+        -- Keep every river's block inside the grid budget: a long river gets coarser cells.
         local xs, zs = {}, {}
         local minx, minz, maxx, maxz = 1e30, 1e30, -1e30, -1e30
         for j, p in ipairs(r.points) do
@@ -1043,14 +1016,15 @@ function Network:apply(height, opts)
             minz, maxz = math.min(minz, p[2]), math.max(maxz, p[2])
         end
         local margin = valley + 6.0 * cell
-        local cells = ((maxx - minx + 2 * margin) / cell) * ((maxz - minz + 2 * margin) / cell) * 3.0 -- three grids
+        local cells = ((maxx - minx + 2 * margin) / cell) * ((maxz - minz + 2 * margin) / cell) * 4.0 -- four values a cell
         local share = budget / math.max(1, #self.rivers - i + 1)
         if cells > share then
             cell = cell * math.sqrt(cells / share)
             margin = valley + 6.0 * cell
         end
+        budget = budget - math.min(cells, share)
         -- The half-width at each point: growing from source to mouth, the banks wandering by up to a
-        -- third of it with the roughness, every few widths. Computed here, so the GPU reads one grid.
+        -- third of it with the roughness, every few widths.
         local length, run, halves = math.max(1.0, length_of(r.points)), 0.0, {}
         for j, p in ipairs(r.points) do
             if j > 1 then
@@ -1064,52 +1038,24 @@ function Network:apply(height, opts)
         for j, p in ipairs(r.axis) do
             axs[j], azs[j] = p[1], p[2]
         end
-        local f = Hydrology.CurveField{ xs = xs, zs = zs, levels = r.levels, halves = halves, cell = cell,
-                                        margin = margin, position = position, axis_xs = axs, axis_zs = azs,
-                                        axis_levels = r.axis_levels }
-        budget = budget - math.min(cells, share)
-        local d = Curves.Power{ input = f.distance2, exponent = 0.5 }
-        local half = f.half
-        local u = d / half
-        local cut = Curves.Clamp{ input = u * u * -1.0 + 1.0, min = 0.0, max = 1.0 }
-        local depth = r.depth
-        if r.kind == "braided" then
-            -- Several shallow threads across a wide bed, gravel bars between them at the water.
-            local threads = Noises.Ridged{ frequency = 1.0 / math.max(60.0, w1 * 0.5), octaves = 2,
-                                           amplitude = 0.5, seed = self.seed + 600 + i }
-            cut = cut * (threads.value + 0.5)
-        end
-        local bed = f.level - cut * depth
-        local e = d - half
-        -- The valley floor away from the channel takes the axis's level, over a few widths from the bank:
-        -- the channel's own level would jump from bend to bend across a wide floor.
-        local away = Curves.Smoothstep{ input = e, min = w1 * 1.5, max = w1 * 6.0 }
-        bed = bed + (f.axis_level - f.level) * away
-        -- The valley sides are not planes: spurs and hollows a fifth of their rise, at the scale of a few
-        -- hundred metres, and a rounded crease where the envelope meets the ground.
-        local rise = valley_rise(r.kind, e, valley, depth, w1)
-        local cap = bed + rise * spurs
-        caps[#caps + 1] = { cap = cap, k = math.max(4.0, depth * 3.0) }
-        local k = RIVER_KINDS[r.kind]
+        local plain = k.plain and math.min(valley * k.plain, w1 * 15.0) or 0.0
+        r.block = Hydrology.RiverBlock{
+            xs = xs, zs = zs, levels = r.levels, halves = halves, axis_xs = axs, axis_zs = azs,
+            axis_levels = r.axis_levels, cell = cell, margin = margin,
+            params = { RIVER_CODES[r.kind], r.depth, valley, math.tan(math.rad(k.slope)), k.step or 1.0, k.floor or 0.0,
+                       plain, k.terrace or 3.0, k.levee or 0.0, w1,
+                       -- Segments searched either side of a cell's nearest one: enough to span a cell and a half.
+                       math.min(64, math.ceil(1.5 * cell / math.max(1.0, length / math.max(1, #r.points - 1))) + 2) },
+        }
+        -- A tributary's water gives way where its river is nearer (the receiver's block is read for it).
+        local carve = Hydrology.Carve{ block = r.block, receiver = r.receiver and r.receiver.block or -1, mode = "cap",
+                                       aux = spurs, position = position }
+        caps[#caps + 1] = { cap = carve, k = math.max(4.0, r.depth * 3.0) }
         if k.plain then
-            -- The envelope only lowers ground; a floodplain also fills what lies under it, and builds a
-            -- levee along each bank, highest a channel depth out.
-            local plain = math.min(valley * k.plain, w1 * 15.0)
-            local levee = (Curves.Smoothstep{ input = e, min = 0.0, max = depth * 3.0 }
-                - Curves.Smoothstep{ input = e, min = depth * 3.0, max = depth * 12.0 }) * (k.levee or 0.0)
-            local within = Curves.Smoothstep{ input = e, min = 0.0, max = depth } - Curves.Smoothstep{ input = e, min = plain, max = plain + 30.0 }
-            -- Holes are filled by at most three metres: a floodplain is not built over the sea at its mouth.
-            local fill = Combine.Min{ a = f.level + 0.6 + levee, b = before + 3.0 }
-            fills[#fills + 1] = fill * within + (f.level - 20000.0) * (within * -1.0 + 1.0)
+            -- A floodplain fills what lies under it by up to three metres, and builds a levee on each bank.
+            fills[#fills + 1] = Hydrology.Carve{ block = r.block, mode = "fill", aux = before, position = position }
         end
-        -- A tributary's water stops where its river is nearer than itself: past the confluence the water
-        -- is the river's, which a maximum of the two would hide wherever the tributary stands higher.
-        local surface = f.level - Curves.Smoothstep{ input = e, min = 0.0, max = 3.0 } * 20000.0
-        if r.receiver and r.receiver.distance then
-            surface = surface - Curves.Smoothstep{ input = d - r.receiver.distance, min = 0.0, max = 2.0 } * 20000.0
-        end
-        r.distance = d
-        river_water = max_of(river_water, surface)
+        river_water = max_of(river_water, carve.water)
     end
     for _, fill in ipairs(fills) do
         ground = Combine.Max{ a = ground, b = fill }
@@ -1197,6 +1143,7 @@ function Network:audit(wet, seed, tolerance)
                 end
                 if previous and water[i] > previous + tolerance then
                     entry.rises = entry.rises + 1
+                    entry.first = entry.first or { x = xs[i], z = zs[i], before = previous, after = water[i], ground = ground[i] }
                     entry.worst = math.max(entry.worst, water[i] - previous)
                 end
                 previous = water[i]

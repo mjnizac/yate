@@ -485,7 +485,7 @@ void EachNearest(std::span<const f64_t> xs, std::span<const f64_t> zs, const Fie
 
 Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs, std::span<const f64_t> levels,
                    std::span<const f64_t> halves, f64_t cell, f64_t margin, FieldGrid& distance2,
-                   FieldGrid& along, FieldGrid& level, FieldGrid& half, FieldGrid& axisLevel, std::span<const f64_t> axisXs,
+                   FieldGrid& segment, FieldGrid& level, FieldGrid& half, FieldGrid& axisLevel, std::span<const f64_t> axisXs,
                    std::span<const f64_t> axisZs, std::span<const f64_t> axisLevels) {
     const usize_t n = xs.size();
     const usize_t a = axisXs.size();
@@ -506,14 +506,14 @@ Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs, std::sp
         return FieldGrid{distance2.width, distance2.depth, distance2.originX, distance2.originZ, cell,
                          std::pmr::vector<f64_t>(distance2.values.size(), fill, &memory::General().Resource())};
     };
-    along = like(0.0);
+    segment = like(0.0);
     level = like(levels[0]);
     half  = like(halves[0]);
     std::fill(distance2.values.begin(), distance2.values.end(), margin * margin);
 
     const b8_t axis = a != 0;
-    EachNearest(xs, zs, distance2, margin, distance2.values, [&](usize_t i, usize_t s, f64_t t, f64_t start, f64_t length) {
-        along.values[i] = start + t * length;
+    EachNearest(xs, zs, distance2, margin, distance2.values, [&](usize_t i, usize_t s, f64_t t, f64_t, f64_t) {
+        segment.values[i] = static_cast<f64_t>(s);
         half.values[i]  = halves[s] + t * (halves[s + 1] - halves[s]);
         level.values[i] = levels[s] + t * (levels[s + 1] - levels[s]);
     });

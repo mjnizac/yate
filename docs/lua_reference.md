@@ -1358,8 +1358,10 @@ From `--shapes`, features of `kind = "river"` (lines, or a point for a source) a
 (polygons) are added, with `river_kind`, `lake_kind`, `width`, `depth`, `level` and `roughness` as
 properties.
 
-Each river costs the graph about 30 nodes and each lake 40, out of 1024; `Water.Network` says so before
-it runs out. `assets/scripts/terrains/water_showcase.lua` shows every kind on one map.
+Each river or lake is one `Hydrology.Carve` node (a fused op, `water.comp.glsl`) and two or three more
+to apply it, so a script holds well over a hundred; the grid buffer (16 M values) is shared out between them,
+a long river getting coarser cells. Its channel is measured exactly on its course whatever the cells, so
+it stays sharp. `assets/scripts/terrains/water_showcase.lua` shows every kind on one map.
 
 ## 11. Recipes
 

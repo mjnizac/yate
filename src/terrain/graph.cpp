@@ -30,6 +30,7 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::Shape: return "Shape";
         case OpKind::Gullies: return "Gullies";
         case OpKind::Grid: return "Grid";
+        case OpKind::Water: return "Water";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -469,6 +470,56 @@ Result<Value> Graph::AddGrid(Value position, std::span<const f32_t> values, cons
     PackFloat(node.params, 4, params.originZ);
     PackFloat(node.params, 5, params.cell);
     node.params[6] = params.wrap ? 1u : 0u;
+    return Append(node, location);
+}
+
+Result<u32_t> Graph::AddGridBlock(std::span<const f32_t> values, SourceLocation location) {
+    constexpr u64_t kMaxGridValues = 16ull << 20;
+    if (values.empty() || m_gridData.size() + values.size() > kMaxGridValues
+        || !std::all_of(values.begin(), values.end(), [](f32_t v) { return std::isfinite(v); })) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a grid block needs finite values, and all grids together hold at most {}", kMaxGridValues));
+    }
+    if (m_gridData.empty()) {
+        m_gridData = std::pmr::vector<f32_t>(&memory::General().Resource());
+    }
+    const u32_t offset = static_cast<u32_t>(m_gridData.size());
+    m_gridData.insert(m_gridData.end(), values.begin(), values.end());
+    return offset;
+}
+
+Result<Value> Graph::AddWater(Value position, Value aux, u32_t block, u32_t receiver, WaterMode mode,
+                              SourceLocation location) {
+    const Mapping scalar{Domain::R2, 1};
+    const Mapping planar{Domain::R2, 2};
+    if (Status checked = CheckValue(position, "Water position", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (Status checked = CheckValue(aux, "Water aux", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    // A block is a 20-value header, then points and cells of four values each (see `water.comp.glsl`).
+    const auto fits = [&](u32_t at) { return at != kNoBlock && static_cast<u64_t>(at) + 20 <= m_gridData.size(); };
+    if (!(position.mapping == planar) || !(aux.mapping == scalar) || !fits(block)
+        || (receiver != kNoBlock && !fits(receiver))) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Water needs an {} position, an {} aux value and blocks the graph holds", ToString(planar),
+            ToString(scalar)));
+    }
+    Node node;
+    node.kind         = OpKind::Water;
+    node.nodeClass    = NodeClass::Pointwise;
+    node.inputCount   = 2;
+    node.inputs[0]    = position;
+    node.inputs[1]    = aux;
+    node.channelCount = 2;
+    node.channels[0]  = scalar;
+    node.channels[1]  = scalar;
+    node.params[0]    = block;
+    node.params[1]    = receiver;
+    node.params[2]    = static_cast<u32_t>(mode);
     return Append(node, location);
 }
 

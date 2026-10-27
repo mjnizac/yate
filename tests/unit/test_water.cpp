@@ -188,6 +188,30 @@ end
 )"));
 }
 
+void TestMany() {
+    test::Section("dozens of rivers and lakes fit one script, and their water stays right");
+    // Before the fused carve each river cost about thirty nodes and a script held twenty or so elements.
+    Graph graph;
+    CHECK(Run(graph, "many", R"(
+return function(params)
+    local c = Terrain.Coords{}
+    local base = Noises.fBm{ frequency = 0.0003, octaves = 6, amplitude = 550.0, seed = 8 }.value + c.x * 0.03 + 600.0
+    local net = Water.Network{ terrain = base, region = { -12000, -12000, 12000, 12000 }, cell = 150, sea_level = 0,
+        generate = { rivers = { count = 25 }, tributaries = 0.6, river = { spacing = 1500 }, lakes = { count = 10 } } }
+    local wet = net:apply(base)
+    if #net.rivers + #net.lakes < 35 then error("only " .. (#net.rivers + #net.lakes) .. " elements were made") end
+    local a = net:audit(wet, 0)
+    if a.rises > 0 or a.dry > 0 then
+        error(string.format("over %d points the water rose %d times (worst %.1f m) and ran dry %d times",
+                            a.points, a.rises, a.worst, a.dry))
+    end
+    return { height = { value = wet.height, range = { -300, 1800 } }, rivers = { value = wet.rivers, range = { -30000, 1800 } },
+             lakes = { value = wet.lakes, range = { -30000, 1800 } }, sea = { value = wet.sea, range = { -30000, 1800 } } }
+end
+)"));
+    CHECK(graph.NodeCount() < 600);
+}
+
 } // namespace
 
 int main() {
@@ -199,6 +223,7 @@ int main() {
     TestLakeUnderSea();
     TestGenerate();
     TestAudit();
+    TestMany();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();
     log::Shutdown();

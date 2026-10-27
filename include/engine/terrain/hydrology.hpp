@@ -91,7 +91,8 @@ struct FieldGrid {
 ///   * `distance2`, the squared distance to the curve, capped at `margin` squared. Squared because it
 ///     is smooth across the centre line, where the distance itself has a kink that Catmull-Rom rounds
 ///     off; the GPU takes the root;
-///   * `along`, metres along the curve from its first point to the nearest point;
+///   * `segment`, which segment of the curve (0 for the first) is nearest, for a reader that measures the
+///     distance to it exactly;
 ///   * `level`, the water level there, interpolated between the levels given at the points;
 ///   * `half`, the channel's half-width there, interpolated the same way.
 ///
@@ -104,7 +105,7 @@ struct FieldGrid {
 /// Only cells within `margin` of the curve are written; beyond it the fields are not meant to be read.
 [[nodiscard]] Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs,
                                  std::span<const f64_t> levels, std::span<const f64_t> halves, f64_t cell,
-                                 f64_t margin, FieldGrid& distance2, FieldGrid& along, FieldGrid& level,
+                                 f64_t margin, FieldGrid& distance2, FieldGrid& segment, FieldGrid& level,
                                  FieldGrid& half, FieldGrid& axisLevel, std::span<const f64_t> axisXs = {},
                                  std::span<const f64_t> axisZs = {}, std::span<const f64_t> axisLevels = {});
 
