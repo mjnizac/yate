@@ -54,15 +54,16 @@ full history is in the git log.
 The goal is that a terrain is composed from validated examples and judged by numbers, not only by a
 viewer screenshot. Each item is done when it is in `ctest`.
 
-- [ ] **Cliffs, then the alpine family, rebuilt in stages**: shapes and profiles without noise first,
-      then structure, erosion, and detail noise last with a declared amplitude budget. The alpine case
-      (`tests/library/alpine.json`) already shows the first measured gap: a spectral slope of 5.3 against
-      3.9 on the four reference heightmaps, so it lacks fine relief for its large forms.
-- [ ] **Hypotheses from World Machine and Gaea practice**, to test on the cliffs and alpine cases, each
-      a prelude function or a script change only if it measures better:
-      strata as a sideways displacement along the slope (exposed on faces, none on flats) instead of a
-      terrace of height plus a tilted plane, which stripes the cliffs' plateau in the hillshade;
-      irregular bed thickness by terracing a monotone remap of height; a convexity mask
+- [ ] **The alpine family rebuilt in stages**, as the cliffs were (`terrains/cliffs.lua`, cases
+      `tests/library/cliffs*.json`). The alpine case (`tests/library/alpine.json`) shows the measured gap:
+      a spectral slope of 5.3 against 3.9 on the four reference heightmaps, so it lacks fine relief.
+- [ ] **Cliffs, what is still open**: the lower slope reads soft and its gullies faint; the remaining
+      closed depressions (0.8 % of the land) are on the wall ledges and at tier crossings; there is no
+      heightmap reference for the family, so its case holds guards, not reference ranges.
+- [ ] **Hypotheses from World Machine and Gaea practice**, to test on the alpine case next, each a
+      prelude function or a script change only if it measures better. Tested on the cliffs and kept:
+      strata as a sideways displacement along the slope (the plateau went from 7.2 to 1.6 degrees p90),
+      provided the bed spans a few samples and the residue is continuous. Still open: irregular bed thickness by terracing a monotone remap of height; a convexity mask
       (`h - Blur(h)`) to confine detail and erosion to walls and ridges; detail octaves above the
       stream-power grid scale with an amplitude ratio set from the target spectral slope; erosion
       passes ordered coarse to fine; the difference between a terrain before and after an erosion

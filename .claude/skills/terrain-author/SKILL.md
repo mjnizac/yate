@@ -65,6 +65,27 @@ What World Machine and Gaea practice agrees on (official docs and their forums, 
 * Heavy grid erosion leaves straight, axis-aligned channels; warp the result (as `Ranges.Carve` does)
   and check the axis/diagonal power.
 
+Learnt rebuilding `terrains/cliffs.lua` in stages (each rule cost a measured failure):
+
+* A displacement has to span a few samples to be seen: a bed set back 2.5 m on a wall sampled every 8 m
+  is invisible. Review fine structure at 2 m in a small window.
+* A sharp terrace's residue (a sawtooth) jumps once per bed and aliases into spikes on a steep wall; use a
+  soft terrace (sharpness about 0.5), whose residue is continuous.
+* Detail on gentle ground holds water when it is steeper than the ground: amplitude A at wavelength L
+  makes slopes of about 2 pi A / L. Keep that under the local slope, or use oriented detail
+  (`Erosion.Gullies` from the ground's own dip) that closes no basin. Local erosion does not drain it.
+* Anything faded out in the downslope direction ends in a dam: a gully guided by a slope that flattens
+  at the shore, a mask that fades on land. Guide by a field whose slope never vanishes (a distance).
+* Two regional slopes measured from different lines meet in a trough; measure them from one edge so
+  they meet in a ridge. Flat treads hold water: give benches a slight outward lean.
+* `Erosion.Gullies` spaces its stripes by the gradient's length: give it a gradient scaled to a slope
+  like 0.3 when the real one is small, since only its direction matters there.
+* A modulation meant to vary along one axis must be sampled on that axis only (`position` with a
+  constant coordinate), or it ripples everything it touches.
+* Find pits with `terrain_metrics <dir> --pits out.png` before guessing where they come from.
+* The axis/diagonal power measures orientation when the main form runs along an axis (a coast along x
+  reads in the thousands); it flags grid artefacts only where the forms are not axis-aligned.
+
 Change one variable per run. If a stage does not get closer, find out why before adding anything: do not
 stack more noise or parameters.
 
