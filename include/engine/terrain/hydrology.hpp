@@ -95,15 +95,17 @@ struct FieldGrid {
 ///   * `level`, the water level there, interpolated between the levels given at the points;
 ///   * `half`, the channel's half-width there, interpolated the same way.
 ///
-/// Given an axis (a smoother line along the same valley, with its own levels), `level` is taken from the
-/// axis instead: far from a meandering channel the nearest point on it jumps from one bend to the next,
-/// and the level with it, which across a wide valley floor reads as a step every half meander.
+/// `axisLevel` is the level of the nearest point on an axis (a smoother line along the same valley, with
+/// its own levels), or a copy of `level` without one. A valley floor reads it: far from a meandering
+/// channel the nearest point on the channel jumps from one bend to the next, and its level with it, which
+/// across a wide floor shows as a step every half meander. The water and the bed read `level`, which
+/// along the channel never rises.
 ///
 /// Only cells within `margin` of the curve are written; beyond it the fields are not meant to be read.
 [[nodiscard]] Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs,
                                  std::span<const f64_t> levels, std::span<const f64_t> halves, f64_t cell,
                                  f64_t margin, FieldGrid& distance2, FieldGrid& along, FieldGrid& level,
-                                 FieldGrid& half, std::span<const f64_t> axisXs = {},
+                                 FieldGrid& half, FieldGrid& axisLevel, std::span<const f64_t> axisXs = {},
                                  std::span<const f64_t> axisZs = {}, std::span<const f64_t> axisLevels = {});
 
 /// Signed distance to a closed polygon, negative inside, over its bounds grown by `margin`.

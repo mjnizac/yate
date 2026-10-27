@@ -506,6 +506,70 @@ function Water.Network(t)
         end
     end
 
+    -- The rivers made so far, their points in buckets of 200 m, so a new river can find the first one it
+    -- touches without testing every point of every river.
+    local buckets = {}
+    local BUCKET = 200.0
+    local function key(x, z)
+        return math.floor(x / BUCKET) * 100003 + math.floor(z / BUCKET)
+    end
+    local function half_at(river, i)
+        return (river.width[1] + (river.width[2] - river.width[1]) * (i - 1) / math.max(1, #river.points - 1)) * 0.5
+    end
+    local function register(river)
+        for i, p in ipairs(river.points) do
+            local kk = key(p[1], p[2])
+            buckets[kk] = buckets[kk] or {}
+            table.insert(buckets[kk], { river = river, index = i })
+        end
+    end
+    -- The first point of `path` (past its first few widths, so a river may rise beside another) whose
+    -- channel touches a river already made: { at, river, index, run }.
+    local function contact(path, w)
+        local run = 0.0
+        for i, p in ipairs(path) do
+            if i > 1 then
+                run = run + math.sqrt((p[1] - path[i - 1][1]) ^ 2 + (p[2] - path[i - 1][2]) ^ 2)
+            end
+            if run > w * 3.0 then
+                local bx, bz = math.floor(p[1] / BUCKET), math.floor(p[2] / BUCKET)
+                local best, found = 1e30, nil
+                for dx = -1, 1 do
+                    for dz = -1, 1 do
+                        for _, e in ipairs(buckets[(bx + dx) * 100003 + bz + dz] or {}) do
+                            local q = e.river.points[e.index]
+                            local d = math.sqrt((q[1] - p[1]) ^ 2 + (q[2] - p[2]) ^ 2)
+                            if d < w * 0.5 + half_at(e.river, e.index) + 4.0 and d < best then
+                                best, found = d, e
+                            end
+                        end
+                    end
+                end
+                if found then
+                    return { at = i, river = found.river, index = found.index, run = run }
+                end
+            end
+        end
+        return nil
+    end
+    -- A river cut down to `level` from point `from` to its mouth, its axis with it, the cut eased in over
+    -- a few hundred metres upstream: a knickpoint that has started to retreat, not a step.
+    local function lower(river, from, level)
+        local ease = math.max(1, math.floor(300.0 / math.max(1.0, length_of(river.points) / #river.points)))
+        local top = river.levels[math.max(1, from - ease)]
+        for i = math.max(1, from - ease), from - 1 do
+            local t = (from - i) / ease
+            river.levels[i] = math.min(river.levels[i], level + (top - level) * t)
+        end
+        for i = from, #river.levels do
+            river.levels[i] = math.min(river.levels[i], level)
+        end
+        local start = math.max(1, math.floor(#river.axis_levels * (from - 1) / #river.levels))
+        for i = start, #river.axis_levels do
+            river.axis_levels[i] = math.min(river.axis_levels[i], level)
+        end
+    end
+
     -- Rivers. Each is a list of points with a level, plus its look.
     local function add_river(r, points, where)
         if #points < 2 then
@@ -533,7 +597,6 @@ function Water.Network(t)
         local w = (width[1] + width[2]) * 0.5 * (k.widen or 1.0)
         local roughness = r.roughness or 0.5
         local path = resample(smooth(points, 3), math.max(12.0, w * 0.6))
-        local centre = path
         -- Amplitude up to about a quarter of the wavelength: past that a sideways sine turns in sharp
         -- corners rather than loops.
         path = meander(path, w * 11.0 * 0.22 * k.sinuosity * (0.5 + roughness), w * 11.0, #net.rivers + 1)
@@ -572,17 +635,40 @@ function Water.Network(t)
                 levels[i] = math.min(levels[i], r.start_level)
             end
         end
-        if r.join then
-            -- A tributary meets its river at the river's level there.
-            levels[#levels] = math.max(levels[#levels], r.join)
-            for i = #levels - 1, 1, -1 do
-                levels[i] = math.max(levels[i], levels[i + 1])
+        -- Where it meets a river already in the network it ends, on that river's axis: the network is a
+        -- tree, and a confluence has one level. No level is raised to get there. A river arriving lower
+        -- than the one it joins cuts that one down from the confluence on (its level falls there anyway,
+        -- so nothing downstream rises); one arriving higher drops to it over its last stretch.
+        local hit = contact(path, w)
+        local receiver = nil
+        if hit then
+            if r.generated and hit.run < (r.min_keep or 1500.0) then
+                return nil -- it would only duplicate the river it joins so soon
             end
+            local B, q = hit.river, hit.index
+            for i = #path, hit.at + 1, -1 do
+                path[i], levels[i] = nil, nil
+            end
+            local here = levels[#levels]
+            if here < B.levels[q] then
+                lower(B, q, here)
+            else
+                local n = #levels
+                local m = math.max(1, n - 8)
+                for i = m, n do
+                    local t = (i - m) / math.max(1, n - m)
+                    levels[i] = math.min(levels[i], levels[m] + (B.levels[q] - levels[m]) * t)
+                end
+            end
+            path[#path + 1] = { B.points[q][1], B.points[q][2] }
+            receiver = B
+            levels[#levels + 1] = math.min(levels[#levels], B.levels[q])
+            total = length_of(path)
         end
         -- The valley's axis: the course without its meanders, averaged over a few hundred metres, with the
         -- levels carried over by the share of the length run. The valley floor takes its level from here.
-        local axis = resample(centre, 50.0)
-        local radius = math.max(1, math.floor((r.valley or k.valley) * 0.4 / 50.0))
+        local axis = resample(path, 50.0)
+        local radius = math.max(1, math.floor(math.max((r.valley or k.valley) * 0.4, w * 11.0) / 50.0))
         local averaged = {}
         for i = 1, #axis do
             local a, b = math.max(1, i - radius), math.min(#axis, i + radius)
@@ -614,9 +700,10 @@ function Water.Network(t)
         net.rivers[#net.rivers + 1] = {
             axis = averaged, axis_levels = axis_levels,
             points = path, levels = levels, kind = kind, width = { width[1] * (k.widen or 1.0), width[2] * (k.widen or 1.0) },
-            depth = r.depth or math.max(1.0, w * 0.06), roughness = roughness, valley = r.valley or k.valley,
-            name = r.name, generated = r.generated,
+            depth = r.depth or math.max(2.0, w * 0.08), roughness = roughness, valley = r.valley or k.valley,
+            name = r.name, generated = r.generated, receiver = receiver,
         }
+        register(net.rivers[#net.rivers])
         return net.rivers[#net.rivers]
     end
 
@@ -732,7 +819,7 @@ function Water.Network(t)
             if type(kinds) == "table" then
                 kind = kinds[(k - 1) % #kinds + 1]
             end
-            local made = rivers_from_cells({ kind = kind, width = width_for(g.d.area[mth]), depth = opts.depth,
+            rivers_from_cells({ kind = kind, width = width_for(g.d.area[mth]), depth = opts.depth,
                                              roughness = opts.roughness, generated = true }, cells, "generated river")
             -- Tributaries: the largest side branches long enough, spread along the stem.
             local tributaries = gen.tributaries or 0.0
@@ -763,18 +850,9 @@ function Water.Network(t)
                         taken[#taken + 1] = i
                         local tcells = trace_up(g, i, up, via, head)
                         tcells[#tcells + 1] = g.d.receiver[i]
-                        -- The stem's level at the point of it nearest the junction.
-                        local jp, join, best = g.at(g.d.receiver[i]), nil, 1e30
-                        for _, stem in ipairs(made) do
-                            for j, p in ipairs(stem.points) do
-                                local dd = (p[1] - jp[1]) ^ 2 + (p[2] - jp[2]) ^ 2
-                                if dd < best then
-                                    best, join = dd, stem.levels[j]
-                                end
-                            end
-                        end
+                        -- It ends where it meets the stem (see `add_river`), at the stem's level there.
                         add_river({ kind = kind, width = width_for(g.d.area[i]) * 0.8, depth = opts.depth,
-                                    roughness = opts.roughness, generated = true, join = join },
+                                    roughness = opts.roughness, generated = true, min_keep = 400.0 },
                                   (function()
                                       local pts = {}
                                       for _, c in ipairs(tcells) do
@@ -890,7 +968,10 @@ function Network:apply(height, opts)
     local ground = height
     local lake_water, river_water = nil, nil
     local function max_of(a, b)
-        return a == nil and b or Combine.Max{ a = a, b = b }
+        if a == nil or b == nil then
+            return a or b
+        end
+        return Combine.Max{ a = a, b = b }
     end
 
     -- Lakes: the floor under the level, a low rim around it, and the ground around falling to it.
@@ -946,6 +1027,9 @@ function Network:apply(height, opts)
     local budget = 12e6
     -- One field of spurs for every valley side, shared: one node, not one per river.
     local spurs = Noises.fBm{ frequency = 1.0 / 600.0, octaves = 4, amplitude = 0.35, seed = self.seed + 700 }.value + 1.0
+    -- Floodplains raise ground and channels lower it; all the raising first, then all the lowering, so a
+    -- floodplain never fills another river's channel that runs within it.
+    local before, fills, caps = ground, {}, {}
     for i, r in ipairs(self.rivers) do
         local w0, w1 = r.width[1], r.width[2]
         local valley = r.valley
@@ -997,11 +1081,15 @@ function Network:apply(height, opts)
         end
         local bed = f.level - cut * depth
         local e = d - half
+        -- The valley floor away from the channel takes the axis's level, over a few widths from the bank:
+        -- the channel's own level would jump from bend to bend across a wide floor.
+        local away = Curves.Smoothstep{ input = e, min = w1 * 1.5, max = w1 * 6.0 }
+        bed = bed + (f.axis_level - f.level) * away
         -- The valley sides are not planes: spurs and hollows a fifth of their rise, at the scale of a few
         -- hundred metres, and a rounded crease where the envelope meets the ground.
         local rise = valley_rise(r.kind, e, valley, depth, w1)
         local cap = bed + rise * spurs
-        ground = Combine.SmoothMin{ a = ground, b = cap, k = math.max(4.0, depth * 3.0) }
+        caps[#caps + 1] = { cap = cap, k = math.max(4.0, depth * 3.0) }
         local k = RIVER_KINDS[r.kind]
         if k.plain then
             -- The envelope only lowers ground; a floodplain also fills what lies under it, and builds a
@@ -1011,10 +1099,23 @@ function Network:apply(height, opts)
                 - Curves.Smoothstep{ input = e, min = depth * 3.0, max = depth * 12.0 }) * (k.levee or 0.0)
             local within = Curves.Smoothstep{ input = e, min = 0.0, max = depth } - Curves.Smoothstep{ input = e, min = plain, max = plain + 30.0 }
             -- Holes are filled by at most three metres: a floodplain is not built over the sea at its mouth.
-            local fill = Combine.Min{ a = f.level + 0.6 + levee, b = ground + 3.0 }
-            ground = Combine.Max{ a = ground, b = fill * within + (f.level - 20000.0) * (within * -1.0 + 1.0) }
+            local fill = Combine.Min{ a = f.level + 0.6 + levee, b = before + 3.0 }
+            fills[#fills + 1] = fill * within + (f.level - 20000.0) * (within * -1.0 + 1.0)
         end
-        river_water = max_of(river_water, f.level - Curves.Smoothstep{ input = e, min = 0.0, max = 3.0 } * 20000.0)
+        -- A tributary's water stops where its river is nearer than itself: past the confluence the water
+        -- is the river's, which a maximum of the two would hide wherever the tributary stands higher.
+        local surface = f.level - Curves.Smoothstep{ input = e, min = 0.0, max = 3.0 } * 20000.0
+        if r.receiver and r.receiver.distance then
+            surface = surface - Curves.Smoothstep{ input = d - r.receiver.distance, min = 0.0, max = 2.0 } * 20000.0
+        end
+        r.distance = d
+        river_water = max_of(river_water, surface)
+    end
+    for _, fill in ipairs(fills) do
+        ground = Combine.Max{ a = ground, b = fill }
+    end
+    for _, c in ipairs(caps) do
+        ground = Combine.SmoothMin{ a = ground, b = c.cap, k = c.k }
     end
 
     -- The sea: the sampled sea cells and a few around them at the level, the rest falling away linearly,
@@ -1057,11 +1158,59 @@ function Network:apply(height, opts)
 
     -- The detail the cuts removed, given back once for all of them: where the ground was lowered most of
     -- it returns, so a valley side keeps the texture of the slope it was cut from.
+    -- Never under water, though: detail put back on a bed lifts it through a shallow river, which then
+    -- runs dry in patches.
     if opts.detail then
-        ground = ground + Curves.Smoothstep{ input = height - ground, min = 0.0, max = 4.0 } * opts.detail * 0.6
+        local back = Curves.Smoothstep{ input = height - ground, min = 0.0, max = 4.0 }
+        local top = max_of(max_of(lake_water, river_water), sea)
+        if top then
+            back = back * Curves.Smoothstep{ input = ground - top, min = 0.5, max = 3.0 }
+        end
+        ground = ground + back * opts.detail * 0.6
     end
     local low = ground - 500.0
     return { height = ground, lakes = lake_water or low, rivers = river_water or low, sea = sea or low }
+end
+
+-- The water as it is drawn, walked down every river's channel: how often it rises (by more than
+-- `tolerance`, 0.3 m), by how much at worst, and how often the ground stands over it. `wet` is what
+-- `apply` returned; `seed` the job seed. Points inside lakes are left out, their water is the lake's.
+function Network:audit(wet, seed, tolerance)
+    tolerance = tolerance or 0.3
+    local report = { rises = 0, dry = 0, points = 0, worst = 0.0, rivers = {} }
+    for k, r in ipairs(self.rivers) do
+        local xs, zs = {}, {}
+        local step = math.max(1, #r.points // 400)
+        for i = 1, #r.points - 1, step do
+            xs[#xs + 1], zs[#zs + 1] = r.points[i][1], r.points[i][2]
+        end
+        local water  = Terrain.Sample{ value = wet.rivers, xs = xs, zs = zs, cell = 4.0, seed = seed or 0 }
+        local ground = Terrain.Sample{ value = wet.height, xs = xs, zs = zs, cell = 4.0, seed = seed or 0 }
+        local lake   = Terrain.Sample{ value = wet.lakes, xs = xs, zs = zs, cell = 4.0, seed = seed or 0 }
+        local entry  = { kind = r.kind, generated = r.generated, rises = 0, dry = 0, worst = 0.0, points = 0 }
+        local previous = nil
+        for i = 1, #xs do
+            if lake[i] < ground[i] then
+                entry.points = entry.points + 1
+                if water[i] < ground[i] then
+                    entry.dry = entry.dry + 1
+                end
+                if previous and water[i] > previous + tolerance then
+                    entry.rises = entry.rises + 1
+                    entry.worst = math.max(entry.worst, water[i] - previous)
+                end
+                previous = water[i]
+            else
+                previous = nil
+            end
+        end
+        report.rivers[k] = entry
+        report.rises  = report.rises + entry.rises
+        report.dry    = report.dry + entry.dry
+        report.points = report.points + entry.points
+        report.worst  = math.max(report.worst, entry.worst)
+    end
+    return report
 end
 
 -- What was found and built, for a script to print or test: counts and each element's kind.

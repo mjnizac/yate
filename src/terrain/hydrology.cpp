@@ -485,7 +485,7 @@ void EachNearest(std::span<const f64_t> xs, std::span<const f64_t> zs, const Fie
 
 Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs, std::span<const f64_t> levels,
                    std::span<const f64_t> halves, f64_t cell, f64_t margin, FieldGrid& distance2,
-                   FieldGrid& along, FieldGrid& level, FieldGrid& half, std::span<const f64_t> axisXs,
+                   FieldGrid& along, FieldGrid& level, FieldGrid& half, FieldGrid& axisLevel, std::span<const f64_t> axisXs,
                    std::span<const f64_t> axisZs, std::span<const f64_t> axisLevels) {
     const usize_t n = xs.size();
     const usize_t a = axisXs.size();
@@ -515,15 +515,14 @@ Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs, std::sp
     EachNearest(xs, zs, distance2, margin, distance2.values, [&](usize_t i, usize_t s, f64_t t, f64_t start, f64_t length) {
         along.values[i] = start + t * length;
         half.values[i]  = halves[s] + t * (halves[s + 1] - halves[s]);
-        if (!axis) {
-            level.values[i] = levels[s] + t * (levels[s + 1] - levels[s]);
-        }
+        level.values[i] = levels[s] + t * (levels[s + 1] - levels[s]);
     });
+    axisLevel = level;
     if (axis) {
         // The axis may lie a little off the channel, so it reaches a little further.
         std::pmr::vector<f64_t> best(distance2.values.size(), 4.0 * margin * margin, &memory::General().Resource());
         EachNearest(axisXs, axisZs, distance2, 2.0 * margin, best, [&](usize_t i, usize_t s, f64_t t, f64_t, f64_t) {
-            level.values[i] = axisLevels[s] + t * (axisLevels[s + 1] - axisLevels[s]);
+            axisLevel.values[i] = axisLevels[s] + t * (axisLevels[s + 1] - axisLevels[s]);
         });
     }
     return {};

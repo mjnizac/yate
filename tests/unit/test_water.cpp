@@ -163,6 +163,31 @@ end
     CHECK(Run(graph, "generate", body));
 }
 
+void TestAudit() {
+    test::Section("walked down every channel, the water never rises and the ground never stands over it");
+    // Generated rivers with tributaries, a drawn river that crosses one of them from higher ground, and
+    // detail put back over the cuts: confluences, floodplains and detail are what used to break it.
+    Graph graph;
+    CHECK(Run(graph, "audit", R"(
+return function(params)
+    local c = Terrain.Coords{}
+    local base = Noises.fBm{ frequency = 0.0004, octaves = 5, amplitude = 350.0, seed = 5 }.value + c.x * 0.05 + 400.0
+    local net = Water.Network{ terrain = base, region = { -6000, -6000, 6000, 6000 }, cell = 100,
+        rivers = { { points = { { 3000, -5000 }, { 2500, 0 }, { 3000, 5000 } }, kind = "lowland", width = 30 } },
+        generate = { rivers = { count = 3 }, tributaries = 0.5 } }
+    local detail = Noises.fBm{ frequency = 0.005, octaves = 3, amplitude = 5.0, seed = 6 }.value
+    local wet = net:apply(base + detail, { detail = detail })
+    local a = net:audit(wet, 0)
+    if #net.rivers < 3 then error("only " .. #net.rivers .. " rivers were made") end
+    if a.rises > 0 or a.dry > 0 then
+        error(string.format("over %d points the water rose %d times (worst %.1f m) and ran dry %d times",
+                            a.points, a.rises, a.worst, a.dry))
+    end
+    return { height = { value = wet.height, range = { -200, 900 } } }
+end
+)"));
+}
+
 } // namespace
 
 int main() {
@@ -173,6 +198,7 @@ int main() {
     TestRiver();
     TestLakeUnderSea();
     TestGenerate();
+    TestAudit();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();
     log::Shutdown();

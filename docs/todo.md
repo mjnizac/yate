@@ -91,6 +91,12 @@ viewer screenshot. Each item is done when it is in `ctest`.
       the viewer's water with Sea, Lakes and Rivers toggles.
 - [x] **Rivers and lakes as designed elements**: `Water.Network` (drawn, from `--shapes` or generated,
       kinds of valley and basin, lakes at any level, the sea only where it reaches the edge).
+- [x] **Water that rose and ran dry along its channel** (phase 1 of the water plan): confluences resolved as
+      a tree without raising a level, a tributary's water giving way to its river's, floodplains filled
+      before channels are cut, detail kept out of the water, duplicates dropped; `net:audit` measures it.
+- [ ] **Water plan, phases 2 to 5**: meanders as sine-generated curves, cut banks and point bars, width
+      from drainage area, rapids and falls, deltas; lake outlines from contours, outlets at the lowest
+      shore point; a fused carve op for the node cap; generation per world cell; texture masks.
 - [ ] **Generation over an unbounded world**: drawn elements work anywhere, but `generate` analyses one
       `region`; the same region gives the same rivers in the viewer and in any export inside it. Rivers
       everywhere without a region needs the analysis per fixed world cell, a river owned by the cell of

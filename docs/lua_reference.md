@@ -1323,8 +1323,16 @@ at mouth }`), `depth`, `roughness` (meanders and banks, 0 to 1) and `kind`, whic
 
 The valley is an envelope over the channel: the ground is lowered to the level plus the kind's profile
 of the distance, which flares so it meets the ground on a curve; it never raises ground, except the
-floodplain, which fills holes by up to 3 m. Its floor takes its level from the course without its
-meanders, so a wide floor is smooth.
+floodplain, which fills holes by up to 3 m; every floodplain is filled before any channel is cut, so none
+fills another river's channel. The water and the bed take the channel's own level; the floor, a few widths
+out, the level of the course without its meanders, so a wide floor is smooth. Detail given to `apply` goes
+back on the cut ground, never under water.
+
+**The network is a tree.** A river ends where it first meets one already made, on that river's course,
+and no level is raised to get there: arriving lower, it cuts the river it joins down from the confluence
+on, eased in over 300 m; arriving higher, it drops to it over its last stretch. Past the confluence its
+water gives way to the river's. A generated river that would meet another within 1.5 km is dropped as a
+duplicate.
 
 **Lakes.** `points` (an outline) or `at` and `radius`; `level` in metres, anywhere, under the sea level
 too, or `"auto"` (the lowest ground on the shore); `depth`, `islands` (0 to 1) and `kind`: `bowl`,
@@ -1342,7 +1350,9 @@ branches, which meet them at their level; `river = { kinds, width = { min, max }
 `lakes = { count, area = { min, max }, altitude = { min, max }, kinds, islands, on_rivers }` fills the
 largest natural depressions and dams `on_rivers` valleys. With `kinds = "auto"` (the default) the kind is
 read from the ground: steep and high is `glacial` or `mountain`, a plateau `canyon`, flat `lowland`.
-`net:summary()` lists what was made, generated ones marked `*`.
+`net:summary()` lists what was made, generated ones marked `*`. `net:audit(wet, seed)` walks every
+channel as drawn and counts where the water rises and where the ground stands over it; both should be 0
+(`test_water` holds it there).
 
 From `--shapes`, features of `kind = "river"` (lines, or a point for a source) and `kind = "lake"`
 (polygons) are added, with `river_kind`, `lake_kind`, `width`, `depth`, `level` and `roughness` as

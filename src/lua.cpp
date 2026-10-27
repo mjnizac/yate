@@ -1080,26 +1080,39 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Terrain.Sample", location);
         const Value          value  = args.Input("value");
-        const auto           size   = args.Pair("size", {0.0, 0.0});
-        const auto           origin = args.Pair("origin", {0.0, 0.0});
         const f64_t          cell   = args.Number("cell", 50.0);
         const f64_t          seed   = args.Number("seed", 0.0);
-        args.Finish();
-        if (!(value.mapping == Mapping{Domain::R2, 1})) {
-            Fail(location, "Terrain.Sample samples an R2->R1 value, got {}", ToString(value.mapping));
-        }
-        const u32_t width = static_cast<u32_t>(size[0]);
-        const u32_t depth = static_cast<u32_t>(size[1]);
-        if (width != size[0] || depth != size[1] || width < 1 || depth < 1
-            || static_cast<u64_t>(width) * depth > (4ull << 20) || !(cell > 0.0)) {
-            Fail(location, "Terrain.Sample expects size as whole numbers, at most 4 M samples, and a cell above zero");
-        }
         std::pmr::vector<std::array<f32_t, 2>> positions(&memory::General().Resource());
-        positions.reserve(static_cast<usize_t>(width) * depth);
-        for (u32_t z = 0; z < depth; ++z) {
-            for (u32_t x = 0; x < width; ++x) {
-                positions.push_back({static_cast<f32_t>(origin[0] + x * cell), static_cast<f32_t>(origin[1] + z * cell)});
+        // Either a grid (`origin`, `size`, `cell`) or a list of points (`xs`, `zs`), `cell` then being only
+        // the step a gradient is measured over.
+        if (args.Has("xs")) {
+            const usize_t           count = args.Length("xs");
+            std::pmr::vector<f64_t> xs(&memory::General().Resource());
+            std::pmr::vector<f64_t> zs(&memory::General().Resource());
+            args.Numbers("xs", count, xs);
+            args.Numbers("zs", count, zs);
+            for (usize_t i = 0; i < count; ++i) {
+                positions.push_back({static_cast<f32_t>(xs[i]), static_cast<f32_t>(zs[i])});
             }
+        } else {
+            const auto  size   = args.Pair("size", {0.0, 0.0});
+            const auto  origin = args.Pair("origin", {0.0, 0.0});
+            const u32_t width  = static_cast<u32_t>(size[0]);
+            const u32_t depth  = static_cast<u32_t>(size[1]);
+            if (width != size[0] || depth != size[1] || width < 1 || depth < 1
+                || static_cast<u64_t>(width) * depth > (4ull << 20)) {
+                Fail(location, "Terrain.Sample expects size as whole numbers and at most 4 M samples");
+            }
+            positions.reserve(static_cast<usize_t>(width) * depth);
+            for (u32_t z = 0; z < depth; ++z) {
+                for (u32_t x = 0; x < width; ++x) {
+                    positions.push_back({static_cast<f32_t>(origin[0] + x * cell), static_cast<f32_t>(origin[1] + z * cell)});
+                }
+            }
+        }
+        args.Finish();
+        if (!(value.mapping == Mapping{Domain::R2, 1}) || !(cell > 0.0)) {
+            Fail(location, "Terrain.Sample samples an R2->R1 value with a cell above zero, got {}", ToString(value.mapping));
         }
         std::pmr::vector<f32_t> out(positions.size(), 0.0f, &memory::General().Resource());
         if (Status ok = terrain::SampleGraph(graph, value, static_cast<u32_t>(static_cast<u64_t>(seed)),
@@ -1270,8 +1283,9 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         terrain::FieldGrid along     = fieldGrid();
         terrain::FieldGrid level     = fieldGrid();
         terrain::FieldGrid half      = fieldGrid();
+        terrain::FieldGrid axisLevel = fieldGrid();
         if (Status ok = terrain::CurveFields(xs, zs, levels, halves, cell, margin, distance2, along, level, half,
-                                             axisXs, axisZs, axisLevels);
+                                             axisLevel, axisXs, axisZs, axisLevels);
             !ok) {
             Fail(location, "{}", ok.error().Message());
         }
@@ -1280,6 +1294,9 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         out["distance2"] = gridOf(distance2, position, location);
         out["level"]     = gridOf(level, position, location);
         out["half"]      = gridOf(half, position, location);
+        if (!axisXs.empty()) {
+            out["axis_level"] = gridOf(axisLevel, position, location);
+        }
         return out;
     });
     hydrology.set_function("PolygonField", [&graph, gridOf, fieldGrid](sol::this_state lua, sol::table table) {
