@@ -137,7 +137,17 @@ local function main(params)
             rise = rise - cut
             lost = lost + cut
         end
-        form = form + Curves.Profile{ input = edge, kind = "plateau", edge = 20, falloff = 220 * s } * rise
+        -- Differential erosion (World Machine's Strata, Gaea's Stratify): a hard cap rock stands nearly
+        -- vertical on a softer base that weathers back to about 50 degrees. The cap takes 25 to 45 % of
+        -- the tier, varying along the coast; the base runs out seaward of the cap's foot.
+        local hard  = Noises.fBm{
+            frequency = 1.0 / 2500.0, octaves = 1, amplitude = 0.5, seed = seed + 80 + k, position = alongCoast,
+        }
+        local share = 0.35 + 0.2 * hard.value
+        local run   = tier.rise * s * 0.65 / math.tan(math.rad(50.0))
+        local cap   = Curves.Profile{ input = edge, kind = "plateau", edge = 10, falloff = 60 * s }
+        local base  = Curves.Profile{ input = edge - run, kind = "linear", width = run }
+        form = form + (cap * share + base * (1.0 - share)) * rise
     end
     local shelf  = Curves.Smoothstep{ input = coast, min = 0.0, max = 1500.0 } * (-160.0)
     -- A regional slope with its divide on the main wall's edge (the same curve, without buttresses): in
