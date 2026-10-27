@@ -1,0 +1,14 @@
+{
+  "description": "terrains/cliffs.lua at 8 m, rebuilt in stages (forms, structure, erosion, detail). No heightmap reference exists for this family, so these are guards set from the staged rebuild: closed depressions 0.79 % of the land (2.75 % before it), no spikes past 85 degrees (87.4 before), walls kept (over 45 degrees on 5 % of the land).",
+  "script": "assets/scripts/terrains/cliffs.lua",
+  "seed": 0,
+  "resolution": 8,
+  "section": 512,
+  "bounds": { "min_x": -6144, "min_z": -6144, "max_x": 6144, "max_z": 6144 },
+  "level": 0,
+  "metrics": [
+    { "name": "pit_share", "max": 0.012 },
+    { "name": "slope_p999", "max": 86 },
+    { "name": "steep45", "min": 0.04 }
+  ]
+}

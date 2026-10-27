@@ -1,0 +1,14 @@
+{
+  "description": "The plateau of terrains/cliffs.lua alone. Strata now move ground along the slope, so they show on the faces and leave the plateau alone: slope p90 1.6 degrees and 24 m of relief per km (7.2 degrees and 59 m while strata were a terrace of height plus a tilted plane, which striped it), and it drains (no closed depressions over a hundredth of a percent).",
+  "script": "assets/scripts/terrains/cliffs.lua",
+  "seed": 0,
+  "resolution": 8,
+  "section": 512,
+  "bounds": { "min_x": -6144, "min_z": -6144, "max_x": 6144, "max_z": -3500 },
+  "level": 0,
+  "metrics": [
+    { "name": "slope_p90", "max": 3 },
+    { "name": "local_relief_m", "max": 35 },
+    { "name": "pit_share", "max": 0.001 }
+  ]
+}
