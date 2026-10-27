@@ -70,7 +70,7 @@ constexpr u32_t kLevelChangeFrames = 15;
 constexpr u32_t kMaxPreviewSamples = 1024;
 
 /// The water outputs a script may give, in the order the tile's height slot carries them after the height.
-constexpr std::array<std::string_view, 2> kWaterOutputs{"lakes", "rivers"};
+constexpr std::array<std::string_view, 3> kWaterOutputs{"lakes", "rivers", "sea"};
 /// Index of an output the script does not have.
 constexpr usize_t kNoOutput = static_cast<usize_t>(-1);
 /// What a tile holds where its script has no water output: far under any terrain, so nothing is drawn.
@@ -80,6 +80,8 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
 constexpr u32_t kDrawLakes  = 1u << 31;
 constexpr u32_t kDrawRivers = 1u << 30;
 constexpr u32_t kDrawSea    = 1u << 29;
+/// Set when the script gives the sea as an output: the shaders read it in place of the global level.
+constexpr u32_t kSeaOutput  = 1u << 28;
 
 /// Which piece of terrain a tile holds.
 ///
@@ -182,7 +184,7 @@ struct LoadedGraph {
     usize_t heightOutput  = 0;
     usize_t normalsOutput = 0;
     /// The `lakes` and `rivers` outputs, `kNoOutput` where the script has none.
-    std::array<usize_t, 2> waterOutputs{kNoOutput, kNoOutput};
+    std::array<usize_t, 3> waterOutputs{kNoOutput, kNoOutput, kNoOutput};
     f32_t   heightMinimum = 0.0f;
     f32_t   heightMaximum = 0.0f;
 
@@ -194,7 +196,7 @@ struct LoadedGraph {
         graph.Clear();
         heightOutput  = 0;
         normalsOutput = 0;
-        waterOutputs  = {kNoOutput, kNoOutput};
+        waterOutputs  = {kNoOutput, kNoOutput, kNoOutput};
         heightMinimum = 0.0f;
         heightMaximum = 0.0f;
     }
@@ -217,9 +219,10 @@ struct LoadedGraph {
         const std::string_view        name{output.name.data()};
         // The output named "height" wins; failing that the first R2->R1 that is not the shadow or water.
         const b8_t named = name == "height";
-        const b8_t water = name == kWaterOutputs[0] || name == kWaterOutputs[1];
+        const auto plane = std::find(kWaterOutputs.begin(), kWaterOutputs.end(), name);
+        const b8_t water = plane != kWaterOutputs.end();
         if (water && output.value.mapping == Mapping{Domain::R2, 1}) {
-            loaded.waterOutputs[name == kWaterOutputs[0] ? 0 : 1] = i;
+            loaded.waterOutputs[static_cast<usize_t>(plane - kWaterOutputs.begin())] = i;
         }
         if ((named || (!foundHeight && name != "shadow" && !water))
             && output.value.mapping == Mapping{Domain::R2, 1}) {
@@ -323,7 +326,7 @@ struct Terrain {
     u32_t normalsHalo = 0;
     /// The `lakes` and `rivers` outputs, `kNoOutput` where the script has none. Drawn from the height
     /// slot, which carries them after the height (see `EvaluateTile`).
-    std::array<usize_t, 2> waterOutputs{kNoOutput, kNoOutput};
+    std::array<usize_t, 3> waterOutputs{kNoOutput, kNoOutput, kNoOutput};
     /// Bytes one tight tile takes, with no halo.
     u64_t heightBytes   = 0;
     u64_t normalsBytes  = 0;
@@ -493,10 +496,10 @@ struct TileCache {
     const terrain::CompiledOutput& heightOutput  = built.compiled.outputs[built.heightOutput];
     const terrain::CompiledOutput& normalsOutput = built.compiled.outputs[built.normalsOutput];
 
-    // The height slot is three planes: the height, then the lake and the river surfaces. The push
+    // The height slot is four planes: the height, then the lake, river and sea surfaces. The push
     // constants have no room for another address, so the water travels with the height it is drawn over.
     Result<vulkan::SectionSlot> height = context.Sections().Acquire(
-        terrain::ClassOf(Mapping{Domain::R2, 3}, extent, 0), 3 * built.heightBytes);
+        terrain::ClassOf(Mapping{Domain::R2, 4}, extent, 0), 4 * built.heightBytes);
     if (!height) {
         return std::unexpected(height.error());
     }
@@ -543,10 +546,11 @@ struct TileCache {
         u32_t                          halo;
         u64_t                          offset;
     };
-    std::array<CopyPlan, 4> copies{{{&heightOutput, &tile.height, built.heightHalo, 0},
+    std::array<CopyPlan, 5> copies{{{&heightOutput, &tile.height, built.heightHalo, 0},
                                     {&normalsOutput, &tile.normals, built.normalsHalo, 0},
                                     {nullptr, &tile.height, 0, built.heightBytes},
-                                    {nullptr, &tile.height, 0, 2 * built.heightBytes}}};
+                                    {nullptr, &tile.height, 0, 2 * built.heightBytes},
+                                    {nullptr, &tile.height, 0, 3 * built.heightBytes}}};
     for (usize_t w = 0; w < kWaterOutputs.size(); ++w) {
         if (built.waterOutputs[w] != kNoOutput) {
             copies[2 + w].output = &built.compiled.outputs[built.waterOutputs[w]];
@@ -1251,12 +1255,14 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     // none: its fragments are lines, and a tinted line says nothing about where the surface is.
     const ViewerLayer::Water& water = state.settings.water;
     const b8_t shadeWater           = water.enabled && !state.wireframe;
+    const b8_t seaOutput            = state.terrain.waterOutputs[2] != kNoOutput;
     const Vec3 eye                  = state.camera.Position();
 
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
     constants.samples        = state.terrain.samples | (water.sea ? kDrawSea : 0u)
-                        | (water.lakes ? kDrawLakes : 0u) | (water.rivers ? kDrawRivers : 0u);
+                        | (water.lakes ? kDrawLakes : 0u) | (water.rivers ? kDrawRivers : 0u)
+                        | (seaOutput ? kSeaOutput : 0u);
     constants.look           = state.terrain.look;
     constants.eye            = {eye.x, eye.y, eye.z};
     constants.waterLevel     = water.level;
@@ -1313,7 +1319,8 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     // `viewer/water.vert.glsl`).
     // Zero opacity is no water at all, the open sea included: drawn anyway it left a blue plate at the
     // edge of the ring that the terrain shading, skipped at alpha 0, did not explain.
-    if (shadeWater && water.sea && water.opacity > 0.0f && state.seaPipeline.IsValid()) {
+    // A script that says where its sea is has no open sea beyond the ring: the sea is where it put it.
+    if (shadeWater && water.sea && !seaOutput && water.opacity > 0.0f && state.seaPipeline.IsValid()) {
         f32_t minX = std::numeric_limits<f32_t>::max();
         f32_t minZ = minX;
         f32_t maxX = std::numeric_limits<f32_t>::lowest();

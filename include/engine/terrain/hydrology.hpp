@@ -65,11 +65,49 @@ struct HydrologyResult {
     std::pmr::vector<f64_t> riverWidth;
     std::pmr::vector<f64_t> riverDepth;
     std::pmr::vector<f64_t> riverLevel;
+    /// The cell each cell drains to, or -1 at an outlet, and whether a cell is sea. What a script needs
+    /// to follow the water down from a source of its own choosing.
+    std::pmr::vector<i32_t> receiver;
+    std::pmr::vector<u8_t>  sea;
     u32_t                   lakes  = 0;
     u32_t                   rivers = 0;
 };
 
 [[nodiscard]] Status Drain(std::span<const f64_t> height, const HydrologyParams& params,
                            HydrologyResult& result);
+
+/// A field over a rectangle of cells, x fastest, `origin` at the first one.
+struct FieldGrid {
+    u32_t                   width   = 0;
+    u32_t                   depth   = 0;
+    f64_t                   originX = 0.0;
+    f64_t                   originZ = 0.0;
+    f64_t                   cell    = 1.0;
+    std::pmr::vector<f64_t> values;
+};
+
+/// The fields an analytic river is drawn from, over the curve's bounds grown by `margin`:
+///
+///   * `distance2`, the squared distance to the curve, capped at `margin` squared. Squared because it
+///     is smooth across the centre line, where the distance itself has a kink that Catmull-Rom rounds
+///     off; the GPU takes the root;
+///   * `along`, metres along the curve from its first point to the nearest point;
+///   * `level`, the water level there, interpolated between the levels given at the points;
+///   * `half`, the channel's half-width there, interpolated the same way.
+///
+/// Given an axis (a smoother line along the same valley, with its own levels), `level` is taken from the
+/// axis instead: far from a meandering channel the nearest point on it jumps from one bend to the next,
+/// and the level with it, which across a wide valley floor reads as a step every half meander.
+///
+/// Only cells within `margin` of the curve are written; beyond it the fields are not meant to be read.
+[[nodiscard]] Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs,
+                                 std::span<const f64_t> levels, std::span<const f64_t> halves, f64_t cell,
+                                 f64_t margin, FieldGrid& distance2, FieldGrid& along, FieldGrid& level,
+                                 FieldGrid& half, std::span<const f64_t> axisXs = {},
+                                 std::span<const f64_t> axisZs = {}, std::span<const f64_t> axisLevels = {});
+
+/// Signed distance to a closed polygon, negative inside, over its bounds grown by `margin`.
+[[nodiscard]] Status PolygonField(std::span<const f64_t> xs, std::span<const f64_t> zs, f64_t cell,
+                                  f64_t margin, FieldGrid& distance);
 
 } // namespace engine::terrain

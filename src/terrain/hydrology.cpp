@@ -416,6 +416,151 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
         }
     }
     result.height = std::move(h);
+    result.receiver.assign(receiver.begin(), receiver.end());
+    result.sea.assign(sea.begin(), sea.end());
+    return {};
+}
+
+namespace {
+
+/// The grid over `[minX, maxX] x [minZ, maxZ]` grown by `margin`, refused past 16 M cells.
+[[nodiscard]] Status Frame(f64_t minX, f64_t minZ, f64_t maxX, f64_t maxZ, f64_t cell, f64_t margin,
+                           FieldGrid& grid) {
+    grid.cell    = cell;
+    grid.originX = std::floor((minX - margin) / cell) * cell;
+    grid.originZ = std::floor((minZ - margin) / cell) * cell;
+    const f64_t w = std::ceil((maxX + margin - grid.originX) / cell) + 1.0;
+    const f64_t d = std::ceil((maxZ + margin - grid.originZ) / cell) + 1.0;
+    if (!(w * d <= static_cast<f64_t>(16u << 20))) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
+                    "a water field of {} x {} cells is over 16 M; give it a larger cell", w, d);
+    }
+    grid.width  = static_cast<u32_t>(w);
+    grid.depth  = static_cast<u32_t>(d);
+    grid.values = std::pmr::vector<f64_t>(static_cast<usize_t>(grid.width) * grid.depth, 0.0,
+                                          &memory::General().Resource());
+    return {};
+}
+
+[[nodiscard]] b8_t Finite(std::span<const f64_t> values) {
+    return std::all_of(values.begin(), values.end(), [](f64_t v) { return std::isfinite(v); });
+}
+
+/// For every cell of `frame` within `margin` of the polyline, the segment nearest to it so far: `write`
+/// is called with the cell, the segment, where along it the nearest point is (0 to 1), the length run
+/// before the segment and its length, whenever that beats `best`.
+template <typename Write>
+void EachNearest(std::span<const f64_t> xs, std::span<const f64_t> zs, const FieldGrid& frame, f64_t margin,
+                 std::pmr::vector<f64_t>& best, Write write) {
+    const f64_t cell  = frame.cell;
+    f64_t       start = 0.0;
+    for (usize_t s = 0; s + 1 < xs.size(); ++s) {
+        const f64_t ax = xs[s], az = zs[s], bx = xs[s + 1], bz = zs[s + 1];
+        const f64_t dx = bx - ax, dz = bz - az;
+        const f64_t length2 = dx * dx + dz * dz;
+        const auto  cellOf  = [&](f64_t v, f64_t origin) { return (v - origin) / cell; };
+        const i64_t x0 = std::max<i64_t>(0, static_cast<i64_t>(std::floor(cellOf(std::min(ax, bx) - margin, frame.originX))));
+        const i64_t x1 = std::min<i64_t>(frame.width - 1, static_cast<i64_t>(std::ceil(cellOf(std::max(ax, bx) + margin, frame.originX))));
+        const i64_t z0 = std::max<i64_t>(0, static_cast<i64_t>(std::floor(cellOf(std::min(az, bz) - margin, frame.originZ))));
+        const i64_t z1 = std::min<i64_t>(frame.depth - 1, static_cast<i64_t>(std::ceil(cellOf(std::max(az, bz) + margin, frame.originZ))));
+        for (i64_t z = z0; z <= z1; ++z) {
+            for (i64_t x = x0; x <= x1; ++x) {
+                const f64_t px = frame.originX + static_cast<f64_t>(x) * cell;
+                const f64_t pz = frame.originZ + static_cast<f64_t>(z) * cell;
+                const f64_t t  = length2 > 0.0 ? std::clamp(((px - ax) * dx + (pz - az) * dz) / length2, 0.0, 1.0) : 0.0;
+                const f64_t ex = px - ax - t * dx, ez = pz - az - t * dz;
+                const f64_t d2 = ex * ex + ez * ez;
+                const usize_t i = static_cast<usize_t>(z) * frame.width + static_cast<usize_t>(x);
+                if (d2 < best[i]) {
+                    best[i] = d2;
+                    write(i, s, t, start, std::sqrt(length2));
+                }
+            }
+        }
+        start += std::sqrt(length2);
+    }
+}
+
+} // namespace
+
+Status CurveFields(std::span<const f64_t> xs, std::span<const f64_t> zs, std::span<const f64_t> levels,
+                   std::span<const f64_t> halves, f64_t cell, f64_t margin, FieldGrid& distance2,
+                   FieldGrid& along, FieldGrid& level, FieldGrid& half, std::span<const f64_t> axisXs,
+                   std::span<const f64_t> axisZs, std::span<const f64_t> axisLevels) {
+    const usize_t n = xs.size();
+    const usize_t a = axisXs.size();
+    if (n < 2 || zs.size() != n || levels.size() != n || halves.size() != n || !(cell > 0.0)
+        || !(margin > 0.0) || !Finite(xs) || !Finite(zs) || !Finite(levels) || !Finite(halves)
+        || (a != 0 && (a < 2 || axisZs.size() != a || axisLevels.size() != a || !Finite(axisXs)
+                       || !Finite(axisZs) || !Finite(axisLevels)))) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
+                    "a curve field needs at least two points with a level and a half-width each, a cell and a "
+                    "margin above zero, and an axis of at least two points with a level each, or none");
+    }
+    const auto [minX, maxX] = std::minmax_element(xs.begin(), xs.end());
+    const auto [minZ, maxZ] = std::minmax_element(zs.begin(), zs.end());
+    if (Status framed = Frame(*minX, *minZ, *maxX, *maxZ, cell, margin, distance2); !framed) {
+        return framed;
+    }
+    const auto like = [&](f64_t fill) {
+        return FieldGrid{distance2.width, distance2.depth, distance2.originX, distance2.originZ, cell,
+                         std::pmr::vector<f64_t>(distance2.values.size(), fill, &memory::General().Resource())};
+    };
+    along = like(0.0);
+    level = like(levels[0]);
+    half  = like(halves[0]);
+    std::fill(distance2.values.begin(), distance2.values.end(), margin * margin);
+
+    const b8_t axis = a != 0;
+    EachNearest(xs, zs, distance2, margin, distance2.values, [&](usize_t i, usize_t s, f64_t t, f64_t start, f64_t length) {
+        along.values[i] = start + t * length;
+        half.values[i]  = halves[s] + t * (halves[s + 1] - halves[s]);
+        if (!axis) {
+            level.values[i] = levels[s] + t * (levels[s + 1] - levels[s]);
+        }
+    });
+    if (axis) {
+        // The axis may lie a little off the channel, so it reaches a little further.
+        std::pmr::vector<f64_t> best(distance2.values.size(), 4.0 * margin * margin, &memory::General().Resource());
+        EachNearest(axisXs, axisZs, distance2, 2.0 * margin, best, [&](usize_t i, usize_t s, f64_t t, f64_t, f64_t) {
+            level.values[i] = axisLevels[s] + t * (axisLevels[s + 1] - axisLevels[s]);
+        });
+    }
+    return {};
+}
+
+Status PolygonField(std::span<const f64_t> xs, std::span<const f64_t> zs, f64_t cell, f64_t margin,
+                    FieldGrid& distance) {
+    const usize_t n = xs.size();
+    if (n < 3 || zs.size() != n || !(cell > 0.0) || !(margin >= 0.0) || !Finite(xs) || !Finite(zs)) {
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
+                    "a polygon field needs at least three points, a cell above zero and a margin of zero or more");
+    }
+    const auto [minX, maxX] = std::minmax_element(xs.begin(), xs.end());
+    const auto [minZ, maxZ] = std::minmax_element(zs.begin(), zs.end());
+    if (Status framed = Frame(*minX, *minZ, *maxX, *maxZ, cell, margin, distance); !framed) {
+        return framed;
+    }
+    for (u32_t z = 0; z < distance.depth; ++z) {
+        for (u32_t x = 0; x < distance.width; ++x) {
+            const f64_t px = distance.originX + x * cell;
+            const f64_t pz = distance.originZ + z * cell;
+            f64_t       best   = 1e300;
+            b8_t        inside = false;
+            for (usize_t s = 0; s < n; ++s) {
+                const f64_t ax = xs[s], az = zs[s], bx = xs[(s + 1) % n], bz = zs[(s + 1) % n];
+                const f64_t dx = bx - ax, dz = bz - az;
+                const f64_t length2 = dx * dx + dz * dz;
+                const f64_t t  = length2 > 0.0 ? std::clamp(((px - ax) * dx + (pz - az) * dz) / length2, 0.0, 1.0) : 0.0;
+                const f64_t ex = px - ax - t * dx, ez = pz - az - t * dz;
+                best = std::min(best, ex * ex + ez * ez);
+                if ((az > pz) != (bz > pz) && px < ax + (pz - az) * dx / dz) {
+                    inside = !inside;
+                }
+            }
+            distance.values[static_cast<usize_t>(z) * distance.width + x] = inside ? -std::sqrt(best) : std::sqrt(best);
+        }
+    }
     return {};
 }
 

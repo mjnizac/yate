@@ -203,7 +203,9 @@ void main() {
 
     // Water, computed from the eye and this fragment rather than drawn: alpha zero means none.
     // The surface over this fragment: the sea when it is drawn, or a lake or river above it.
-    float level = max((pc.samples & 0x20000000u) != 0u ? pc.waterLevel : -1e30, vWater);
+    // The global level is the sea only when the script did not give its own (bit 28), which then
+    // arrives in vWater with the lakes and rivers.
+    float level = max((pc.samples & 0x30000000u) == 0x20000000u ? pc.waterLevel : -1e30, vWater);
     vec4 water = unpackUnorm4x8(pc.waterColour);
     if (water.a > 0.0) {
         vec3  toFragment = vWorldPosition - pc.eye;

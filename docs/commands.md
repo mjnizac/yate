@@ -188,7 +188,8 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --vie
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
 sea; the panel has the same controls and a reload keeps them. The panel also toggles the sea, the lakes
 and the rivers apart: a script's outputs named `lakes` and `rivers` are water surfaces of their own (see
-`Water.Apply`), drawn with the same colour. Terrain below the level takes the
+`Water.Apply`), drawn with the same colour. An output named `sea` is the sea's surface (see
+`Water.Network`): with it the sea is drawn only where the script put it, and the panel's level is not used. Terrain below the level takes the
 water colour in proportion to the water in front of it, with a pale band where it meets the surface:
 
 ```bash

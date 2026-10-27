@@ -1283,7 +1283,73 @@ return { height = { value = wet.height }, lakes = { value = wet.lakes }, rivers 
 
 Detail added after `Water.Drain` must stay under the slope of the ground or it makes new pits.
 `assets/scripts/terrains/lakes_rivers.lua` is the worked example. The grid is bounded: outside it
-`Terrain.Grid` holds its edge.
+`Terrain.Grid` holds its edge. For water that is designed rather than simulated, use `Water.Network`.
+
+---
+
+### Rivers, lakes and the sea: `Water.Network`
+
+Water as analytic elements that the terrain is made to follow. Nothing is simulated: the terrain is
+sampled once on a coarse grid (`Terrain.Sample`, every `cell` metres over `region`) to decide where the
+water goes, and from then on each element is a curve or an outline with a level.
+
+```lua
+local net = Water.Network{
+    terrain = forms, region = { -12000, -12000, 12000, 12000 }, sea_level = 0, seed = params.seed,
+    rivers = { { points = { { 0, 9000 }, { 800, 4000 }, { 0, -2000 } }, kind = "glacial", width = 30 },
+               { source = { -2500, 9200 }, kind = "braided", width = 20 } },
+    lakes  = { { at = { 7000, -7600 }, radius = 1500, level = -45, depth = 110, kind = "trench", islands = 0.5 } },
+    generate = { rivers = { count = 3 }, tributaries = 0.3, lakes = { count = 1, on_rivers = 1 } },
+    shapes = params.shapes,
+}
+local wet = net:apply(forms + detail, { detail = detail })
+return { height = { value = wet.height }, lakes = { value = wet.lakes }, rivers = { value = wet.rivers },
+         sea = { value = wet.sea } }
+```
+
+**Rivers.** `points` draws the course; `source` alone traces it down the terrain to the sea, a lake or the
+edge of the region. The level never rises downstream: it follows the lowest ground met so far, held under
+a graded profile (concave, the kind's `grade`), smoothed over 300 m. `width` (one number, or `{ at source,
+at mouth }`), `depth`, `roughness` (meanders and banks, 0 to 1) and `kind`, which decides the valley:
+
+| `kind` | Valley |
+| --- | --- |
+| `mountain` | a V at 30 degrees |
+| `canyon` | walls in benches, deeply incised (grade 3) |
+| `gorge` | sheer, narrow walls |
+| `glacial` | a U: a flat floor, then parabolic walls |
+| `lowland` | meanders, a floodplain a metre over the water, two terraces, levees |
+| `braided` | a wide bed of shallow threads and gravel bars |
+
+The valley is an envelope over the channel: the ground is lowered to the level plus the kind's profile
+of the distance, which flares so it meets the ground on a curve; it never raises ground, except the
+floodplain, which fills holes by up to 3 m. Its floor takes its level from the course without its
+meanders, so a wide floor is smooth.
+
+**Lakes.** `points` (an outline) or `at` and `radius`; `level` in metres, anywhere, under the sea level
+too, or `"auto"` (the lowest ground on the shore); `depth`, `islands` (0 to 1) and `kind`: `bowl`,
+`trench` (a shelf then cliffs down to a deep floor), `shelf` (shallow out to a drop-off), `crater` (a
+raised rim), `cirque`. The floor carries relief, a low rim keeps the water in and the ground around falls
+towards the lake at the kind's angle (cliffs for a trench).
+
+**The sea** is the ground under `sea_level` connected to the edge of the region. A closed depression
+under the sea level is not the sea: it stays dry or holds a lake. The `sea` output is its surface; with
+it the viewer draws the sea only there, not as a plane over everything below the level.
+
+**Generated** (`generate`): `rivers = { count = n }` or `{ density = d }` per 100 km² (0 for none) takes
+the longest courses to distinct mouths, `spacing` apart; `tributaries` (0 to 1) adds their largest side
+branches, which meet them at their level; `river = { kinds, width = { min, max }, min_length, head_area }`.
+`lakes = { count, area = { min, max }, altitude = { min, max }, kinds, islands, on_rivers }` fills the
+largest natural depressions and dams `on_rivers` valleys. With `kinds = "auto"` (the default) the kind is
+read from the ground: steep and high is `glacial` or `mountain`, a plateau `canyon`, flat `lowland`.
+`net:summary()` lists what was made, generated ones marked `*`.
+
+From `--shapes`, features of `kind = "river"` (lines, or a point for a source) and `kind = "lake"`
+(polygons) are added, with `river_kind`, `lake_kind`, `width`, `depth`, `level` and `roughness` as
+properties.
+
+Each river costs the graph about 30 nodes and each lake 40, out of 1024; `Water.Network` says so before
+it runs out. `assets/scripts/terrains/water_showcase.lua` shows every kind on one map.
 
 ## 11. Recipes
 

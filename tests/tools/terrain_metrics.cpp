@@ -189,13 +189,13 @@ int main(int argc, char** argv) {
     const double flat  = metrics::MeanSlopeInDepth(field, level, 2500.0, 1e9);
 
     if (!hillshade.empty()) {
-        // An export with `lakes` or `rivers` outputs has them tinted over the shading, lakes blue and rivers
-        // cyan, wherever the surface is above the ground.
+        // An export with `lakes`, `rivers` or `sea` outputs has them tinted over the shading, lakes blue, rivers
+        // cyan and the sea dark blue, wherever the surface is above the ground.
         const std::string                directory = path.substr(0, path.find_last_of("/\\"));
         const std::vector<std::uint8_t>  shade     = metrics::Hillshade(field, azimuth, elevation);
         std::vector<std::uint8_t>        rgb;
-        const std::array<const char*, 2> names{"/lakes.raw", "/rivers.raw"};
-        const std::array<std::array<int, 3>, 2> tints{{{40, 90, 230}, {0, 220, 230}}};
+        const std::array<const char*, 3> names{"/lakes.raw", "/rivers.raw", "/sea.raw"};
+        const std::array<std::array<int, 3>, 3> tints{{{40, 90, 230}, {0, 220, 230}, {20, 40, 120}}};
         for (std::size_t w = 0; w < names.size(); ++w) {
             metrics::Field surface;
             if (!metrics::LoadRaw(directory + names[w], field.width, field.depth, field.resolution, surface)) {

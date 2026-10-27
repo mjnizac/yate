@@ -40,6 +40,10 @@ What World Machine and Gaea practice agrees on (official docs and their forums, 
 * A base form should need little erosion: start from shaped primitives (Gaea's Mountain is a modulated
   Voronoi with distortion; here `Noises.Cellular` under a warp, or `Ranges.*`), not from raw fBm.
 * Rivers and lakes come before the general erosion and are kept out of it, or erosion fills them.
+  Water is designed, not simulated: `Water.Network` on the forms (no detail), then `net:apply(forms +
+  detail, { detail = detail })`; pick a river's `kind` for its valley and a lake's for its basin, and
+  `generate` with `count = 0` when the map should have none. A sub-sea basin that touches the region's
+  edge is sea.
 * Strong erosion on the mountain component, then a mild pass over the combined terrain to blend it.
   Erosion features have a size in metres (Gaea's Feature Scale); keep it fixed across resolutions.
 * Detail and erosion go only where masks select them: height, slope (`Masks.Slope`) and convexity

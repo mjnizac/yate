@@ -39,7 +39,8 @@ constexpr u32_t kSide = 64;
     return {.height = std::pmr::vector<f64_t>(r), .area = std::pmr::vector<f64_t>(r),
             .lake = std::pmr::vector<f64_t>(r), .riverDistance = std::pmr::vector<f64_t>(r),
             .riverWidth = std::pmr::vector<f64_t>(r), .riverDepth = std::pmr::vector<f64_t>(r),
-            .riverLevel = std::pmr::vector<f64_t>(r)};
+            .riverLevel = std::pmr::vector<f64_t>(r), .receiver = std::pmr::vector<i32_t>(r),
+            .sea = std::pmr::vector<u8_t>(r)};
 }
 
 [[nodiscard]] HydrologyParams Params() {

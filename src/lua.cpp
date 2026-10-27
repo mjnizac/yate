@@ -24,6 +24,7 @@
 #include <engine/prelude_files.hpp>
 #include <engine/terrain/graph.hpp>
 #include <engine/terrain/kernels.hpp>
+#include <engine/terrain/sampler.hpp>
 #include <engine/terrain/sha256.hpp>
 #include <engine/terrain/hydrology.hpp>
 #include <engine/terrain/stream_power.hpp>
@@ -348,6 +349,16 @@ public:
             }
             out.push_back(static_cast<T>(*value));
         }
+    }
+
+    /// How many entries the list `key` holds, for a list whose length is the caller's to read.
+    [[nodiscard]] usize_t Length(const char* key) {
+        Accept(key);
+        const sol::optional<sol::table> list = m_table[key];
+        if (!list.has_value()) {
+            Fail(m_location, "{} needs a list as '{}'", m_op, key);
+        }
+        return list->size();
     }
 
     [[nodiscard]] SourceLocation Location() const noexcept { return m_location; }
@@ -1063,6 +1074,47 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         return Handle{Unwrap(graph.AddGrid(position, values, params, location))};
     });
 
+    // The value a script built, evaluated on the CPU over a grid, so it can look at its own terrain before
+    // deciding something (see sampler.hpp). Returns a list, x fastest, the same layout Terrain.Grid takes.
+    terrain.set_function("Sample", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Terrain.Sample", location);
+        const Value          value  = args.Input("value");
+        const auto           size   = args.Pair("size", {0.0, 0.0});
+        const auto           origin = args.Pair("origin", {0.0, 0.0});
+        const f64_t          cell   = args.Number("cell", 50.0);
+        const f64_t          seed   = args.Number("seed", 0.0);
+        args.Finish();
+        if (!(value.mapping == Mapping{Domain::R2, 1})) {
+            Fail(location, "Terrain.Sample samples an R2->R1 value, got {}", ToString(value.mapping));
+        }
+        const u32_t width = static_cast<u32_t>(size[0]);
+        const u32_t depth = static_cast<u32_t>(size[1]);
+        if (width != size[0] || depth != size[1] || width < 1 || depth < 1
+            || static_cast<u64_t>(width) * depth > (4ull << 20) || !(cell > 0.0)) {
+            Fail(location, "Terrain.Sample expects size as whole numbers, at most 4 M samples, and a cell above zero");
+        }
+        std::pmr::vector<std::array<f32_t, 2>> positions(&memory::General().Resource());
+        positions.reserve(static_cast<usize_t>(width) * depth);
+        for (u32_t z = 0; z < depth; ++z) {
+            for (u32_t x = 0; x < width; ++x) {
+                positions.push_back({static_cast<f32_t>(origin[0] + x * cell), static_cast<f32_t>(origin[1] + z * cell)});
+            }
+        }
+        std::pmr::vector<f32_t> out(positions.size(), 0.0f, &memory::General().Resource());
+        if (Status ok = terrain::SampleGraph(graph, value, static_cast<u32_t>(static_cast<u64_t>(seed)),
+                                             static_cast<f32_t>(cell), positions, out);
+            !ok) {
+            Fail(location, "{}", ok.error().Message());
+        }
+        sol::state_view view(lua);
+        sol::table      list = view.create_table(static_cast<i32_t>(out.size()), 0);
+        for (usize_t i = 0; i < out.size(); ++i) {
+            list[i + 1] = static_cast<f64_t>(out[i]);
+        }
+        return list;
+    });
+
     // Stream-power erosion of a whole grid on the CPU (see stream_power.hpp). Takes and returns plain
     // lists of numbers, x fastest, so a script builds the grid, erodes it and hands it to Terrain.Grid.
     erosion.set_function("StreamPower", [](sol::this_state lua, sol::table table) {
@@ -1135,6 +1187,8 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
             .riverWidth    = std::pmr::vector<f64_t>(&memory::General().Resource()),
             .riverDepth    = std::pmr::vector<f64_t>(&memory::General().Resource()),
             .riverLevel    = std::pmr::vector<f64_t>(&memory::General().Resource()),
+            .receiver      = std::pmr::vector<i32_t>(&memory::General().Resource()),
+            .sea           = std::pmr::vector<u8_t>(&memory::General().Resource()),
         };
         if (Status ok = terrain::Drain(height, params, drained); !ok) {
             Fail(location, "{}", ok.error().Message());
@@ -1155,9 +1209,96 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         out["river_width"]    = list(drained.riverWidth);
         out["river_depth"]    = list(drained.riverDepth);
         out["river_level"]    = list(drained.riverLevel);
-        out["lakes"]          = drained.lakes;
-        out["rivers"]         = drained.rivers;
+        // Lua indices: the list index of the cell each cell drains to, 0 at an outlet.
+        sol::table receiver = view.create_table(static_cast<i32_t>(count), 0);
+        sol::table sea      = view.create_table(static_cast<i32_t>(count), 0);
+        for (usize_t i = 0; i < count; ++i) {
+            receiver[i + 1] = drained.receiver[i] + 1;
+            sea[i + 1]      = drained.sea[i] != 0;
+        }
+        out["receiver"] = receiver;
+        out["sea"]      = sea;
+        out["lakes"]    = drained.lakes;
+        out["rivers"]   = drained.rivers;
         return out;
+    });
+
+    // The fields an analytic river or lake is drawn from (see hydrology.hpp), computed on the CPU over
+    // the element's own bounds and handed to the sections as grids. Used by the `Water.*` prelude.
+    const auto gridOf = [&graph](const terrain::FieldGrid& field, Value position, SourceLocation location) {
+        Graph::GridParams params;
+        params.width   = field.width;
+        params.depth   = field.depth;
+        params.originX = static_cast<f32_t>(field.originX);
+        params.originZ = static_cast<f32_t>(field.originZ);
+        params.cell    = static_cast<f32_t>(field.cell);
+        std::pmr::vector<f32_t> values(field.values.size(), 0.0f, &memory::General().Resource());
+        std::transform(field.values.begin(), field.values.end(), values.begin(),
+                       [](f64_t v) { return static_cast<f32_t>(v); });
+        return Handle{Unwrap(graph.AddGrid(position, values, params, location))};
+    };
+    const auto fieldGrid = [] {
+        return terrain::FieldGrid{.values = std::pmr::vector<f64_t>(&memory::General().Resource())};
+    };
+    hydrology.set_function("CurveField", [&graph, gridOf, fieldGrid](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Hydrology.CurveField", location);
+        const usize_t        count = args.Length("xs");
+        std::pmr::vector<f64_t> xs(&memory::General().Resource());
+        std::pmr::vector<f64_t> zs(&memory::General().Resource());
+        std::pmr::vector<f64_t> levels(&memory::General().Resource());
+        std::pmr::vector<f64_t> halves(&memory::General().Resource());
+        args.Numbers("xs", count, xs);
+        args.Numbers("zs", count, zs);
+        args.Numbers("levels", count, levels);
+        args.Numbers("halves", count, halves);
+        // An optional axis the level is read from (see CurveFields).
+        std::pmr::vector<f64_t> axisXs(&memory::General().Resource());
+        std::pmr::vector<f64_t> axisZs(&memory::General().Resource());
+        std::pmr::vector<f64_t> axisLevels(&memory::General().Resource());
+        if (args.Has("axis_xs")) {
+            const usize_t axis = args.Length("axis_xs");
+            args.Numbers("axis_xs", axis, axisXs);
+            args.Numbers("axis_zs", axis, axisZs);
+            args.Numbers("axis_levels", axis, axisLevels);
+        }
+        const f64_t cell     = args.Number("cell", 10.0);
+        const f64_t margin   = args.Number("margin", 500.0);
+        const Value position = PositionOrCoords(args, graph, location);
+        args.Finish();
+        terrain::FieldGrid distance2 = fieldGrid();
+        terrain::FieldGrid along     = fieldGrid();
+        terrain::FieldGrid level     = fieldGrid();
+        terrain::FieldGrid half      = fieldGrid();
+        if (Status ok = terrain::CurveFields(xs, zs, levels, halves, cell, margin, distance2, along, level, half,
+                                             axisXs, axisZs, axisLevels);
+            !ok) {
+            Fail(location, "{}", ok.error().Message());
+        }
+        sol::state_view view(lua);
+        sol::table      out = view.create_table();
+        out["distance2"] = gridOf(distance2, position, location);
+        out["level"]     = gridOf(level, position, location);
+        out["half"]      = gridOf(half, position, location);
+        return out;
+    });
+    hydrology.set_function("PolygonField", [&graph, gridOf, fieldGrid](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Hydrology.PolygonField", location);
+        const usize_t        count = args.Length("xs");
+        std::pmr::vector<f64_t> xs(&memory::General().Resource());
+        std::pmr::vector<f64_t> zs(&memory::General().Resource());
+        args.Numbers("xs", count, xs);
+        args.Numbers("zs", count, zs);
+        const f64_t cell     = args.Number("cell", 20.0);
+        const f64_t margin   = args.Number("margin", 500.0);
+        const Value position = PositionOrCoords(args, graph, location);
+        args.Finish();
+        terrain::FieldGrid distance = fieldGrid();
+        if (Status ok = terrain::PolygonField(xs, zs, cell, margin, distance); !ok) {
+            Fail(location, "{}", ok.error().Message());
+        }
+        return gridOf(distance, position, location);
     });
 
     // Aeolian sand transport over a whole periodic grid on the CPU (see wind.hpp): dunes from the wind.

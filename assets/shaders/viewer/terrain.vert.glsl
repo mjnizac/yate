@@ -60,12 +60,15 @@ void main() {
         min(gridCoord * stride / max(quadsPerSide, 1u), uvec2(samples - 1u));
     uint  index = sampleCoord.y * samples + sampleCoord.x;
 
-    // The height buffer carries the lake and the river surfaces as two more planes after the height.
+    // The height buffer carries the lake, river and sea surfaces as three more planes after the height.
+    // The sea plane is read only when the script gave one (bit 28); otherwise the fragment stage draws
+    // the sea at the global level.
     float height = pc.heights.values[index];
     uint  plane  = samples * samples;
     float lake   = (pc.samples & 0x80000000u) != 0u ? pc.heights.values[plane + index] : -1e30;
     float river  = (pc.samples & 0x40000000u) != 0u ? pc.heights.values[2u * plane + index] : -1e30;
-    vWater       = max(lake, river);
+    float sea    = (pc.samples & 0x30000000u) == 0x30000000u ? pc.heights.values[3u * plane + index] : -1e30;
+    vWater       = max(max(lake, river), sea);
     vec3  normal = vec3(pc.normals.values[index * 3u], pc.normals.values[index * 3u + 1u],
                         pc.normals.values[index * 3u + 2u]);
 

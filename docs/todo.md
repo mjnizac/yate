@@ -89,9 +89,17 @@ viewer screenshot. Each item is done when it is in `ctest`.
       heightmap reference at all.
 - [x] **Rivers and lakes**: `Water.Drain` and `Water.Apply` give `lakes` and `rivers` outputs, drawn by
       the viewer's water with Sea, Lakes and Rivers toggles.
-- [ ] **Rivers and lakes in an unbounded world**: `Water.Drain` runs on one bounded grid and
-      `Terrain.Grid` holds its edge outside it. An infinite world needs the drainage tiled and
-      deterministic per tile, with the export taking only the region asked for.
+- [x] **Rivers and lakes as designed elements**: `Water.Network` (drawn, from `--shapes` or generated,
+      kinds of valley and basin, lakes at any level, the sea only where it reaches the edge).
+- [ ] **Generation over an unbounded world**: drawn elements work anywhere, but `generate` analyses one
+      `region`; the same region gives the same rivers in the viewer and in any export inside it. Rivers
+      everywhere without a region needs the analysis per fixed world cell, a river owned by the cell of
+      its source.
+- [ ] **The graph's 1024 nodes cap a script at about twenty rivers and lakes**: each costs 30 to 45
+      nodes. A fused carve op, or a larger node store (a stack and memory decision, see `graph.hpp`),
+      would lift it.
+- [ ] **Lakes found by the generator have star-shaped outlines** (the farthest cell in 32 directions),
+      which overreach in long, branching depressions.
 - [ ] **The macros do not drain yet**: `Lands`, `Ranges` and the cliffs leave their pits; give them
       `Water.Drain` and their own `lakes` and `rivers`.
 - [ ] **Later, if the above justifies it**: erosion by a hardness map, environmental layers for biomes
