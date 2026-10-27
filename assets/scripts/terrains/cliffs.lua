@@ -104,11 +104,12 @@ local function main(params)
         u = math.max(0.0, math.min(1.0, u))
         return u * u * (3.0 - 2.0 * u)
     end
-    local start, inland = {}, {}
+    local start, inland, shore = {}, {}, {}
     for zi = 0, n - 1 do
         for xi = 0, n - 1 do
             local px, pz = origin + xi * cell, origin + zi * cell
             local d = coastDistance(px, pz)
+            shore[#shore + 1] = d
             local h = d >= 0 and ease(d / 1400.0) * 650.0 * s or -160.0 * ease(-d / 1500.0)
             if d > 0 and d < 1400 then
                 for _, v in ipairs(valleys) do
@@ -128,8 +129,23 @@ local function main(params)
         size = { n, n }, cell = cell, height = start, uplift = still, iterations = 160, k = 0.016,
         m = 0.5, talus = 0.7, diffusion = 0.012 * cell * cell, refresh = 4,
     }
+    -- The shore, after the drainage and with the same distance, so it lands exactly on the coast (World
+    -- Machine's Coastal Erosion, Gaea's Sea): the headlands, exposed to the waves, end in a sea cliff of
+    -- 100 to 220 m that merges into the slope over 400 m; the bays, sheltered, are flattened to a 4 %
+    -- beach over their first 300 m, valley mouths included.
     for i = 1, #carvedRamp do
-        carvedRamp[i] = carvedRamp[i] + (start[i] - carvedRamp[i]) * inland[i]
+        local h = carvedRamp[i] + (start[i] - carvedRamp[i]) * inland[i]
+        local d = shore[i]
+        if d > 0 then
+            local px    = origin + ((i - 1) % n) * cell
+            local k     = math.floor((px + 9000) / 1250 + 0.5)
+            local head  = (0.5 + 0.5 * math.cos(math.pi * (px + 9000) / 1250)) * (0.6 + 0.4 * jitter(k, 7))
+            local cliff = (100.0 + 120.0 * math.abs(jitter(k, 8))) * s * head
+            h = h + cliff * (1.0 - ease(d / 400.0))
+            local beach = (1.0 - head) * (1.0 - ease(d / 300.0))
+            h = h + (math.min(h, d * 0.04) - h) * beach
+        end
+        carvedRamp[i] = h
     end
     -- Read through a broad warp: eight-direction routing on a square grid draws ruled channels.
     local slope = Terrain.Grid{
