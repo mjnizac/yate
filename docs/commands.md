@@ -257,6 +257,9 @@ everything. `--hillshade` writes a grey image with cast shadows from `--sun azim
 the top of the image, 90 from the right; rounded to 45 degrees): it judges geometry without the viewer's
 lighting. Put the sun in front of the faces you want to see; behind a 2 km wall it shades kilometres.
 
+`--pits out.png` writes the closed depressions as a white mask, which says what made them where their
+count does not.
+
 An 8-bit reference heightmap of unknown size can only be compared on scale-free numbers: the spectral
 slope and the hypsometric integral. Check first that it is heights and not shaded relief.
 

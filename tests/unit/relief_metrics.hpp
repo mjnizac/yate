@@ -27,6 +27,9 @@ struct ReliefOptions {
     double channelArea = 1e5;
     /// Depth, in metres, a filled cell must exceed to count as part of a closed depression.
     double pitDepth = 0.1;
+    /// When set, receives one byte per sample: 255 in a closed depression, 0 elsewhere. Where the pits
+    /// are says what made them; their count does not.
+    std::vector<std::uint8_t>* pitMask = nullptr;
 };
 
 struct Relief {
@@ -52,7 +55,8 @@ struct Relief {
     double spectralFit = 0.0;
     /// Spectral power on the axes over the power on the diagonals, each relative to its ring, in the
     /// upper band (a quarter to a half of the sampling rate): 1 for an isotropic surface, above it for
-    /// structure aligned with the grid. A spatial ratio of second
+    /// structure aligned with the grid. It cannot tell an artefact from a form that runs along an axis:
+    /// a straight coast along x reads in the thousands. A spatial ratio of second
     /// differences was tried first and rejected: it reads 1.38 on an isotropic band-limited field,
     /// because near the Nyquist rate a second difference is not isotropic.
     double axisDiagonalRatio = 0.0;
@@ -283,6 +287,12 @@ inline void Drainage(const Field& f, const ReliefOptions& o, Relief& r) {
     }
     r.pits     = pits.Count();
     r.pitShare = landCells == 0 ? 0.0 : static_cast<double>(pitCells) / static_cast<double>(landCells);
+    if (o.pitMask != nullptr) {
+        o.pitMask->assign(count, 0);
+        for (std::size_t i = 0; i < count; ++i) {
+            (*o.pitMask)[i] = pit[i] != 0 ? 255 : 0;
+        }
+    }
 
     // Steepest descent on the filled surface. Cells on the edge or in the sea are outlets.
     std::vector<std::int64_t> receiver(count, -1);

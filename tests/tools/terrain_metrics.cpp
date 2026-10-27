@@ -2,7 +2,7 @@
 //
 //   terrain_metrics <export dir or height.raw> [--width N --depth N --resolution M] [--level L]
 //                   [--no-sea] [--box kmin,kmax] [--block M] [--channel M2] [--json]
-//                   [--hillshade out.png [--sun azimuth,elevation]]
+//                   [--hillshade out.png [--sun azimuth,elevation]] [--pits out.png]
 //   terrain_metrics <reference.png> [--resolution M] [--vertical M] ...
 //
 // Given a directory it reads `metadata.json` for the size and the spacing. Given a PNG (8 or 16 bits,
@@ -86,6 +86,8 @@ int main(int argc, char** argv) {
     bool        json = false;
     metrics::ReliefOptions options;
     std::string hillshade;
+    std::string pitsPath;
+    std::vector<std::uint8_t> pitMask;
     double      azimuth = 315.0, elevation = 35.0;
     double      vertical = 255.0;
     for (int i = 2; i < argc; ++i) {
@@ -116,6 +118,8 @@ int main(int argc, char** argv) {
             options.channelArea = std::atof(next());
         } else if (arg == "--hillshade") {
             hillshade = next();
+        } else if (arg == "--pits") {
+            pitsPath = next();
         } else if (arg == "--vertical") {
             vertical = std::atof(next());
         } else if (arg == "--sun") {
@@ -170,7 +174,14 @@ int main(int argc, char** argv) {
         }
     }
     const metrics::Report r = metrics::Measure(field, level, boxMin, boxMax);
+    if (!pitsPath.empty()) {
+        options.pitMask = &pitMask;
+    }
     const metrics::Relief relief = metrics::MeasureRelief(field, options);
+    if (!pitsPath.empty() && !metrics::WriteGreyPng(pitsPath, pitMask, field.width, field.depth)) {
+        std::cerr << "terrain_metrics: cannot write " << pitsPath << "\n";
+        return 2;
+    }
 
     const double shelf = metrics::MeanSlopeInDepth(field, level, 0.0, 120.0);
     const double slope = metrics::MeanSlopeInDepth(field, level, 120.0, 2500.0);
