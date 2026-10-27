@@ -27,7 +27,7 @@ local function main(params)
     local bays    = params.bays or 0.6
     local columns = params.columns or 30.0
     local stage   = params.stage or 4
-    local gullies = params.gullies or 120.0
+    local gullies = params.gullies or 40.0
     local rough6  = params.roughness or 6.0
     local s       = top / 2250.0
     local c       = Terrain.Coords{}
@@ -69,12 +69,73 @@ local function main(params)
         return fill(curve(salt, z, spacing, wander), position)
     end
 
+    -- The valleys that reach the sea: the main ones in the bays, minor ones between them.
+    local valleys = {}
+    for i = 1, math.floor(18000 / 1250) do
+        local major = i % 2 == 1
+        valleys[#valleys + 1] = { i = i, major = major, x = -9000 + i * 1250 + (major and 200 or 450) * jitter(i, 5) }
+    end
     -- 1. Forms. The coast alternates headlands and bays 2.5 km apart, each a different depth; the tier
     -- edges are smoother and set back.
-    local coast = land(1, function(i)
+    local coastPoints = curve(1, function(i)
         return 2400 + (i % 2 == 0 and 1 or -1) * 700 * bays * (0.55 + 0.45 * jitter(i, 2))
     end, 1250, 150)
+    local coast = fill(coastPoints, c)
     local ramp  = Curves.Profile{ input = coast, kind = "smooth", width = 1400 } * (650 * s)
+
+    -- The lower slope carved by its own drainage, Gaea's first, structural erosion pass (real slopes
+    -- follow their river network, which a gully pattern does not): the ramp and the shelf are rebuilt
+    -- on a 256 grid in Lua, a shallow trench is seeded down each main valley so the valleys meet the
+    -- amphitheatres above them, and `Erosion.StreamPower` cuts it with no uplift. Inland of the ramp the
+    -- grid is put back as it was, so only the lower slope changes. The grid covers +-6.4 km.
+    local n, cell, origin = 256, 50.0, -6400.0
+    local function coastDistance(px, pz)
+        local best = math.huge
+        for i = 2, #coastPoints do
+            local a, b = coastPoints[i - 1], coastPoints[i]
+            local dx, dz = b[1] - a[1], b[2] - a[2]
+            local u = math.max(0.0, math.min(1.0, ((px - a[1]) * dx + (pz - a[2]) * dz) / (dx * dx + dz * dz)))
+            local ex, ez = px - a[1] - u * dx, pz - a[2] - u * dz
+            best = math.min(best, math.sqrt(ex * ex + ez * ez))
+        end
+        return pz < zAt(coastPoints, px) and best or -best
+    end
+    local function ease(u)
+        u = math.max(0.0, math.min(1.0, u))
+        return u * u * (3.0 - 2.0 * u)
+    end
+    local start, inland = {}, {}
+    for zi = 0, n - 1 do
+        for xi = 0, n - 1 do
+            local px, pz = origin + xi * cell, origin + zi * cell
+            local d = coastDistance(px, pz)
+            local h = d >= 0 and ease(d / 1400.0) * 650.0 * s or -160.0 * ease(-d / 1500.0)
+            if d > 0 and d < 1400 then
+                for _, v in ipairs(valleys) do
+                    if v.major then
+                        h = h - 30.0 * s * math.exp(-((px - v.x) / 220.0) ^ 2) * math.sin(math.pi * d / 1400.0)
+                    end
+                end
+            end
+            start[#start + 1]  = h
+            -- Kept as it was inland of the ramp and under the sea, where the drainage rippled the shelf.
+            inland[#inland + 1] = math.max(ease((d - 1150.0) / 250.0), ease(-d / 200.0))
+        end
+    end
+    local still = {}
+    for i = 1, #start do still[i] = 0.0 end
+    local carvedRamp = Erosion.StreamPower{
+        size = { n, n }, cell = cell, height = start, uplift = still, iterations = 160, k = 0.016,
+        m = 0.5, talus = 0.7, diffusion = 0.012 * cell * cell, refresh = 4,
+    }
+    for i = 1, #carvedRamp do
+        carvedRamp[i] = carvedRamp[i] + (start[i] - carvedRamp[i]) * inland[i]
+    end
+    -- Read through a broad warp: eight-direction routing on a square grid draws ruled channels.
+    local slope = Terrain.Grid{
+        values = carvedRamp, size = { n, n }, origin = { origin, origin }, cell = cell,
+        position = Shapes.Warp{ amplitude = 120.0, frequency = 1.0 / 1600.0, octaves = 2, seed = seed + 90 },
+    }
 
     -- Buttresses (stage 2) displace where the tier walls stand, at the scale of a column.
     local position = c
@@ -99,18 +160,13 @@ local function main(params)
     -- sea taken out of a tier's land in distance space and rounded into it, a U and not a keyhole: a
     -- circle left a narrow mouth. The main valleys are the bays'; minor ones lie between them and only
     -- reach the lower tiers. Most bite the lowest tier, half the second, a quarter the main wall.
-    local valleys = {}
-    for i = 1, math.floor(18000 / 1250) do
-        local major = i % 2 == 1
-        valleys[#valleys + 1] = { i = i, major = major, x = -9000 + i * 1250 + (major and 200 or 450) * jitter(i, 5) }
-    end
     local reach = { -0.6, 0.0, 0.5 }
     -- The capsules are drawn through a broad warp (an outline breakup, as World Machine's Shapes have),
     -- so the heads are not perfect half circles with parallel sides.
     -- Small against the notch (60 m over 1.2 km): 150 m over 700 m turned them into blobs.
     local breakup = Shapes.Warp{ amplitude = 60.0, frequency = 1.0 / 1200.0, octaves = 1, seed = seed + 70 }
     local notchAt = stage >= 2 and Vec.Combine{ breakup.x, breakup.y + (position - c).y } or breakup
-    local form = ramp
+    local form = slope
     local lost = 0.0
     local firstEdge = nil
     for k, tier in ipairs(tiers) do
@@ -149,7 +205,6 @@ local function main(params)
         local base  = Curves.Profile{ input = edge - run, kind = "linear", width = run }
         form = form + (cap * share + base * (1.0 - share)) * rise
     end
-    local shelf  = Curves.Smoothstep{ input = coast, min = 0.0, max = 1500.0 } * (-160.0)
     -- A regional slope with its divide on the main wall's edge (the same curve, without buttresses): in
     -- front of it every tread leans 1.2 % towards the sea, as benches do (flat ones held water); behind it
     -- the plateau is the back of a cuesta and dips 2 % inland. Both measured from one edge, so they meet
@@ -160,7 +215,7 @@ local function main(params)
     -- Not eased in: easing left a nearly flat band behind the edge where the plateau gullies, deeper than
     -- its slope, closed a row of pits. The crease it saves is a divide on top of a wall, out of sight.
     local back     = behind * (-0.02)
-    local ground   = form + shelf + back - front * 0.012
+    local ground   = form + back - front * 0.012
     -- Steepness of the form alone: what later stages use to tell walls from gentle ground.
     local walls  = Masks.Slope{ input = Terrain.Gradient{ input = Filters.Blur{ input = ground, radius = 2 } }, min = 0.6, max = 1.5 }
     if stage == 1 then
