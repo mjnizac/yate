@@ -37,16 +37,36 @@ local function main(params)
         local v = math.sin(i * 127.1 + salt * 311.7 + seed * 74.7) * 43758.5453
         return (v - math.floor(v)) * 2.0 - 1.0
     end
-    -- The land behind a smooth curve across the map: points from west to east at `z`, closed far inland.
-    local function land(salt, z, spacing, wander, position)
+    -- A smooth curve across the map: points from west to east at `z`.
+    local function curve(salt, z, spacing, wander)
         local points = {}
         for i = 0, math.floor(18000 / spacing) do
-            local x = -9000 + i * spacing
-            points[#points + 1] = { x, z(i) + wander * jitter(i, salt) }
+            points[#points + 1] = { -9000 + i * spacing, z(i) + wander * jitter(i, salt) }
         end
-        points[#points + 1] = { 9000, -20000 }
-        points[#points + 1] = { -9000, -20000 }
-        return Shapes.Spline{ points = points, closed = true, fill = true, subdivisions = 6, position = position }
+        return points
+    end
+    -- Where a curve crosses `x`, between its control points.
+    local function zAt(points, x)
+        for i = 2, #points do
+            if x <= points[i][1] then
+                local a, b = points[i - 1], points[i]
+                return a[2] + (b[2] - a[2]) * (x - a[1]) / (b[1] - a[1])
+            end
+        end
+        return points[#points][2]
+    end
+    -- The land behind a curve, closed far inland.
+    local function fill(points, position)
+        local closed = {}
+        for i, p in ipairs(points) do
+            closed[i] = p
+        end
+        closed[#closed + 1] = { 9000, -20000 }
+        closed[#closed + 1] = { -9000, -20000 }
+        return Shapes.Spline{ points = closed, closed = true, fill = true, subdivisions = 6, position = position }
+    end
+    local function land(salt, z, spacing, wander, position)
+        return fill(curve(salt, z, spacing, wander), position)
     end
 
     -- 1. Forms. The coast alternates headlands and bays 2.5 km apart, each a different depth; the tier
@@ -74,11 +94,37 @@ local function main(params)
     -- What the lower tiers lose the main wall gains, so the plateau stays at `top` and does not tilt with
     -- them (it did, by 5 degrees).
     local alongCoast = Vec.Combine{ c.x, Terrain.Const{ value = 0.0 } }
+    -- Re-entrants: the valleys that reach the sea have cut back into the escarpment as amphitheatres
+    -- (headward erosion: World Machine's Valley Cut, Gaea's Canyon walls). Each is a capsule open to the
+    -- sea taken out of a tier's land in distance space and rounded into it, a U and not a keyhole: a
+    -- circle left a narrow mouth. The main valleys are the bays'; minor ones lie between them and only
+    -- reach the lower tiers. Most bite the lowest tier, half the second, a quarter the main wall.
+    local valleys = {}
+    for i = 1, math.floor(18000 / 1250) do
+        local major = i % 2 == 1
+        valleys[#valleys + 1] = { i = i, major = major, x = -9000 + i * 1250 + (major and 200 or 450) * jitter(i, 5) }
+    end
+    local reach = { -0.6, 0.0, 0.5 }
+    -- The capsules are drawn through a broad warp (an outline breakup, as World Machine's Shapes have),
+    -- so the heads are not perfect half circles with parallel sides.
+    -- Small against the notch (60 m over 1.2 km): 150 m over 700 m turned them into blobs.
+    local breakup = Shapes.Warp{ amplitude = 60.0, frequency = 1.0 / 1200.0, octaves = 1, seed = seed + 70 }
+    local notchAt = stage >= 2 and Vec.Combine{ breakup.x, breakup.y + (position - c).y } or breakup
     local form = ramp
     local lost = 0.0
     local firstEdge = nil
     for k, tier in ipairs(tiers) do
-        local edge  = land(10 + k, function() return tier.z end, tier.spacing, tier.wander, position)
+        local points = curve(10 + k, function() return tier.z end, tier.spacing, tier.wander)
+        local edge   = fill(points, position)
+        for _, v in ipairs(valleys) do
+            if jitter(v.i, 30 + k) > reach[k] and (v.major or k < 3) then
+                local width = (v.major and 300 or 170) * (1.0 + 0.6 * math.abs(jitter(v.i, 40 + k))) * s
+                local depth = width * (1.2 + 0.8 * math.abs(jitter(v.i, 50 + k)))
+                local z     = zAt(points, v.x)
+                local trough = Shapes.Polyline{ points = { { v.x, z - depth + width }, { v.x + 150 * jitter(v.i, 60 + k), z + 3000 } }, position = notchAt }
+                edge = Combine.SmoothMax{ a = edge, b = width - trough, k = 80.0 }
+            end
+        end
         firstEdge   = firstEdge or edge
         local rise  = tier.rise * s
         if tier.vary == 0.0 then
