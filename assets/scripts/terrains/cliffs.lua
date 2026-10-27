@@ -169,6 +169,7 @@ local function main(params)
     local form = slope
     local lost = 0.0
     local firstEdge = nil
+    local aprons = {}
     for k, tier in ipairs(tiers) do
         local points = curve(10 + k, function() return tier.z end, tier.spacing, tier.wander)
         local edge   = fill(points, position)
@@ -203,7 +204,20 @@ local function main(params)
         local run   = tier.rise * s * 0.65 / math.tan(math.rad(50.0))
         local cap   = Curves.Profile{ input = edge, kind = "plateau", edge = 10, falloff = 60 * s }
         local base  = Curves.Profile{ input = edge - run, kind = "linear", width = run }
-        form = form + (cap * share + base * (1.0 - share)) * rise
+        local part  = (cap * share + base * (1.0 - share)) * rise
+        form = form + part
+        -- The talus apron (stage 3): a wedge at 35 degrees leaning on the base's foot, reaching 60 to
+        -- 200 m out, over the ground without this tier. Taking the larger of it and the terrain buries
+        -- the lower base in scree and never rises above the wall. Analytic, because the thermal pass
+        -- relaxes a wall hundreds of metres high too slowly to build one.
+        local spread = Noises.fBm{
+            frequency = 1.0 / 1800.0, octaves = 2, amplitude = 0.5, seed = seed + 100 + k, position = alongCoast,
+        }
+        local reach_ = (130.0 + 140.0 * spread.value) * s
+        local wedge  = Curves.Clamp{ input = (reach_ - (edge - run)) * math.tan(math.rad(35.0)), min = 0.0, max = 100000.0 }
+        -- Capped at a third of the tier's rise: uncapped, the wedge kept rising inland and buried the
+        -- plateau; capped by the tier's local height instead, it was nothing in front of the foot.
+        aprons[#aprons + 1] = { part = part, wedge = Combine.Min{ a = wedge, b = rise * 0.35 } }
     end
     -- A regional slope with its divide on the main wall's edge (the same curve, without buttresses): in
     -- front of it every tread leans 1.2 % towards the sea, as benches do (flat ones held water); behind it
@@ -273,8 +287,16 @@ local function main(params)
     local cut     = Combine.Blend{ a = rough, b = gullied, mask = gentle * below * Curves.Smoothstep{ input = coast, min = -1700.0, max = -1300.0 } }
     local eroded  = Erosion.Hydraulic{ input = cut, iterations = 24, rain = 0.5, capacity = 16.0 }
     local kept    = Combine.Min{ a = Combine.Blend{ a = cut, b = eroded, mask = gentle }, b = cut + 25.0 }
-    local talus   = Erosion.Thermal{ input = kept, iterations = 30, talus = math.tan(math.rad(36.0)), strength = 0.4 }
-    local settled = Combine.Max{ a = kept, b = Combine.Blend{ a = kept, b = talus, mask = gentle } }
+    -- Talus aprons: coarse debris lies at its angle of repose (about 35 degrees) and only at the foot of
+    -- steep ground (Gaea's coarse sediment). The thermal pass is kept only where it deposits, so the
+    -- walls lose nothing, but wherever it deposits, the foot of a wall included: kept on gentle ground
+    -- only, the debris that settles against the lower wall was thrown away and the aprons never formed.
+    -- Iterations are written for 2 m and scaled to the spacing; 100 reaches about 200 m at 8 m.
+    local talus   = Erosion.Thermal{ input = kept, iterations = 100, talus = math.tan(math.rad(35.0)), strength = 0.4 }
+    local settled = Combine.Max{ a = kept, b = talus }
+    for _, apron in ipairs(aprons) do
+        settled = Combine.Max{ a = settled, b = ground - apron.part + apron.wedge }
+    end
     if stage == 3 then
         return { height = { value = settled, range = { -400, 2400 } },
                  normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } } }
