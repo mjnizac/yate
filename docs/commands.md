@@ -195,6 +195,13 @@ water colour in proportion to the water in front of it, with a pale band where i
 build/Release/bin/terrain_viewer --script assets/scripts/terrains/island.lua --water --screenshot out/island.png
 ```
 
+Drawn shapes go in as GeoJSON with `--shapes`, in both executables; the viewer reloads when the file
+changes (see `docs/lua_reference.md`, "Drawn shapes"):
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/shapes/drawn.lua --shapes assets/shapes/valley.geojson --water
+```
+
 `--resolution` is metres per sample at the finest level and `--section` is samples per tile, so the two
 decide how much world one tile covers. `--ring` is how many tiles are kept on each side of the camera, so
 3 is a 7x7 ring of 49 tiles: at 128 samples and 2 m that is about 1.8 km across and takes roughly 45 ms

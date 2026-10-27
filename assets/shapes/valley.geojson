@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "kind": "land" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-3200, -1800], [-1800, -2600], [200, -2300], [1900, -2900], [3300, -1600], [3000, 400],
+          [3500, 2100], [1600, 3000], [-500, 2500], [-2400, 3100], [-3400, 1200], [-3200, -1800]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "kind": "ridge", "height": 650, "width": 1800 },
+      "geometry": { "type": "LineString", "coordinates": [[-2600, 1900], [-900, 1500], [700, 2000], [2400, 1500]] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "kind": "ridge", "height": 420, "width": 1400 },
+      "geometry": { "type": "LineString", "coordinates": [[-2300, -1500], [-400, -1300], [1500, -1900]] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "kind": "lake", "level": 70, "depth": 25 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[900, 100], [1500, -200], [1900, 300], [1400, 700], [900, 600], [900, 100]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "kind": "river", "width": 60, "depth": 6 },
+      "geometry": { "type": "LineString", "coordinates": [[1300, 350], [300, 150], [-900, 300], [-2200, -100], [-3600, 100]] }
+    }
+  ]
+}

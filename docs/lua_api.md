@@ -29,6 +29,7 @@ return main
 | `params.bounds.min`, `.max` | world-space bounds as `{ x, y, z }` |
 | `params.bounds.min_x` … `max_z` | the same values as named fields |
 | `params.<key>` | every `--param key=value`; a value that reads as a number is pushed as a number, anything else stays a string |
+| `params.shapes` | with `--shapes <file>`: the drawn shapes of a GeoJSON FeatureCollection, one table per feature with its properties (`kind` required), `geometry` (`point`, `line`, `polygon`), `points` as `{ x, z }` and `heights` when every position has a third value; see `assets/scripts/shapes/drawn.lua` |
 
 The return value maps output names to descriptions. `range` is required for a scalar output, because
 that is what it is normalized against for 16 bits; a vector output always remaps `[-1, 1]` and may be

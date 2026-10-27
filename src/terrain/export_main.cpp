@@ -31,6 +31,7 @@ void PrintUsage() {
         "  --png-level <0-9>      zlib level for PNG outputs (default 2)\n"
         "  --png-filter <f>       PNG row filter: none, up or all (default up)\n"
         "  --param key=value      script parameter, repeatable\n"
+        "  --shapes <file.json>   drawn shapes (GeoJSON) the script reads as params.shapes\n"
         "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"
         "  --log-format <text|json>  log encoding (default text)\n"
         "  --log-level <level>    trace, debug, info, warn, error or off (default info)\n"
@@ -114,6 +115,8 @@ struct Options {
 
         if (argument == "--script") {
             options.job.script = value;
+        } else if (argument == "--shapes") {
+            options.job.shapes = value;
         } else if (argument == "--out") {
             options.job.outputDirectory = value;
         } else if (argument == "--device") {

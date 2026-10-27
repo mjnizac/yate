@@ -78,6 +78,8 @@ struct ExportJob {
     /// Encoder effort for PNG outputs. See `PngCompression` for why the defaults are what they are.
     PngCompression png;
     Params params;
+    /// A GeoJSON file of drawn shapes, read into `params.shapes`; empty for none.
+    std::string_view shapes;
 };
 
 /// What an export produced, for the CLI log and for the dataset runner.

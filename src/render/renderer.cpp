@@ -646,6 +646,7 @@ struct Reload {
 struct ViewerLayer::State {
     Settings              settings;
     std::array<char, 512> scriptPath{};
+    std::array<char, 512> shapesPath{};
     terrain::Params       params;
 
     vulkan::Context*        context  = nullptr;
@@ -712,8 +713,8 @@ namespace {
 /// got one answer here and a different one from the exporter, so the preview showed terrain the export
 /// would never produce. Since the spacing changes with the level, the script is re-run when the level
 /// changes; that is why this takes the spacing rather than reading it from the settings.
-[[nodiscard]] Status LoadScript(LoadedGraph& loaded, std::string_view path, u64_t seed,
-                                const terrain::Params& params, f64_t resolution) {
+[[nodiscard]] Status LoadScript(LoadedGraph& loaded, std::string_view path, std::string_view shapes,
+                                u64_t seed, const terrain::Params& params, f64_t resolution) {
     const lua::ScriptEnvironment environment{.seed       = seed,
                                              .minX       = 0.0,
                                              .minY       = 0.0,
@@ -722,7 +723,8 @@ namespace {
                                              .maxY       = 0.0,
                                              .maxZ       = 0.0,
                                              .resolution = resolution,
-                                             .params     = &params};
+                                             .params     = &params,
+                                             .shapes     = shapes};
     if (Status ran = lua::RunScript(loaded.graph, path, environment); !ran) {
         return ran;
     }
@@ -744,6 +746,8 @@ ViewerLayer::ViewerLayer(Application& application, const Settings& settings)
     m_state->settings = settings;
     detail::CopyBounded(m_state->scriptPath, settings.script);
     m_state->settings.script = std::string_view{m_state->scriptPath.data()};
+    detail::CopyBounded(m_state->shapesPath, settings.shapes);
+    m_state->settings.shapes = std::string_view{m_state->shapesPath.data()};
     if (settings.params != nullptr) {
         m_state->params = *settings.params;
     }
@@ -895,7 +899,7 @@ void ViewerLayer::OnAttach() {
 
     // First load is synchronous: there is nothing to keep rendering yet, so there is no reason to defer
     // it and every reason to fail here rather than after the window has opened on an empty scene.
-    if (Status loaded = LoadScript(m_state->current, m_state->settings.script,
+    if (Status loaded = LoadScript(m_state->current, m_state->settings.script, m_state->settings.shapes,
                                    m_state->settings.seed, m_state->params,
                                    SpacingOf(m_state->settings.resolution, m_state->level));
         !loaded) {
@@ -923,7 +927,8 @@ void ViewerLayer::OnAttach() {
     // avoided. After that, streaming is bounded per frame.
     StreamTiles(~0u);
 
-    m_state->lastModifiedSeconds = FileModifiedSeconds(m_state->settings.script);
+    m_state->lastModifiedSeconds =
+        FileModifiedSeconds(m_state->settings.script) + FileModifiedSeconds(m_state->settings.shapes);
     m_state->lastWatchSeconds    = NowSeconds();
 
     // Before the UI: its backend installs a scroll callback that chains to whatever was there first, so
@@ -1188,7 +1193,9 @@ void ViewerLayer::UpdateReload() {
     // syntax error the user never made.
     if (now - state.lastWatchSeconds >= kWatchIntervalSeconds) {
         state.lastWatchSeconds       = now;
-        const f64_t modified         = FileModifiedSeconds(state.settings.script);
+        // The shapes file is watched with the script: a change to either changes the terrain.
+        const f64_t modified = FileModifiedSeconds(state.settings.script)
+                               + FileModifiedSeconds(state.settings.shapes);
         if (modified != 0.0 && modified != state.lastModifiedSeconds) {
             state.lastModifiedSeconds = modified;
             state.pendingSinceSeconds = now;
@@ -1211,8 +1218,8 @@ void ViewerLayer::UpdateReload() {
         platform::SetThreadName("engine-reload");
         // Emptied every time, so a script that fails halfway cannot leave half its nodes behind.
         state.pending.Reset();
-        if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.seed,
-                                       params,
+        if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.shapes,
+                                       state.settings.seed, params,
                                        SpacingOf(state.settings.resolution, state.pendingLevel));
             !loaded) {
             state.reload.error  = loaded.error();

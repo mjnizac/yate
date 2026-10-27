@@ -312,6 +312,8 @@ struct ExportMetadata {
     /// SHA-256 over the engine's Lua prelude. The script's own hash does not describe the terrain by
     /// itself, because `Landforms.Cone` is code the engine supplies.
     std::array<char, 65> preludeHash{};
+    /// SHA-256 over the `--shapes` file, empty when there is none: drawn shapes are terrain input too.
+    std::array<char, 65> shapesHash{};
 
     u64_t seed       = 0;
     f64_t minX       = 0.0;

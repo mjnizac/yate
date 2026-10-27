@@ -37,6 +37,9 @@ struct ScriptEnvironment {
     f64_t timeoutSeconds = 60.0;
     /// User parameters, exposed to the script as named fields of `params`.
     const terrain::Params* params = nullptr;
+    /// A GeoJSON FeatureCollection of drawn shapes, validated and given to the script as `params.shapes`;
+    /// empty for none. Data only: nothing in the file runs.
+    std::string_view shapes;
 };
 
 /// Loads `path`, calls its `main(params)` and fills `graph` with the nodes and outputs it declared.

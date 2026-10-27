@@ -33,7 +33,9 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -1424,6 +1426,298 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     return params;
 }
 
+// --- Drawn shapes --------------------------------------------------------------------------------
+
+/// Strict JSON read straight into Lua values: objects as tables keyed by name, arrays as lists, `null`
+/// as an absent field. Data only, so nothing in the file can run; nesting and size are bounded.
+class JsonReader {
+public:
+    JsonReader(sol::state& state, std::string_view text) : m_state(state), m_text(text) {}
+
+    [[nodiscard]] sol::object Document() {
+        sol::object value = Value(0);
+        Space();
+        if (m_at < m_text.size()) {
+            return Fail("text after the end of the document");
+        }
+        return value;
+    }
+    [[nodiscard]] const std::string& Problem() const { return m_problem; }
+    [[nodiscard]] u32_t Line() const { return m_line; }
+
+private:
+    static constexpr u32_t kMaxDepth = 32;
+
+    sol::object Fail(std::string_view what) {
+        if (m_problem.empty()) {
+            m_problem = what;
+            m_line    = 1 + static_cast<u32_t>(std::count(m_text.begin(), m_text.begin() + static_cast<std::ptrdiff_t>(m_at), '\n'));
+        }
+        m_at = m_text.size() + 1;
+        return sol::lua_nil;
+    }
+    void Space() {
+        while (m_at < m_text.size() && std::strchr(" \t\r\n", m_text[m_at]) != nullptr) {
+            ++m_at;
+        }
+    }
+    [[nodiscard]] b8_t Eat(char c) {
+        Space();
+        if (m_at < m_text.size() && m_text[m_at] == c) {
+            ++m_at;
+            return true;
+        }
+        return false;
+    }
+    [[nodiscard]] b8_t Word(std::string_view word) {
+        if (m_text.substr(m_at, word.size()) != word) {
+            return false;
+        }
+        m_at += word.size();
+        return true;
+    }
+    sol::object Value(u32_t depth) {
+        Space();
+        if (depth > kMaxDepth || m_at >= m_text.size()) {
+            return Fail(depth > kMaxDepth ? "nested more than 32 deep" : "unexpected end of the document");
+        }
+        const char c = m_text[m_at];
+        if (c == '{' || c == '[') {
+            return Container(depth, c == '{');
+        }
+        if (c == '"') {
+            std::string text;
+            return String(text) ? sol::make_object(m_state, text) : sol::object(sol::lua_nil);
+        }
+        if (Word("true")) {
+            return sol::make_object(m_state, true);
+        }
+        if (Word("false")) {
+            return sol::make_object(m_state, false);
+        }
+        if (Word("null")) {
+            return sol::lua_nil;
+        }
+        const usize_t start = m_at;
+        while (m_at < m_text.size() && std::strchr("+-0123456789.eE", m_text[m_at]) != nullptr) {
+            ++m_at;
+        }
+        f64_t number = 0.0;
+        const auto [end, failure] = std::from_chars(m_text.data() + start, m_text.data() + m_at, number);
+        if (m_at == start || failure != std::errc{} || end != m_text.data() + m_at || !std::isfinite(number)) {
+            m_at = start;
+            return Fail("expected a value");
+        }
+        return sol::make_object(m_state, number);
+    }
+    sol::object Container(u32_t depth, b8_t object) {
+        ++m_at;
+        sol::table table = m_state.create_table();
+        const char close = object ? '}' : ']';
+        if (Eat(close)) {
+            return table;
+        }
+        for (usize_t index = 1;; ++index) {
+            std::string key;
+            if (object && (!(Space(), m_at < m_text.size() && m_text[m_at] == '"') || !String(key) || !Eat(':'))) {
+                return Fail("expected \"name\": in an object");
+            }
+            sol::object value = Value(depth + 1);
+            if (!m_problem.empty()) {
+                return sol::lua_nil;
+            }
+            if (object) {
+                table[key] = value;
+            } else if (value == sol::lua_nil) {
+                return Fail("null in a list");
+            } else {
+                table[index] = value;
+            }
+            if (Eat(close)) {
+                return table;
+            }
+            if (!Eat(',')) {
+                return Fail(object ? "expected , or } in an object" : "expected , or ] in a list");
+            }
+        }
+    }
+    [[nodiscard]] b8_t String(std::string& out) {
+        ++m_at;
+        while (m_at < m_text.size() && m_text[m_at] != '"') {
+            const char c = m_text[m_at++];
+            if (static_cast<unsigned char>(c) < 0x20) {
+                Fail("a control character inside a string");
+                return false;
+            }
+            if (c != '\\') {
+                out.push_back(c);
+                continue;
+            }
+            const char e = m_at < m_text.size() ? m_text[m_at++] : '\0';
+            const char* from = "\"\\/bfnrt";
+            const char* to   = "\"\\/\b\f\n\r\t";
+            if (const char* hit = std::strchr(from, e); hit != nullptr && e != '\0') {
+                out.push_back(to[hit - from]);
+            } else if (e == 'u' && m_at + 4 <= m_text.size()) {
+                u32_t code = 0;
+                if (std::from_chars(m_text.data() + m_at, m_text.data() + m_at + 4, code, 16).ptr
+                    != m_text.data() + m_at + 4) {
+                    Fail("a bad \\u escape");
+                    return false;
+                }
+                m_at += 4;
+                // UTF-8 for the basic plane; names and kinds are ASCII in practice.
+                if (code < 0x80) {
+                    out.push_back(static_cast<char>(code));
+                } else if (code < 0x800) {
+                    out.push_back(static_cast<char>(0xC0 | (code >> 6)));
+                    out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+                } else {
+                    out.push_back(static_cast<char>(0xE0 | (code >> 12)));
+                    out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                    out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+                }
+            } else {
+                Fail("a bad escape in a string");
+                return false;
+            }
+        }
+        if (m_at >= m_text.size()) {
+            Fail("a string that never ends");
+            return false;
+        }
+        ++m_at;
+        return true;
+    }
+
+    sol::state&      m_state;
+    std::string_view m_text;
+    usize_t          m_at = 0;
+    std::string      m_problem;
+    u32_t            m_line = 0;
+};
+
+/// Reads the drawn shapes: a GeoJSON FeatureCollection whose features are a `Point`, a `LineString` or a
+/// one-ring `Polygon` with a string `properties.kind`. Each becomes a table with its properties (numbers,
+/// strings and booleans), `geometry` (`"point"`, `"line"` or `"polygon"`), `points`, a list of `{ x, z }`
+/// in world metres (GeoJSON's second coordinate is the world z), and `heights` when every position gives a
+/// third value. A polygon's closing point, the same as its first, is dropped.
+[[nodiscard]] Result<sol::table> ReadShapes(sol::state& state, std::string_view path) {
+    constexpr usize_t kMaxBytes = 16u << 20;
+    const std::string file(path);
+    std::ifstream     stream(file, std::ios::binary);
+    if (!stream) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Script, path, 0,
+                                               "cannot read the shapes file"));
+    }
+    const std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    if (text.size() > kMaxBytes) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Script, path, 0,
+                                               "the shapes file is over 16 MiB"));
+    }
+    JsonReader        reader(state, text);
+    const sol::object document = reader.Document();
+    if (!reader.Problem().empty()) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Script, path,
+                                               reader.Line(), "shapes: {}", reader.Problem()));
+    }
+    const auto fail = [&](usize_t feature, std::string_view what) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Script, path, 0,
+                                               "shapes, feature {}: {}", feature, what));
+    };
+    const auto textOf = [](const sol::table& t, const char* key) {
+        const sol::optional<std::string> value = t[key];
+        return value.value_or(std::string{});
+    };
+    const sol::optional<sol::table> root = document.as<sol::optional<sol::table>>();
+    if (!root || textOf(*root, "type") != "FeatureCollection" || (*root)["features"].get_type() != sol::type::table) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Script, path, 0,
+                                               "shapes: expected a GeoJSON FeatureCollection with a 'features' list"));
+    }
+    sol::table       shapes   = state.create_table();
+    const sol::table features = (*root)["features"];
+    for (usize_t f = 1; f <= features.size(); ++f) {
+        const sol::optional<sol::table> feature = features[f];
+        if (!feature || textOf(*feature, "type") != "Feature") {
+            return fail(f, "not a Feature");
+        }
+        const sol::optional<sol::table> geometry   = (*feature)["geometry"];
+        const sol::optional<sol::table> properties = (*feature)["properties"];
+        if (!geometry || !properties || textOf(*properties, "kind").empty()) {
+            return fail(f, "needs a geometry and properties with a string 'kind'");
+        }
+        sol::table shape = state.create_table();
+        for (const auto& [key, value] : *properties) {
+            const std::string name = key.as<std::string>();
+            if (value.get_type() == sol::type::table || name == "geometry" || name == "points"
+                || name == "heights") {
+                return fail(f, "properties are numbers, strings or booleans, and not named 'geometry', "
+                               "'points' or 'heights'");
+            }
+            shape[name] = value;
+        }
+
+        // The positions: one for a Point, the list for a LineString, the one ring for a Polygon.
+        const std::string         type    = textOf(*geometry, "type");
+        const b8_t                polygon = type == "Polygon";
+        sol::optional<sol::table> list    = (*geometry)["coordinates"];
+        if (type == "Point") {
+            list = state.create_table_with(1, (*geometry)["coordinates"]);
+        } else if (polygon && list) {
+            if (list->size() != 1) {
+                return fail(f, "a Polygon with holes is not supported: give it one ring");
+            }
+            list = (*list)[1].get<sol::optional<sol::table>>();
+        } else if (type != "LineString") {
+            return fail(f, "the geometry is a Point, a LineString or a Polygon");
+        }
+        usize_t count = list ? list->size() : 0;
+        // A ring repeats its first position at the end; the shapes take the ring without it.
+        const auto coordinate = [&](usize_t i, usize_t k) {
+            const sol::optional<sol::table> p = (*list)[i];
+            return p ? (*p)[k].get<sol::optional<f64_t>>() : sol::nullopt;
+        };
+        if (polygon && count >= 2 && coordinate(1, 1) && coordinate(1, 1) == coordinate(count, 1)
+            && coordinate(1, 2) == coordinate(count, 2)) {
+            --count;
+        }
+        const usize_t least = type == "Point" ? 1 : polygon ? 3 : 2;
+        if (count < least) {
+            return fail(f, polygon ? "a Polygon needs at least three points" : "a LineString needs at least two points");
+        }
+        // Each position is [x, z] or [x, z, height]: the pair goes to `points` and the height, when every
+        // position has one, to `heights`.
+        sol::table points  = state.create_table();
+        sol::table heights = state.create_table();
+        usize_t    high    = 0;
+        for (usize_t i = 1; i <= count; ++i) {
+            const sol::optional<sol::table> p = (*list)[i];
+            const usize_t                   n = p ? p->size() : 0;
+            const sol::optional<f64_t>      x = p ? (*p)[1].get<sol::optional<f64_t>>() : sol::nullopt;
+            const sol::optional<f64_t>      z = p ? (*p)[2].get<sol::optional<f64_t>>() : sol::nullopt;
+            const sol::optional<f64_t>      y = n == 3 ? (*p)[3].get<sol::optional<f64_t>>() : sol::nullopt;
+            if (n < 2 || n > 3 || !x || !z || (n == 3 && !y)) {
+                return fail(f, "a position is [x, z] or [x, z, height]");
+            }
+            points[i] = state.create_table_with(1, *x, 2, *z);
+            if (y) {
+                heights[i] = *y;
+                ++high;
+            }
+        }
+        if (high != 0 && high != count) {
+            return fail(f, "give every position a height or none");
+        }
+        shape["geometry"] = type == "Point" ? "point" : polygon ? "polygon" : "line";
+        shape["points"]   = points;
+        if (high != 0) {
+            shape["heights"] = heights;
+        }
+        shapes[f] = shape;
+    }
+    return shapes;
+}
+
 // --- Output requests ----------------------------------------------------------------------------
 
 /// Reads the table `main` returned into the graph's output requests.
@@ -1751,7 +2045,15 @@ Status RunScript(Graph& graph, std::string_view path, const ScriptEnvironment& e
                                                "the script defines no main(params)"));
     }
 
-    const sol::protected_function_result returned = main(MakeParams(state, environment));
+    sol::table params = MakeParams(state, environment);
+    if (!environment.shapes.empty()) {
+        Result<sol::table> shapes = ReadShapes(state, environment.shapes);
+        if (!shapes) {
+            return std::unexpected(shapes.error());
+        }
+        params["shapes"] = *shapes;
+    }
+    const sol::protected_function_result returned = main(params);
     if (!returned.valid()) {
         return std::unexpected(ErrorFrom(returned, path, "main failed"));
     }

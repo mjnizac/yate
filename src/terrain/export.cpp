@@ -522,7 +522,8 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
                                              .maxY       = job.maxY,
                                              .maxZ       = job.maxZ,
                                              .resolution = job.resolution,
-                                             .params     = &job.params};
+                                             .params     = &job.params,
+                                             .shapes     = job.shapes};
     const Clock::time_point      scriptStart = Clock::now();
     if (Status built = lua::RunScript(graph, job.script, environment); !built) {
         return std::unexpected(built.error());
@@ -927,6 +928,13 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
             return std::unexpected(preludeHash.error());
         }
         metadata.preludeHash = *preludeHash;
+        if (!job.shapes.empty()) {
+            Result<std::array<char, 65>> shapesHash = HashFile(job.shapes);
+            if (!shapesHash) {
+                return std::unexpected(shapesHash.error());
+            }
+            metadata.shapesHash = *shapesHash;
+        }
     }
     metadata.seed               = job.seed;
     metadata.minX               = job.minX;

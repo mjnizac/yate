@@ -78,6 +78,9 @@ public:
         u32_t gridVertices = 128;
         /// User parameters the script receives, as `--param` does for the exporter.
         const terrain::Params* params = nullptr;
+        /// Drawn shapes (GeoJSON) the script reads as `params.shapes`; empty for none. Watched like the
+        /// script.
+        std::string_view       shapes;
         Water                  water;
         View                   view;
     };

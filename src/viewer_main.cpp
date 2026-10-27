@@ -36,6 +36,8 @@ void PrintUsage() {
                "  --section <n>          samples per tile side (default 128)\n"
                "  --grid <n>             drawn vertices per tile side (default 128)\n"
                "  --param key=value      script parameter, repeatable\n"
+               "  --shapes <file.json>   drawn shapes (GeoJSON) the script reads as params.shapes,\n"
+               "                         watched and reloaded like the script\n"
                "  --view yaw,pitch,dist  start the orbit camera here: degrees, degrees, metres\n"
                "  --target x,y,z         the point the camera orbits (default 0,0,0)\n"
                "  --water                draw water at the water level (off by default)\n"
@@ -219,6 +221,8 @@ template <typename T>
 
         if (argument == "--script") {
             options.viewer.script = value;
+        } else if (argument == "--shapes") {
+            options.viewer.shapes = value;
         } else if (argument == "--seed") {
             if (Status ok = ParseInto(argument, value, options.viewer.seed, ~0ull); !ok) {
                 return std::unexpected(ok.error());

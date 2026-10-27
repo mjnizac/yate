@@ -459,6 +459,95 @@ return main
     CHECK(graph.NodeCount() >= 7);
 }
 
+/// Runs a script that checks `params.shapes` against `--shapes` set to `json`.
+[[nodiscard]] Status RunWithShapes(const char* name, std::string_view json, std::string_view source) {
+    const std::string shapes = std::string(kDirectory) + "/" + name + ".json";
+    std::FILE*        file   = std::fopen(shapes.c_str(), "wb");
+    if (file != nullptr) {
+        (void)std::fwrite(json.data(), 1, json.size(), file);
+        (void)std::fclose(file);
+    }
+    const std::string      path = WriteScript(name, source);
+    Graph                  graph;
+    lua::ScriptEnvironment environment;
+    environment.maxX   = 256.0;
+    environment.maxZ   = 256.0;
+    environment.shapes = shapes;
+    return lua::RunScript(graph, path, environment);
+}
+
+/// The message of a failed run, or empty.
+[[nodiscard]] std::string MessageOf(const Status& status) {
+    return status.has_value() ? std::string{} : std::string{status.error().Format().data()};
+}
+
+void TestShapes() {
+    test::Section("drawn shapes arrive as params.shapes, and a bad file is named");
+
+    // A polygon with its closing point, a line with heights and a point, read back field by field.
+    constexpr const char* kScript = R"(local function main(params)
+    local s = params.shapes
+    local coast, river, peak = s[1], s[2], s[3]
+    if #s ~= 3 or coast.kind ~= "coast" or coast.geometry ~= "polygon" or #coast.points ~= 3
+        or coast.points[2][1] ~= 100 or coast.points[2][2] ~= -50 or coast.sharp ~= true
+        or river.geometry ~= "line" or river.width ~= 30 or river.heights[2] ~= 12.5 or #river.points[2] ~= 2
+        or peak.geometry ~= "point" or peak.name ~= "Pico" then
+        error("the shapes were not read as written")
+    end
+    return { height = { value = Noises.fBm{ frequency = 0.01 }.value, range = { -1, 1 } } }
+end
+return main
+)";
+    const Status good = RunWithShapes("shapes_good", R"({"type": "FeatureCollection", "features": [
+  {"type": "Feature", "properties": {"kind": "coast", "sharp": true},
+   "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [100, -50], [0, 100], [0, 0]]]}},
+  {"type": "Feature", "properties": {"kind": "river", "width": 30},
+   "geometry": {"type": "LineString", "coordinates": [[0, 0, 20], [10, 5, 12.5]]}},
+  {"type": "Feature", "properties": {"kind": "peak", "name": "Pico", "note": null},
+   "geometry": {"type": "Point", "coordinates": [3, 4]}}
+]})",
+                                      kScript);
+    Expect(good.has_value(), "shapes_good", "a valid FeatureCollection is accepted and read as written");
+    if (!good.has_value()) {
+        std::printf("     shapes_good: %s\n", MessageOf(good).c_str());
+    }
+
+    const char* trivial =
+        "return function() return { height = { value = Noises.fBm{}.value, range = { -1, 1 } } } end\n";
+    const struct {
+        const char* name;
+        const char* json;
+        const char* fragment;
+    } cases[] = {
+        {"shapes_syntax", "{\"type\": \"FeatureCollection\",\n \"features\": [}", "expected a value"},
+        {"shapes_not_collection", "{\"type\": \"Feature\"}", "FeatureCollection"},
+        {"shapes_no_kind", R"({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
+            "geometry": {"type": "Point", "coordinates": [0, 0]}}]})",
+         "feature 1: needs a geometry and properties with a string 'kind'"},
+        {"shapes_hole", R"({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"kind": "lake"},
+            "geometry": {"type": "Polygon", "coordinates": [[[0,0],[1,0],[0,1],[0,0]], [[0,0],[1,0],[0,1],[0,0]]]}}]})",
+         "holes"},
+        {"shapes_position", R"({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"kind": "ridge"},
+            "geometry": {"type": "LineString", "coordinates": [[0, 0], [1]]}}]})",
+         "[x, z] or [x, z, height]"},
+        {"shapes_nested", R"({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"kind": "a", "b": {}},
+            "geometry": {"type": "Point", "coordinates": [0, 0]}}]})",
+         "numbers, strings or booleans"},
+    };
+    for (const auto& c : cases) {
+        const std::string message = MessageOf(RunWithShapes(c.name, c.json, trivial));
+        const b8_t        found   = message.find(c.fragment) != std::string::npos
+                                    && message.find(std::string(c.name) + ".json") != std::string::npos;
+        Expect(found, c.name, c.fragment);
+        if (!found) {
+            std::printf("     %s: expected '%s' and the file in: %s\n", c.name, c.fragment, message.c_str());
+        }
+    }
+    // The line of a syntax error is the line in the shapes file.
+    const Status syntax = RunWithShapes("shapes_syntax", "{\"type\": \"FeatureCollection\",\n \"features\": [}", trivial);
+    Expect(!syntax.has_value() && syntax.error().line == 2, "shapes_syntax", "the syntax error is on line 2");
+}
+
 } // namespace
 
 int main() {
@@ -475,6 +564,7 @@ int main() {
     TestSandbox();
     TestPlaneAxis();
     TestGoodScriptPasses();
+    TestShapes();
 
     // Every state is created and destroyed inside RunScript, so nothing may be left behind.
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});

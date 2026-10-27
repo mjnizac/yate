@@ -92,6 +92,17 @@ returns a handle immediately, and the engine evaluates once, on the GPU, after t
 | `params.resolution` | metres per sample |
 | `params.bounds.min`, `.max` | world bounds as `{ x, y, z }`, also as `min_x` … `max_z` |
 | `params.<key>` | every `--param key=value`; numeric-looking values arrive as numbers |
+| `params.shapes` | with `--shapes <file>`: drawn shapes, below |
+
+**Drawn shapes.** `--shapes <file.geojson>` (exporter and viewer; the viewer reloads when it changes)
+reads a GeoJSON FeatureCollection drawn in any editor (geojson.io, QGIS). It is data only and is checked
+before the script runs: features are a `Point`, a `LineString` or a one-ring `Polygon`, positions are
+`[x, z]` or `[x, z, height]` in world metres, and `properties` hold numbers, strings and booleans with a
+string `kind`. The script gets `params.shapes`, a list of
+`{ kind = ..., geometry = "point" | "line" | "polygon", points = { { x, z }, ... }, heights = { ... }, <properties> }`,
+with a polygon's closing point dropped; what a `kind` means is the script's to decide. The sidecar records
+the file's SHA-256 as `shapes_hash`. `assets/scripts/shapes/drawn.lua` with `assets/shapes/valley.geojson`
+is the worked example (land, ridge, lake with `level`, river).
 
 Each output is `{ value = <handle>, range = { lo, hi } }`. `range` is required for a scalar output
 because that is what the 16-bit file is normalised against; a vector output always remaps `[-1, 1]` and
