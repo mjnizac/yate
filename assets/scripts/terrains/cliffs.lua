@@ -5,20 +5,23 @@
 --
 -- Built in stages, each one reviewable on its own with `--param stage=N`:
 --
---   1. Forms, no noise: the coast and three tier edges are drawn curves; each is a polygon's signed
---      distance through a plateau profile. Dimensions are the World Machine graph this example first
---      followed: a plateau at `top` (2250 m), a lower slope of 650 m over 1.4 km, tiers of 500, 500 and
---      600 m with walls about 70 degrees, spurs and bays 2.5 km apart, a shelf to -160 m.
---   2. Structure: buttresses move the tier edges sideways at the scale of a column, so the pattern runs
---      down the face; strata move ground along the slope (World Machine's Strata), so they show on the
---      faces and not on the plateau: flat beds every 80 m and beds dipping 30 degrees every 380 m.
+--   1. Forms: the coast and three tier edges are drawn curves, each a polygon's signed distance; the
+--      tiers are a vertical cap rock over a 50 degree base, cut by amphitheatre re-entrants where the
+--      valleys reach them; the lower slope is carved by its own drainage (`Erosion.StreamPower` on a
+--      256 grid), with sea cliffs on the headlands and beaches in the bays. Dimensions are the World
+--      Machine graph this example first followed: a plateau at `top` (2250 m), a lower slope of 650 m
+--      over 1.4 km, tiers of 500, 500 and 600 m, spurs and bays 2.5 km apart, a shelf to -160 m.
+--   2. Structure: the walls break along distorted F3 - F1 cracks into blocks; strata move ground along
+--      the slope (World Machine's Strata), so they show on the faces and not on the plateau: beds of
+--      irregular thickness every 80 m and beds dipping 15 to 45 degrees every 380 m.
 --   3. Erosion, coarse to fine, with the walls protected: 6 m of detail on gentle ground first, so the
---      erosion drains it, then gullies on the lower slope, water erosion on
---      gentle ground with its deposit capped, talus at the foot of the walls.
---   4. Detail: 2 m of fine noise on the walls; the gentle ground got its 6 m before the erosion.
+--      erosion drains it, then fine gullies, water erosion on gentle ground with its deposit capped,
+--      talus aprons at 35 degrees against every wall foot (larger under the chutes), a last light pass.
+--   4. Detail: the walls opened into blocks and 2 m of fine noise on them.
 --
--- The land rises towards -z so the faces look at the viewer's sun. Parameters: `top` (metres), `bays`
--- (0 to 1, how deep the bays are), `columns` (metres the buttresses stand out), `gullies` and
+-- Outputs besides height and normals, for texturing: `strata` (which 80 m bed) and `debris` (where scree
+-- and fans lie). The land rises towards -z so the faces look at the viewer's sun. Parameters: `top`
+-- (metres), `bays` (0 to 1, how deep the bays are), `columns` (metres the walls break out), `gullies` and
 -- `roughness` (metres of gully cut and of lower-slope detail), `stage` (1 to 4).
 
 local function main(params)
@@ -356,6 +359,13 @@ local function main(params)
     for _, apron in ipairs(aprons) do
         settled = Combine.Max{ a = settled, b = ground - apron.part + apron.wedge }
     end
+    -- The debris, as the difference between before and after the deposits (Gaea's Super Erosion keeps
+    -- that difference rather than the eroded terrain): an output for texturing scree and fans.
+    local debris = Curves.Clamp{ input = (settled - kept) / 40.0, min = 0.0, max = 1.0 }
+    -- The last, fine pass of coarse to fine (Gaea's third, texture pass): short and light, on gentle ground
+    -- and capped, so it evens the scree and the gully floors without moving the large forms.
+    local textured = Erosion.Hydraulic{ input = settled, iterations = 8, rain = 0.3, capacity = 6.0 }
+    settled = Combine.Min{ a = Combine.Blend{ a = settled, b = textured, mask = gentle }, b = settled + 5.0 }
     if stage == 3 then
         return { height = { value = settled, range = { -400, 2400 } },
                  normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } } }
@@ -368,9 +378,13 @@ local function main(params)
     local blocky = Combine.Blend{ a = settled, b = opened, mask = walls }
     local grain  = Noises.fBm{ frequency = 1.0 / 60.0, octaves = 3, amplitude = 1.0, seed = seed + 11 }
     local final  = blocky + grain.value * walls * 2.0
+    -- For texturing, as World Machine's Strata hands out its layers: which 80 m bed a sample is in, and
+    -- where debris lies. Materials help read the geometry; they do not stand in for it.
     return {
         height  = { value = final, range = { -400, 2400 } },
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = final } } },
+        strata  = { value = Curves.Terrace{ input = remap(ground) / 80.0, step = 1.0, sharpness = 1.0 }, range = { -5, 35 } },
+        debris  = { value = debris, range = { 0, 1 } },
     }
 end
 
