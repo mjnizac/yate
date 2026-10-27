@@ -6,7 +6,8 @@
 //
 //   header, 20 values:  0 width  1 depth  2 origin x  3 origin z  4 cell  5 kind  6..15 the kind's numbers
 //                       16 point count  17 where the cells start, from the header
-//   points, 4 values each (river only): x, z, level, half-width of the channel's course
+//   points, 6 values each (river only): x, z, level, half-width, depth, bank skew (where across the
+//   channel its deepest line runs, -1 to 1, positive to the left looking downstream)
 //   cells, 4 values each, x fastest:
 //       river  squared distance to the channel, its nearest segment, its level, the valley axis's level
 //       lake   signed distance to the shore (negative inside), unused, unused, unused
@@ -28,7 +29,7 @@
 // share), plain (floodplain width), terrace, levee, width at the mouth, window (segments searched):
 //   kind 0 mountain, 1 canyon, 2 gorge, 3 glacial, 4 lowland, 5 braided
 // Lake header 6..15: level, depth, size, wall, shelf, shelf depth, basin tan, basin reach, islands, rim:
-//   kind 0 bowl, 1 trench, 2 shelf, 3 crater, 4 cirque
+//   kind 0 bowl, 1 trench, 2 shelf, 3 crater, 4 cirque, 5 fan (a delta: land, not water; rim mode only)
 
 #version 460
 
@@ -64,29 +65,37 @@ float Field(FloatBuffer data, uint block, vec2 position, uint k) {
 
 // The exact distance from `p` to the course of a river block, searched over the segments around the one
 // the cell under `p` holds as nearest, with the level and the half-width there.
-float Course(FloatBuffer data, uint block, vec2 p, out float level, out float halfWidth) {
+float Course(FloatBuffer data, uint block, vec2 p, out float level, out float halfWidth, out float depth,
+             out float skew, out float side) {
     int   width  = int(At(data, block, 0u));
-    int   depth  = int(At(data, block, 1u));
+    int   rows   = int(At(data, block, 1u));
     vec2  origin = vec2(At(data, block, 2u), At(data, block, 3u));
     float cell   = At(data, block, 4u);
-    ivec2 c      = clamp(ivec2(floor((p - origin) / cell + 0.5)), ivec2(0), ivec2(width - 1, depth - 1));
+    ivec2 c      = clamp(ivec2(floor((p - origin) / cell + 0.5)), ivec2(0), ivec2(width - 1, rows - 1));
     int   nearest = int(data.values[block + uint(At(data, block, 17u)) + uint(c.y * width + c.x) * 4u + 1u] + 0.5);
     int   window  = int(At(data, block, 15u));
     int   count   = int(At(data, block, 16u));
     float best    = 1e30;
     level     = 0.0;
     halfWidth = 0.5;
+    depth     = 1.0;
+    skew      = 0.0;
+    side      = 1.0;
     for (int s = max(0, nearest - window); s <= min(count - 2, nearest + window); ++s) {
-        uint  a  = block + 20u + uint(s) * 4u;
+        uint  a  = block + 20u + uint(s) * 6u;
         vec2  pa = vec2(data.values[a], data.values[a + 1u]);
-        vec2  pb = vec2(data.values[a + 4u], data.values[a + 5u]);
+        vec2  pb = vec2(data.values[a + 6u], data.values[a + 7u]);
         vec2  ab = pb - pa;
         float t  = clamp(dot(p - pa, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
         float d  = length(p - pa - ab * t);
         if (d < best) {
             best      = d;
-            level     = mix(data.values[a + 2u], data.values[a + 6u], t);
-            halfWidth = mix(data.values[a + 3u], data.values[a + 7u], t);
+            level     = mix(data.values[a + 2u], data.values[a + 8u], t);
+            halfWidth = mix(data.values[a + 3u], data.values[a + 9u], t);
+            depth     = mix(data.values[a + 4u], data.values[a + 10u], t);
+            skew      = mix(data.values[a + 5u], data.values[a + 11u], t);
+            vec2 off  = p - pa - ab * t;
+            side      = ab.x * off.y - ab.y * off.x >= 0.0 ? 1.0 : -1.0;
         }
     }
     return best;
@@ -118,21 +127,27 @@ void main() {
     if (mode <= 1u) {
         float exactLevel;
         float exactHalf;
-        float exact  = Course(data, block, p, exactLevel, exactHalf);
+        float depth;
+        float skew;
+        float side;
+        float exact  = Course(data, block, p, exactLevel, exactHalf, depth, skew, side);
         float d      = min(exact, sqrt(max(Field(data, block, p, 0u), 0.0)));
         float cellW  = At(data, block, 4u);
         float level  = mix(Field(data, block, p, 2u), exactLevel, 1.0 - smoothstep(cellW, 2.0 * cellW, exact));
         float half_  = max(exactHalf, 0.5);
         float axis   = Field(data, block, p, 3u);
         uint  kind   = uint(At(data, block, 5u));
-        float depth  = At(data, block, 6u);
         float valley = At(data, block, 7u);
         float steep  = At(data, block, 8u);
         float plain  = At(data, block, 11u);
         float e      = d - half_;
         if (mode == 0u) {
+            // Across the channel, -1 to 1: the deepest line runs at `skew`, against the outer bank of a bend
+            // (a cut bank), and the bed rises gently from it to the inner one (a point bar).
             float u   = d / half_;
-            float cut = clamp(1.0 - u * u, 0.0, 1.0);
+            float v   = side * u;
+            float t   = v > skew ? (v - skew) / (1.0 - skew) : (v - skew) / (1.0 + skew);
+            float cut = clamp(1.0 - t * t, 0.0, 1.0);
             if (kind == 5u) {
                 // Several shallow threads across a wide bed, gravel bars between them at the water.
                 cut *= 0.5 + 0.5 * cos(u * 9.4248 + 3.0 * sin(dot(p, vec2(0.0041, 0.0033))));
@@ -164,9 +179,8 @@ void main() {
             if (receiver != 0xFFFFFFFFu) {
                 // Inside the river it joins, the water is that river's: this one gives way there, and only
                 // there, so running close beside it upstream it keeps its own.
-                float rl;
-                float rh;
-                float er = Course(data, receiver, p, rl, rh) - max(rh, 0.5);
+                float rl, rh, rd, rs, rside;
+                float er = Course(data, receiver, p, rl, rh, rd, rs, rside) - max(rh, 0.5);
                 water -= (1.0 - smoothstep(-2.0, 0.0, er)) * 20000.0;
             }
         } else {
@@ -203,6 +217,12 @@ void main() {
         } else {
             float rim = (L + 2.0) - smoothstep(0.0, 120.0, s) * 20000.0;
             bound = rim * outside + (L - 20000.0) * (1.0 - outside);
+            if (uint(At(data, block, 5u)) == 5u) {
+                // A delta's fan: land a metre and a half over the water inside the outline, shelving under it over
+                // its last 150 m; the distributaries cut through it afterwards.
+                float land = L + 1.5 - (1.0 - smoothstep(0.0, 150.0, q)) * 5.0;
+                bound = land * (1.0 - outside) + (L - 20000.0) * outside;
+            }
             float crater = At(data, block, 15u);
             if (crater > 0.0) {
                 float x     = abs(s - size * 0.25) / (size * 0.12);

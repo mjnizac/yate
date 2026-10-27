@@ -52,15 +52,16 @@ end
 
 -- --- Kinds ------------------------------------------------------------------------------------------
 
--- How each kind of river runs and what valley it cuts. `sinuosity` scales the meanders; `valley` is the
+-- How each kind of river runs and what valley it cuts. `omega` is how far its meanders swing, in radians at
+-- a roughness of 0.5 (Langbein and Leopold; a lowland river loops, a gorge barely bends); `valley` is the
 -- half-width in metres the valley may reach; the rest are the kind's own profile.
 local RIVER_KINDS = {
-    mountain = { sinuosity = 0.25, valley = 1400, slope = 30, grade = 1.2 },
-    canyon   = { sinuosity = 0.35, valley = 1600, slope = 62, step = 70, grade = 3.0 },
-    gorge    = { sinuosity = 0.15, valley = 400, slope = 84, grade = 1.6 },
-    glacial  = { sinuosity = 0.08, valley = 1800, slope = 62, floor = 0.3, grade = 1.0 },
-    lowland  = { sinuosity = 1.0, valley = 2200, slope = 12, plain = 0.5, terrace = 4.0, levee = 1.2, grade = 1.8 },
-    braided  = { sinuosity = 0.3, valley = 1800, slope = 18, plain = 0.55, widen = 5.0, grade = 1.3 },
+    mountain = { omega = 0.45, valley = 1400, slope = 30, grade = 1.2, falls = true },
+    canyon   = { omega = 0.9, valley = 1600, slope = 62, step = 70, grade = 3.0 },
+    gorge    = { omega = 0.25, valley = 400, slope = 84, grade = 1.6, falls = true },
+    glacial  = { omega = 0.15, valley = 1800, slope = 62, floor = 0.3, grade = 1.0, falls = true },
+    lowland  = { omega = 1.7, valley = 2200, slope = 12, plain = 0.5, terrace = 4.0, levee = 1.2, grade = 1.8 },
+    braided  = { omega = 0.25, valley = 1800, slope = 18, plain = 0.55, widen = 5.0, grade = 1.3 },
 }
 local LAKE_KINDS = {
     bowl   = { wall = 0.45, basin = 14 },
@@ -68,11 +69,13 @@ local LAKE_KINDS = {
     shelf  = { wall = 0.08, shelf = 0.45, shelf_depth = 0.3, basin = 10 },
     crater = { wall = 0.25, rim = 40, basin = 35 },
     cirque = { wall = 0.15, basin = 55 },
+    -- A delta's fan: not water but land just over it, built where a river spreads at its mouth.
+    fan    = { wall = 0.2, basin = 0 },
 }
 
 -- The codes `water.comp.glsl` knows the kinds by.
 local RIVER_CODES = { mountain = 0, canyon = 1, gorge = 2, glacial = 3, lowland = 4, braided = 5 }
-local LAKE_CODES  = { bowl = 0, trench = 1, shelf = 2, crater = 3, cirque = 4 }
+local LAKE_CODES  = { bowl = 0, trench = 1, shelf = 2, crater = 3, cirque = 4, fan = 5 }
 
 local function kind_list(kinds)
     local list = {}
@@ -161,35 +164,60 @@ local function wobble(x, salt)
     return jitter(i, salt) * (1.0 - t) + jitter(i + 1, salt) * t
 end
 
--- Meanders: the curve pushed sideways by a sine whose wavelength is about eleven widths (Leopold and
--- Wolman), its amplitude varying along the river, fading in at both ends so source and mouth stay put.
-local function meander(points, amplitude, wavelength, salt)
-    if amplitude <= 0.0 or #points < 3 then
+-- Meanders as a sine-generated curve (Langbein and Leopold): the direction of the channel swings about
+-- the valley's as `omega * sin(phase)`, with Kinoshita's skew and flattening in the third harmonic, so the
+-- bends are loops that lean downstream and not the corners a sideways sine turns into. The curve is built
+-- along a straight axis and laid onto `points`, the course, by its distance along it; the swing fades in
+-- and out over half a wavelength so source and mouth stay where they are. `wavelength` is measured along
+-- the channel and wanders by a third along the river.
+local function meander(points, wavelength, omega, salt)
+    local total = length_of(points)
+    if omega <= 0.01 or #points < 3 or total < wavelength then
         return points
     end
-    local out, s, total, phase = {}, 0.0, length_of(points), 0.0
-    for i, p in ipairs(points) do
-        if i > 1 then
-            s = s + math.sqrt((p[1] - points[i - 1][1]) ^ 2 + (p[2] - points[i - 1][2]) ^ 2)
-        end
-        local a = points[math.max(1, i - 1)]
-        local b = points[math.min(#points, i + 1)]
-        local tx, tz = b[1] - a[1], b[2] - a[2]
-        local tl = math.sqrt(tx * tx + tz * tz)
-        if tl == 0.0 then
-            tl = 1.0
-        end
-        local fade = math.min(1.0, s / (wavelength * 0.5), (total - s) / (wavelength * 0.5))
-        -- The phase advances at a wavelength that wanders by 40 %, and a second, longer bend is added, so
-        -- the loops differ in size and spacing instead of repeating as a sine.
-        if i > 1 then
-            local ds = math.sqrt((p[1] - points[i - 1][1]) ^ 2 + (p[2] - points[i - 1][2]) ^ 2)
-            phase = phase + 2.0 * math.pi * ds / (wavelength * (1.0 + 0.4 * wobble(s / wavelength, salt + 7)))
-        end
-        local vary = 0.6 + 0.4 * wobble(s / wavelength, salt)
-        local off  = amplitude * fade * (vary * math.sin(phase + salt) + 0.45 * math.sin(phase * 0.37 + salt * 2.0))
-        out[i] = { p[1] - tz / tl * off, p[2] + tx / tl * off }
+    -- The course by distance along it, and its direction there averaged over a quarter wavelength.
+    local runs = { 0.0 }
+    for i = 2, #points do
+        runs[i] = runs[i - 1] + math.sqrt((points[i][1] - points[i - 1][1]) ^ 2 + (points[i][2] - points[i - 1][2]) ^ 2)
     end
+    local function at(u)
+        u = math.max(0.0, math.min(total, u))
+        local lo, hi = 1, #points
+        while hi - lo > 1 do
+            local mid = (lo + hi) // 2
+            if runs[mid] <= u then lo = mid else hi = mid end
+        end
+        local t = (u - runs[lo]) / math.max(1e-9, runs[hi] - runs[lo])
+        return points[lo][1] + (points[hi][1] - points[lo][1]) * t, points[lo][2] + (points[hi][2] - points[lo][2]) * t
+    end
+    local reach = wavelength * 0.25
+    local axial, lateral = {}, {}
+    local step = wavelength / 48.0
+    local s, x, y, phase = 0.0, 0.0, 0.0, 0.0
+    while x < total and #axial < 200000 do
+        local fade  = math.max(0.0, math.min(1.0, x / (wavelength * 0.5), (total - x) / (wavelength * 0.5)))
+        local swing = omega * fade * (0.8 + 0.2 * wobble(s / wavelength, salt))
+        local theta = swing * (math.sin(phase) + 0.12 * math.cos(3.0 * phase) - 0.05 * math.sin(3.0 * phase))
+        axial[#axial + 1], lateral[#lateral + 1] = x, y
+        x = x + step * math.cos(theta)
+        y = y + step * math.sin(theta)
+        s = s + step
+        phase = phase + 2.0 * math.pi * step / (wavelength * (1.0 + 0.33 * wobble(s / wavelength, salt + 7)))
+    end
+    -- Whatever sideways offset is left at the mouth is taken out evenly, so the end lands on the course.
+    local last = lateral[#lateral]
+    local out = {}
+    for i = 1, #axial do
+        local u = axial[i] * total / math.max(1.0, axial[#axial])
+        local px, pz = at(u)
+        local ax, az = at(u - reach)
+        local bx, bz = at(u + reach)
+        local tx, tz = bx - ax, bz - az
+        local tl = math.max(1e-6, math.sqrt(tx * tx + tz * tz))
+        local off = lateral[i] - last * axial[i] / math.max(1.0, axial[#axial])
+        out[i] = { px - tz / tl * off, pz + tx / tl * off }
+    end
+    out[1], out[#out] = points[1], points[#points]
     return out
 end
 
@@ -349,7 +377,7 @@ end
 
 -- --- Elements ---------------------------------------------------------------------------------------
 
-local RIVER_KEYS = { "points", "source", "kind", "width", "depth", "roughness", "valley", "slope", "grade", "name" }
+local RIVER_KEYS = { "points", "source", "kind", "width", "depth", "roughness", "valley", "slope", "grade", "mouth", "name" }
 local LAKE_KEYS  = { "points", "at", "radius", "level", "depth", "kind", "islands", "basin", "name" }
 
 -- The kind a river takes from the ground it runs through, when it is not given.
@@ -518,9 +546,13 @@ function Water.Network(t)
         return math.floor(x / BUCKET) * 100003 + math.floor(z / BUCKET)
     end
     local function half_at(river, i)
-        return (river.width[1] + (river.width[2] - river.width[1]) * (i - 1) / math.max(1, #river.points - 1)) * 0.5
+        return river.widths[math.max(1, math.min(#river.widths, i))] * 0.5
     end
+    local widest = 0.0
     local function register(river)
+        for _, wd in ipairs(river.widths) do
+            widest = math.max(widest, wd * 0.5)
+        end
         for i, p in ipairs(river.points) do
             local kk = key(p[1], p[2])
             buckets[kk] = buckets[kk] or {}
@@ -529,7 +561,7 @@ function Water.Network(t)
     end
     -- The first point of `path` (past its first few widths, so a river may rise beside another) whose
     -- channel touches a river already made: { at, river, index, run }.
-    local function contact(path, w)
+    local function contact(path, w, ignore, ignore_run)
         local run = 0.0
         for i, p in ipairs(path) do
             if i > 1 then
@@ -538,14 +570,20 @@ function Water.Network(t)
             if run > w * 3.0 then
                 local bx, bz = math.floor(p[1] / BUCKET), math.floor(p[2] / BUCKET)
                 local best, found = 1e30, nil
-                for dx = -1, 1 do
-                    for dz = -1, 1 do
+                -- As many buckets out as the widest river made so far can reach.
+                local around = math.ceil((w * 0.5 + widest + 4.0) / BUCKET)
+                for dx = -around, around do
+                    for dz = -around, around do
                         for _, e in ipairs(buckets[(bx + dx) * 100003 + bz + dz] or {}) do
+                            if e.river == ignore and run < (ignore_run or math.huge) then
+                                goto next
+                            end
                             local q = e.river.points[e.index]
                             local d = math.sqrt((q[1] - p[1]) ^ 2 + (q[2] - p[2]) ^ 2)
                             if d < w * 0.5 + half_at(e.river, e.index) + 4.0 and d < best then
                                 best, found = d, e
                             end
+                            ::next::
                         end
                     end
                 end
@@ -603,80 +641,210 @@ function Water.Network(t)
         if k == nil then
             fail(where .. ": river kind '" .. tostring(kind) .. "' is not one of " .. kind_list(RIVER_KINDS))
         end
-        local w = (width[1] + width[2]) * 0.5 * (k.widen or 1.0)
+        local widen = k.widen or 1.0
+        local w = (width[1] + width[2]) * 0.5 * widen
         local roughness = r.roughness or 0.5
         local path = resample(smooth(points, 3), math.max(12.0, w * 0.6))
-        -- Amplitude up to about a quarter of the wavelength: past that a sideways sine turns in sharp
-        -- corners rather than loops.
-        path = meander(path, w * 11.0 * 0.22 * k.sinuosity * (0.5 + roughness), w * 11.0, #net.rivers + 1)
+        -- The meanders swing further the rougher the river, and their wavelength, along the channel, is
+        -- about eleven widths stretched by the swing (Leopold and Wolman).
+        -- Capped under 1.55 rad: past about two radians the loops of a sine-generated curve cross.
+        local omega = math.min(1.55, k.omega * (0.4 + 1.2 * roughness))
+        path = meander(path, w * 11.0 * (1.0 + 0.3 * omega * omega), omega, #net.rivers + 1)
         path = resample(path, math.max(10.0, w * 0.5))
-        local levels = profile(g, path, slope, floor)
-        -- A graded profile, concave between source and mouth (`grade` its power), under which the river
-        -- is held: a river is incised below the ground it crosses, which is what makes a canyon of a
-        -- plateau and a valley of a hillside, instead of a stream lying on the surface.
-        local total, run = length_of(path), 0.0
-        local top, bottom = levels[1], levels[#levels]
-        for i = 2, #levels do
-            run = run + math.sqrt((path[i][1] - path[i - 1][1]) ^ 2 + (path[i][2] - path[i - 1][2]) ^ 2)
-            local graded = bottom + (top - bottom) * (1.0 - run / total) ^ (r.grade or k.grade)
-            levels[i] = math.min(levels[i], graded)
+        local n = #path
+        local runs = { 0.0 }
+        for i = 2, n do
+            runs[i] = runs[i - 1] + math.sqrt((path[i][1] - path[i - 1][1]) ^ 2 + (path[i][2] - path[i - 1][2]) ^ 2)
         end
-        -- Smoothed over about 300 m, twice: the levels come from a grid of 100 m cells and carry a kink at
-        -- every one, which the valley walls show as ribs across them. A moving average of a sequence that
-        -- never rises never rises either.
-        local reach = math.max(1, math.floor(300.0 / math.max(1.0, total / math.max(1, #levels - 1))))
-        for _ = 1, 2 do
-            local sums = { [0] = 0.0 }
-            for i = 1, #levels do
-                sums[i] = sums[i - 1] + levels[i]
+        local total = runs[n]
+        local ds = total / math.max(1, n - 1)
+        local levels = profile(g, path, slope, floor)
+
+        -- Falls: where the ground the river follows drops by 25 m or more within a cell and a half of the
+        -- sampled terrain, at a slope of 45 % and three times the river's own, a cliff it falls over. Only
+        -- the kinds that keep their steps have them (`falls`): a canyon cuts back through its cliff instead. Each fall keeps its step: the grading and the smoothing below work on the stretches
+        -- between falls, which would otherwise spread a waterfall into a long rapid.
+        local falls = {}
+        if k.falls then
+            local span = math.max(1, math.ceil(g.cell * 1.5 / ds))
+            local steep = math.max(0.45, 3.0 * (levels[1] - levels[n]) / math.max(1.0, total))
+            local function falls_at(j)
+                local drop = levels[j] - levels[j + span]
+                return drop > math.max(25.0, steep * span * ds), drop
             end
-            local smoothed = {}
-            for i = 1, #levels do
-                local a, b = math.max(1, i - reach), math.min(#levels, i + reach)
-                local half_window = math.min(i - a, b - i)
-                a, b = i - half_window, i + half_window
-                smoothed[i] = (sums[b] - sums[a - 1]) / (b - a + 1)
+            local i = 1
+            while i + span <= n do
+                local is_fall, drop = falls_at(i)
+                if is_fall then
+                    -- The step goes where the drop over the window is largest.
+                    local best, at = drop, i
+                    local j = i + 1
+                    while j + span <= n and falls_at(j) do
+                        if levels[j] - levels[j + span] > best then
+                            best, at = levels[j] - levels[j + span], j
+                        end
+                        j = j + 1
+                    end
+                    local bottom = levels[at + span]
+                    for m = at + 1, at + span do
+                        levels[m] = bottom
+                    end
+                    falls[#falls + 1] = at
+                    i = at + span + 1
+                else
+                    i = i + 1
+                end
             end
-            levels = smoothed
+        end
+        -- The stretches between falls, each graded and smoothed on its own. The graded profile, concave
+        -- between the stretch's ends (`grade` its power), holds the river under the ground it crosses,
+        -- which is what makes a canyon of a plateau and a valley of a hillside. The smoothing, over about
+        -- 300 m and twice, takes out the kink the 100 m cells of the sampled terrain leave at every cell;
+        -- a moving average of a sequence that never rises never rises either.
+        local reach = math.max(1, math.floor(300.0 / math.max(1.0, ds)))
+        local stretches, from = {}, 1
+        for _, f in ipairs(falls) do
+            stretches[#stretches + 1] = { from, f }
+            from = f + 1
+        end
+        stretches[#stretches + 1] = { from, n }
+        for _, st in ipairs(stretches) do
+            local a, b = st[1], st[2]
+            if b > a then
+                local top, bottom = levels[a], levels[b]
+                local length = runs[b] - runs[a]
+                for i = a + 1, b do
+                    local graded = bottom + (top - bottom) * (1.0 - (runs[i] - runs[a]) / math.max(1.0, length)) ^ (r.grade or k.grade)
+                    levels[i] = math.min(levels[i], graded)
+                end
+                for _ = 1, 2 do
+                    local sums = { [a - 1] = 0.0 }
+                    for i = a, b do
+                        sums[i] = sums[i - 1] + levels[i]
+                    end
+                    local smoothed = {}
+                    for i = a, b do
+                        local half_window = math.min(reach, i - a, b - i)
+                        smoothed[i] = (sums[i + half_window] - sums[i - half_window - 1]) / (2 * half_window + 1)
+                    end
+                    for i = a, b do
+                        levels[i] = smoothed[i]
+                    end
+                end
+            end
         end
         if r.start_level then
-            for i = 1, #levels do
+            for i = 1, n do
                 levels[i] = math.min(levels[i], r.start_level)
             end
         end
+
+        -- Width at every point: from the drainage area where the river was found by its drainage (ten
+        -- metres at 1 km2, as the square root of the area), otherwise from source to mouth as given.
+        local base = {}
+        local areas = r.areas
+        for i = 1, n do
+            local share = runs[i] / math.max(1.0, total)
+            if areas and #areas > 1 then
+                local at = math.max(1, math.min(#areas, math.floor(share * (#areas - 1) + 1.5)))
+                local range = r.width_range or { 4.0, 120.0 }
+                base[i] = math.max(range[1], math.min(range[2], 10.0 * math.sqrt(areas[at] / 1e6)))
+            else
+                base[i] = width[1] + (width[2] - width[1]) * share
+            end
+        end
+        -- How deep the bed is, as a share of what the width gives: deeper in the plunge pool below a fall
+        -- (two and a half times, fading over a few widths), shallower over the rapids above one.
+        local deep = {}
+        for i = 1, n do
+            deep[i] = 1.0
+        end
+        for _, f in ipairs(falls) do
+            for i = f + 1, n do
+                local d = runs[i] - runs[f]
+                if d > base[f] * widen * 6.0 then
+                    break
+                end
+                deep[i] = math.max(deep[i], 1.0 + 1.5 * math.exp(-d / (base[f] * widen * 2.0)))
+            end
+            for i = f, 1, -1 do
+                local d = runs[f] - runs[i]
+                if d > 250.0 then
+                    break
+                end
+                deep[i] = math.min(deep[i], 0.6 + 0.4 * d / 250.0)
+            end
+        end
+
         -- Where it meets a river already in the network it ends, on that river's axis: the network is a
         -- tree, and a confluence has one level. No level is raised to get there. A river arriving lower
         -- than the one it joins cuts that one down from the confluence on (its level falls there anyway,
-        -- so nothing downstream rises); one arriving higher drops to it over its last stretch.
-        local hit = contact(path, w)
+        -- so nothing downstream rises); one arriving higher drops to it over its last stretch. Below the
+        -- confluence the river it joins carries both, and is wider: widths add as the square root of the
+        -- areas they drain.
+        local hit = contact(path, w, r.parent, r.parent_run)
         local receiver = nil
         if hit then
             if r.generated and hit.run < (r.min_keep or 1500.0) then
                 return nil -- it would only duplicate the river it joins so soon
             end
-            local B, q = hit.river, hit.index
-            for i = #path, hit.at + 1, -1 do
-                path[i], levels[i] = nil, nil
+            if r.parent and hit.river == r.parent then
+                return nil -- a distributary that would rejoin its own river is not one
             end
-            local here = levels[#levels]
+            local B, q = hit.river, hit.index
+            for i = n, hit.at + 1, -1 do
+                path[i], levels[i], base[i], deep[i] = nil, nil, nil, nil
+            end
+            n = #path
+            local here = levels[n]
             if here < B.levels[q] then
                 -- Fully along the stretch the tributary enters by, which for a wide river reaches well
                 -- upstream of its nearest point: eased in there, it would meet water still higher.
                 local step = length_of(B.points) / math.max(1, #B.points - 1)
                 lower(B, math.max(1, q - math.ceil((half_at(B, q) * 2.0 + w) / math.max(1.0, step))), here)
             else
-                local n = #levels
                 local m = math.max(1, n - 8)
                 for i = m, n do
                     local t = (i - m) / math.max(1, n - m)
                     levels[i] = math.min(levels[i], levels[m] + (B.levels[q] - levels[m]) * t)
                 end
             end
-            path[#path + 1] = { B.points[q][1], B.points[q][2] }
+            for i = q, #B.base do
+                B.base[i] = math.sqrt(B.base[i] ^ 2 + base[n] ^ 2)
+                B.widths[i] = B.base[i] * B.widen
+            end
+            path[n + 1] = { B.points[q][1], B.points[q][2] }
+            levels[n + 1] = math.min(levels[n], B.levels[q])
+            base[n + 1], deep[n + 1] = base[n], deep[n]
+            n = n + 1
             receiver = B
-            levels[#levels + 1] = math.min(levels[#levels], B.levels[q])
             total = length_of(path)
         end
+
+        -- The bank asymmetry: in a bend the deepest line runs against the outer bank, which is cut steep,
+        -- and the bed rises gently to a point bar on the inner one. Read from the curvature, averaged over
+        -- a width; `skew` is where across the channel the deepest line runs, on the side the shader calls
+        -- negative when the river turns towards the positive one.
+        local turn = { 0.0 }
+        for i = 2, n - 1 do
+            local ax, az = path[i][1] - path[i - 1][1], path[i][2] - path[i - 1][2]
+            local bx, bz = path[i + 1][1] - path[i][1], path[i + 1][2] - path[i][2]
+            local la = math.max(1e-6, math.sqrt(ax * ax + az * az))
+            local lb = math.max(1e-6, math.sqrt(bx * bx + bz * bz))
+            local cross = (ax * bz - az * bx) / (la * lb)
+            turn[i] = math.asin(math.max(-1.0, math.min(1.0, cross))) / ((la + lb) * 0.5)
+        end
+        turn[n] = 0.0
+        local skews = {}
+        local across = math.max(1, math.floor(w / math.max(1.0, ds)))
+        for i = 1, n do
+            local sum, count = 0.0, 0
+            for j = math.max(1, i - across), math.min(n, i + across) do
+                sum, count = sum + turn[j], count + 1
+            end
+            skews[i] = math.max(-0.6, math.min(0.6, -(sum / count) * w * 3.0))
+        end
+
         -- The valley's axis: the course without its meanders, averaged over a few hundred metres, with the
         -- levels carried over by the share of the length run. The valley floor takes its level from here.
         local axis = resample(path, 50.0)
@@ -691,29 +859,35 @@ function Water.Network(t)
             end
             averaged[i] = { sx / (2 * span + 1), sz / (2 * span + 1) }
         end
-        local runs, run2 = { 0.0 }, 0.0
-        for i = 2, #path do
-            run2 = run2 + math.sqrt((path[i][1] - path[i - 1][1]) ^ 2 + (path[i][2] - path[i - 1][2]) ^ 2)
-            runs[i] = run2
+        runs = { 0.0 }
+        for i = 2, n do
+            runs[i] = runs[i - 1] + math.sqrt((path[i][1] - path[i - 1][1]) ^ 2 + (path[i][2] - path[i - 1][2]) ^ 2)
         end
+        local run2 = runs[n]
         local axis_levels, at, total_axis, run_axis = {}, 1, length_of(averaged), 0.0
         for i = 1, #averaged do
             if i > 1 then
                 run_axis = run_axis + math.sqrt((averaged[i][1] - averaged[i - 1][1]) ^ 2 + (averaged[i][2] - averaged[i - 1][2]) ^ 2)
             end
             local want = run_axis / math.max(1.0, total_axis) * run2
-            while at < #path and runs[at + 1] < want do
+            while at < n and runs[at + 1] < want do
                 at = at + 1
             end
-            local nxt = math.min(#path, at + 1)
+            local nxt = math.min(n, at + 1)
             local t = nxt > at and (want - runs[at]) / math.max(1e-6, runs[nxt] - runs[at]) or 0.0
             axis_levels[i] = levels[at] + (levels[nxt] - levels[at]) * math.max(0.0, math.min(1.0, t))
         end
+        local widths = {}
+        for i = 1, n do
+            widths[i] = base[i] * widen
+        end
         net.rivers[#net.rivers + 1] = {
             axis = averaged, axis_levels = axis_levels,
-            points = path, levels = levels, kind = kind, width = { width[1] * (k.widen or 1.0), width[2] * (k.widen or 1.0) },
-            depth = r.depth or math.max(2.0, w * 0.08), roughness = roughness, valley = r.valley or k.valley,
+            points = path, levels = levels, kind = kind, base = base, widths = widths, widen = widen,
+            width = { widths[1], widths[n] }, deep = deep, skews = skews, falls = #falls,
+            depth = r.depth, roughness = roughness, valley = r.valley or k.valley,
             name = r.name, generated = r.generated, receiver = receiver, join = hit and hit.index or nil,
+            mouth = r.mouth, distributary = r.distributary,
         }
         register(net.rivers[#net.rivers])
         return net.rivers[#net.rivers]
@@ -721,12 +895,14 @@ function Water.Network(t)
 
     -- A run of cells becomes rivers split at the lakes it crosses: the part above a lake ends in it, the
     -- part below starts at its level.
+    -- A generated river carries the drainage area of every cell, which its width follows.
     local function rivers_from_cells(r, cells, where)
-        local run, entered = {}, nil
+        local run, entered, areas = {}, nil, {}
         local made = {}
         for _, c in ipairs(cells) do
             local lake = in_lake(c) and label[c] or nil
             run[#run + 1] = g.at(c)
+            areas[#areas + 1] = g.d.area[c]
             if lake then
                 if #run >= 3 then
                     local copy = {}
@@ -735,9 +911,10 @@ function Water.Network(t)
                     end
                     copy.ends_in_lake = lake
                     copy.start_level = entered and entered.level or r.start_level
+                    copy.areas = r.generated and areas or nil
                     made[#made + 1] = add_river(copy, run, where)
                 end
-                run, entered = { g.at(c) }, lake
+                run, entered, areas = { g.at(c) }, lake, { g.d.area[c] }
             end
         end
         if #run >= 3 then
@@ -746,6 +923,7 @@ function Water.Network(t)
                 copy[key] = v
             end
             copy.start_level = entered and entered.level or r.start_level
+            copy.areas = r.generated and areas or nil
             made[#made + 1] = add_river(copy, run, where)
         end
         return made
@@ -831,7 +1009,7 @@ function Water.Network(t)
             if type(kinds) == "table" then
                 kind = kinds[(k - 1) % #kinds + 1]
             end
-            rivers_from_cells({ kind = kind, width = width_for(g.d.area[mth]), depth = opts.depth,
+            rivers_from_cells({ kind = kind, width = width_for(g.d.area[mth]), width_range = width, depth = opts.depth,
                                              roughness = opts.roughness, generated = true }, cells, "generated river")
             -- Tributaries: the largest side branches long enough, spread along the stem.
             local tributaries = gen.tributaries or 0.0
@@ -863,15 +1041,13 @@ function Water.Network(t)
                         local tcells = trace_up(g, i, up, via, head)
                         tcells[#tcells + 1] = g.d.receiver[i]
                         -- It ends where it meets the stem (see `add_river`), at the stem's level there.
+                        local pts, tareas = {}, {}
+                        for _, c in ipairs(tcells) do
+                            pts[#pts + 1], tareas[#tareas + 1] = g.at(c), g.d.area[c]
+                        end
                         add_river({ kind = kind, width = width_for(g.d.area[i]) * 0.8, depth = opts.depth,
-                                    roughness = opts.roughness, generated = true, min_keep = 400.0 },
-                                  (function()
-                                      local pts = {}
-                                      for _, c in ipairs(tcells) do
-                                          pts[#pts + 1] = g.at(c)
-                                      end
-                                      return pts
-                                  end)(), "generated tributary")
+                                    roughness = opts.roughness, generated = true, min_keep = 400.0,
+                                    areas = tareas, width_range = width }, pts, "generated tributary")
                     end
                 end
             end
@@ -922,6 +1098,154 @@ function Water.Network(t)
             placed = placed + 1
         end
     end
+    -- Mouths. A river that ends in the sea or a lake, not in another river, spreads there: into a delta
+    -- (two or three distributaries fanning out from about 25 widths up, over a fan of land a metre and a half
+    -- over the water) where the water is calm, a lake, or a lowland or braided river at the sea; into an
+    -- estuary (its last stretch widening as a funnel to four times and deepening) where it meets the sea
+    -- otherwise. `mouth = "delta" | "estuary" | "none"` on a drawn river chooses.
+    local function inside(points, x, z)
+        local hit = false
+        for i = 1, #points do
+            local a, b = points[i], points[i % #points + 1]
+            if (a[2] > z) ~= (b[2] > z) and x < a[1] + (z - a[2]) * (b[1] - a[1]) / (b[2] - a[2]) then
+                hit = not hit
+            end
+        end
+        return hit
+    end
+    local mouths = {}
+    for _, r in ipairs(net.rivers) do
+        if r.receiver == nil and not r.distributary then
+            mouths[#mouths + 1] = r
+        end
+    end
+    -- A river cut back to its first `keep` points, taken out of the buckets past them.
+    local function cut(river, keep)
+        local old = #river.points
+        for i = old, keep + 1, -1 do
+            local p = river.points[i]
+            local list = buckets[key(p[1], p[2])]
+            if list then
+                for j = #list, 1, -1 do
+                    if list[j].river == river and list[j].index > keep then
+                        table.remove(list, j)
+                    end
+                end
+            end
+            river.points[i], river.levels[i], river.base[i], river.widths[i] = nil, nil, nil, nil
+            river.deep[i], river.skews[i] = nil, nil
+        end
+        local axes = math.max(2, math.ceil(#river.axis * keep / old))
+        for i = #river.axis, axes + 1, -1 do
+            river.axis[i], river.axis_levels[i] = nil, nil
+        end
+        river.width = { river.widths[1], river.widths[keep] }
+    end
+    for _, r in ipairs(mouths) do
+        -- The mouth is where the river first reaches the sea or a lake, not where its course was drawn to.
+        local n = #r.points
+        local into_lake, at_sea = nil, false
+        for i = 1, n do
+            local p = r.points[i]
+            for _, l in ipairs(net.lakes) do
+                if l.kind ~= "fan" and inside(l.points, p[1], p[2]) then
+                    into_lake = l
+                end
+            end
+            at_sea = net.sea_level ~= nil and g.d.sea[g.index(p[1], p[2])]
+            if into_lake or at_sea then
+                n = i
+                break
+            end
+        end
+        local e = r.points[n]
+        local mouth = r.mouth
+        if mouth == nil or mouth == "auto" then
+            if into_lake or (at_sea and (r.kind == "lowland" or r.kind == "braided")) then
+                mouth = "delta"
+            elseif at_sea then
+                mouth = "estuary"
+            else
+                mouth = "none"
+            end
+        end
+        if not (into_lake or at_sea) then
+            mouth = "none"
+        end
+        local runs = { [n] = 0.0 }
+        for i = n - 1, 1, -1 do
+            runs[i] = runs[i + 1] + math.sqrt((r.points[i + 1][1] - r.points[i][1]) ^ 2 + (r.points[i + 1][2] - r.points[i][2]) ^ 2)
+        end
+        local w = r.widths[n]
+        local water = into_lake and into_lake.level or net.sea_level or r.levels[n]
+        if mouth == "estuary" then
+            local reach = math.min(3000.0, runs[1] * 0.3)
+            for i = 1, #r.points do
+                local d = i <= n and runs[i] or 0.0
+                if d < reach then
+                    local t = 1.0 - d / reach
+                    r.base[i] = r.base[i] * (1.0 + 3.0 * t * t)
+                    r.widths[i] = r.base[i] * r.widen
+                    r.deep[i] = r.deep[i] * (1.0 + 0.5 * t)
+                end
+            end
+        elseif mouth == "delta" and runs[1] > 1500.0 then
+            local reach = math.max(600.0, math.min(2500.0, w * 25.0))
+            if into_lake then
+                -- A delta in a lake stays in the lake: no wider than half of it.
+                local minx, maxx, minz, maxz = 1e30, -1e30, 1e30, -1e30
+                for _, p in ipairs(into_lake.points) do
+                    minx, maxx = math.min(minx, p[1]), math.max(maxx, p[1])
+                    minz, maxz = math.min(minz, p[2]), math.max(maxz, p[2])
+                end
+                reach = math.min(reach, 0.5 * math.min(maxx - minx, maxz - minz))
+            end
+            -- Where it splits: `reach` up from the mouth. The river ends there and all its water goes on in
+            -- its distributaries, one ahead and two fanning out.
+            local i0 = 1
+            for i = n, 1, -1 do
+                if runs[i] >= reach then
+                    i0 = i
+                    break
+                end
+            end
+            local p0 = { r.points[i0][1], r.points[i0][2] }
+            local dx, dz = e[1] - p0[1], e[2] - p0[2]
+            local dl = math.max(1.0, math.sqrt(dx * dx + dz * dz))
+            dx, dz = dx / dl, dz / dl
+            local level0, base0 = r.levels[i0], r.base[i0]
+            cut(r, i0)
+            -- The fan: a sector of land round the mouth, its apex at the split.
+            local fan = { { p0[1], p0[2] } }
+            for k = 0, 12 do
+                local a = (k / 12 - 0.5) * math.rad(120.0)
+                local cx, cz = dx * math.cos(a) - dz * math.sin(a), dx * math.sin(a) + dz * math.cos(a)
+                local rr = reach * (1.35 + 0.15 * jitter(k, #net.lakes))
+                fan[#fan + 1] = { p0[1] + cx * rr, p0[2] + cz * rr }
+            end
+            add_lake{ points = fan, level = water, depth = 1.0, kind = "fan", generated = true }
+            for b, angle in ipairs({ 0.0, 32.0, -32.0 }) do
+                local a = math.rad(angle + 6.0 * jitter(b, n))
+                local cx, cz = dx * math.cos(a) - dz * math.sin(a), dx * math.sin(a) + dz * math.cos(a)
+                local side = angle >= 0.0 and 1.0 or -1.0
+                local pts = {}
+                for k = 0, 8 do
+                    local t = k / 8
+                    -- A slight bend away from the middle as it goes.
+                    local bend = angle == 0.0 and 0.0 or side * 0.2 * t * t
+                    local bx, bz = cx * math.cos(bend) - cz * math.sin(bend), cx * math.sin(bend) + cz * math.cos(bend)
+                    pts[#pts + 1] = { p0[1] + bx * reach * 1.3 * t, p0[2] + bz * reach * 1.3 * t }
+                end
+                local made = add_river({ kind = "lowland", width = { base0 * (b == 1 and 0.55 or 0.4), base0 * (b == 1 and 0.5 or 0.35) },
+                                         roughness = 0.35, start_level = level0, distributary = true, parent = r,
+                                         parent_run = reach * 0.25, ends_in_lake = into_lake }, pts, "a distributary")
+                if made then
+                    made.distributary = true
+                end
+            end
+        end
+    end
+
     -- Each river costs the graph three nodes (five with a floodplain) and each lake five, out of 1024 for
     -- the whole script; past what fits, say so here rather than with the graph's own error halfway through.
     local cost = 0
@@ -987,10 +1311,12 @@ function Network:apply(height, opts)
         -- The bed is not smooth: ridges and hollows under the water, and islands where they rise above it.
         local bed = Noises.Ridged{ frequency = 1.0 / math.max(150.0, size * 0.25), octaves = 3,
                                    amplitude = 0.5, seed = self.seed + 400 + i }.value
-        local cap = Hydrology.Carve{ block = block, mode = "lake", aux = bed, position = position }
-        ground = Combine.Min{ a = ground, b = cap }
+        if l.kind ~= "fan" then
+            local cap = Hydrology.Carve{ block = block, mode = "lake", aux = bed, position = position }
+            ground = Combine.Min{ a = ground, b = cap }
+            lake_water = max_of(lake_water, cap.water)
+        end
         ground = Combine.Max{ a = ground, b = Hydrology.Carve{ block = block, mode = "rim", aux = bed, position = position } }
-        lake_water = max_of(lake_water, cap.water)
     end
 
     -- Rivers: the channel under the level, the valley as an envelope over it, one block each.
@@ -1001,7 +1327,10 @@ function Network:apply(height, opts)
     -- floodplain never fills another river's channel that runs within it.
     local before, fills, caps = ground, {}, {}
     for i, r in ipairs(self.rivers) do
-        local w0, w1 = r.width[1], r.width[2]
+        local w1 = 0.0
+        for _, wd in ipairs(r.widths) do
+            w1 = math.max(w1, wd)
+        end
         local valley = r.valley
         local k = RIVER_KINDS[r.kind]
         -- Cells at the valley's scale: the channel itself is measured exactly on the course (see
@@ -1023,16 +1352,21 @@ function Network:apply(height, opts)
             margin = valley + 6.0 * cell
         end
         budget = budget - math.min(cells, share)
-        -- The half-width at each point: growing from source to mouth, the banks wandering by up to a
-        -- third of it with the roughness, every few widths.
-        local length, run, halves = math.max(1.0, length_of(r.points)), 0.0, {}
+        -- At each point: the half-width, its banks wandering by up to a third with the roughness every few
+        -- widths; the depth, from the width (or as given, scaled with it) and deeper or shallower at falls.
+        local length, run, halves, depths = math.max(1.0, length_of(r.points)), 0.0, {}, {}
+        local deepest = 0.0
+        local last = r.base[#r.base]
         for j, p in ipairs(r.points) do
             if j > 1 then
                 run = run + math.sqrt((p[1] - r.points[j - 1][1]) ^ 2 + (p[2] - r.points[j - 1][2]) ^ 2)
             end
-            local w = w0 + (w1 - w0) * run / length
+            local w = r.widths[j]
             local wander = math.sin(run / (w * 2.5) + i) * 0.6 + wobble(run / (w * 4.0), i) * 0.4
             halves[j] = w * 0.5 * (1.0 + 0.66 * r.roughness * wander * 0.5) + 0.5
+            local depth = r.depth and r.depth * math.sqrt(r.base[j] / last) or math.max(2.0, r.base[j] * 0.08)
+            depths[j] = depth * r.deep[j]
+            deepest = math.max(deepest, depths[j])
         end
         local axs, azs = {}, {}
         for j, p in ipairs(r.axis) do
@@ -1040,9 +1374,9 @@ function Network:apply(height, opts)
         end
         local plain = k.plain and math.min(valley * k.plain, w1 * 15.0) or 0.0
         r.block = Hydrology.RiverBlock{
-            xs = xs, zs = zs, levels = r.levels, halves = halves, axis_xs = axs, axis_zs = azs,
-            axis_levels = r.axis_levels, cell = cell, margin = margin,
-            params = { RIVER_CODES[r.kind], r.depth, valley, math.tan(math.rad(k.slope)), k.step or 1.0, k.floor or 0.0,
+            xs = xs, zs = zs, levels = r.levels, halves = halves, depths = depths, skews = r.skews, axis_xs = axs,
+            axis_zs = azs, axis_levels = r.axis_levels, cell = cell, margin = margin,
+            params = { RIVER_CODES[r.kind], deepest, valley, math.tan(math.rad(k.slope)), k.step or 1.0, k.floor or 0.0,
                        plain, k.terrace or 3.0, k.levee or 0.0, w1,
                        -- Segments searched either side of a cell's nearest one: enough to span a cell and a half.
                        math.min(64, math.ceil(1.5 * cell / math.max(1.0, length / math.max(1, #r.points - 1))) + 2) },
@@ -1050,7 +1384,7 @@ function Network:apply(height, opts)
         -- A tributary's water gives way where its river is nearer (the receiver's block is read for it).
         local carve = Hydrology.Carve{ block = r.block, receiver = r.receiver and r.receiver.block or -1, mode = "cap",
                                        aux = spurs, position = position }
-        caps[#caps + 1] = { cap = carve, k = math.max(4.0, r.depth * 3.0) }
+        caps[#caps + 1] = { cap = carve, k = math.max(4.0, deepest * 2.0) }
         if k.plain then
             -- A floodplain fills what lies under it by up to three metres, and builds a levee on each bank.
             fills[#fills + 1] = Hydrology.Carve{ block = r.block, mode = "fill", aux = before, position = position }

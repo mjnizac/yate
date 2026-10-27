@@ -102,16 +102,17 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         const i32_t nearest = static_cast<i32_t>(data[b + static_cast<u32_t>(at(b, 17)) + static_cast<u32_t>(cz * w + cx) * 4u + 1u] + 0.5f);
         const i32_t window  = static_cast<i32_t>(at(b, 15));
         const i32_t count   = static_cast<i32_t>(at(b, 16));
-        std::array<f32_t, 3> best{1e30f, 0.0f, 0.5f};
+        std::array<f32_t, 6> best{1e30f, 0.0f, 0.5f, 1.0f, 0.0f, 1.0f};
         for (i32_t s = std::max(0, nearest - window); s <= std::min(count - 2, nearest + window); ++s) {
-            const u32_t a  = b + 20u + static_cast<u32_t>(s) * 4u;
-            const f32_t ax = data[a], az = data[a + 1], bx = data[a + 4], bz = data[a + 5];
+            const u32_t a  = b + 20u + static_cast<u32_t>(s) * 6u;
+            const f32_t ax = data[a], az = data[a + 1], bx = data[a + 6], bz = data[a + 7];
             const f32_t abx = bx - ax, abz = bz - az;
             const f32_t t   = std::clamp(((px - ax) * abx + (pz - az) * abz) / std::max(abx * abx + abz * abz, 1e-6f), 0.0f, 1.0f);
             const f32_t ex = px - ax - abx * t, ez = pz - az - abz * t;
             const f32_t d  = std::sqrt(ex * ex + ez * ez);
             if (d < best[0]) {
-                best = {d, data[a + 2] + (data[a + 6] - data[a + 2]) * t, data[a + 3] + (data[a + 7] - data[a + 3]) * t};
+                const auto lerp = [&](u32_t k) { return data[a + k] + (data[a + 6 + k] - data[a + k]) * t; };
+                best = {d, lerp(2), lerp(3), lerp(4), lerp(5), abx * ez - abz * ex >= 0.0f ? 1.0f : -1.0f};
             }
         }
         return best;
@@ -119,21 +120,24 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
     f32_t bound = 0.0f;
     f32_t water = -1e6f;
     if (mode <= 1) {
-        const std::array<f32_t, 3> exact = course(block);
+        const std::array<f32_t, 6> exact = course(block);
         const f32_t d      = std::min(exact[0], std::sqrt(std::max(field(block, 0), 0.0f)));
         const f32_t cellW  = at(block, 4);
         const f32_t level  = field(block, 2) + (exact[1] - field(block, 2)) * (1.0f - Smooth(cellW, 2.0f * cellW, exact[0]));
         const f32_t half   = std::max(exact[2], 0.5f);
+        const f32_t depth  = exact[3];
         const f32_t axis   = field(block, 3);
         const u32_t kind   = static_cast<u32_t>(at(block, 5));
-        const f32_t depth  = at(block, 6);
         const f32_t valley = at(block, 7);
         const f32_t steep  = at(block, 8);
         const f32_t plain  = at(block, 11);
         const f32_t e      = d - half;
         if (mode == 0) {
-            const f32_t u   = d / half;
-            f32_t       cut = std::clamp(1.0f - u * u, 0.0f, 1.0f);
+            const f32_t u    = d / half;
+            const f32_t v    = exact[5] * u;
+            const f32_t skew = exact[4];
+            const f32_t across = v > skew ? (v - skew) / (1.0f - skew) : (v - skew) / (1.0f + skew);
+            f32_t       cut    = std::clamp(1.0f - across * across, 0.0f, 1.0f);
             if (kind == 5) {
                 cut *= 0.5f + 0.5f * std::cos(u * 9.4248f + 3.0f * std::sin(px * 0.0041f + pz * 0.0033f));
             }
@@ -165,7 +169,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             bound = bed + rise * aux;
             water = level - Smooth(0.0f, 3.0f, e) * 20000.0f;
             if (receiver != Graph::kNoBlock) {
-                const std::array<f32_t, 3> r = course(receiver);
+                const std::array<f32_t, 6> r = course(receiver);
                 const f32_t                er = r[0] - std::max(r[2], 0.5f);
                 water -= (1.0f - Smooth(-2.0f, 0.0f, er)) * 20000.0f;
             }
@@ -200,6 +204,10 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         } else {
             const f32_t rim = (L + 2.0f) - Smooth(0.0f, 120.0f, s) * 20000.0f;
             bound = rim * outside + (L - 20000.0f) * (1.0f - outside);
+            if (static_cast<u32_t>(at(block, 5)) == 5) {
+                const f32_t land = L + 1.5f - (1.0f - Smooth(0.0f, 150.0f, q)) * 5.0f;
+                bound = land * (1.0f - outside) + (L - 20000.0f) * outside;
+            }
             const f32_t crater = at(block, 15);
             if (crater > 0.0f) {
                 const f32_t x     = std::fabs(s - size * 0.25f) / (size * 0.12f);

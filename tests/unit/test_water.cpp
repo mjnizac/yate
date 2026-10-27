@@ -212,6 +212,50 @@ end
     CHECK(graph.NodeCount() < 600);
 }
 
+void TestShape() {
+    test::Section("meanders loop, a cliff gives a fall, a calm mouth a delta and an open one an estuary");
+    Graph graph;
+    CHECK(Run(graph, "shape", R"(
+local function sinuosity(r)
+    local length = 0.0
+    for i = 2, #r.points do
+        length = length + math.sqrt((r.points[i][1] - r.points[i - 1][1]) ^ 2 + (r.points[i][2] - r.points[i - 1][2]) ^ 2)
+    end
+    local a, b = r.points[1], r.points[#r.points]
+    return length / math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2)
+end
+return function(params)
+    local c = Terrain.Coords{}
+    -- A plain falling to a sea along x = -5000, with a 120 m cliff along z = 3000 on its north side.
+    local base = (c.x + 5000.0) * 0.004 - 8.0 + Curves.Smoothstep{ input = c.y, min = 2950.0, max = 3050.0 } * 120.0
+    local net = Water.Network{ terrain = base, region = { -8000, -6000, 8000, 8000 }, cell = 100, sea_level = 0,
+        rivers = { { points = { { 7000, -2000 }, { -7000, -2000 } }, kind = "lowland", width = 40, roughness = 0.8 },
+                   { points = { { 3000, 7000 }, { 3000, 3500 }, { 2500, 0 } }, kind = "mountain", width = 14 },
+                   { points = { { 6000, -4500 }, { -7000, -4500 } }, kind = "gorge", width = 12, mouth = "estuary" } } }
+    local lowland, mountain, gorge = net.rivers[1], net.rivers[2], net.rivers[3]
+    if sinuosity(lowland) < 1.4 then error("the lowland river barely meanders: " .. sinuosity(lowland)) end
+    if sinuosity(gorge) > 1.15 then error("the gorge meanders like a lowland river: " .. sinuosity(gorge)) end
+    if mountain.falls < 1 then error("the mountain river has no fall over the cliff") end
+    local distributaries, fans = 0, 0
+    for _, r in ipairs(net.rivers) do
+        if r.distributary then distributaries = distributaries + 1 end
+    end
+    for _, l in ipairs(net.lakes) do
+        if l.kind == "fan" then fans = fans + 1 end
+    end
+    if distributaries < 2 or fans < 1 then error("no delta: " .. distributaries .. " distributaries, " .. fans .. " fans") end
+    if gorge.widths[#gorge.widths] < gorge.widths[#gorge.widths // 2] * 2.5 then error("the estuary did not widen") end
+    local wet = net:apply(base)
+    local a = net:audit(wet, 0)
+    if a.rises > 0 or a.dry > 0 then
+        error(string.format("over %d points the water rose %d times (worst %.1f m) and ran dry %d times",
+                            a.points, a.rises, a.worst, a.dry))
+    end
+    return { height = { value = wet.height, range = { -300, 900 } } }
+end
+)"));
+}
+
 } // namespace
 
 int main() {
@@ -224,6 +268,7 @@ int main() {
     TestGenerate();
     TestAudit();
     TestMany();
+    TestShape();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();
     log::Shutdown();

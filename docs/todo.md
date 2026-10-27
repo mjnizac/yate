@@ -94,9 +94,10 @@ viewer screenshot. Each item is done when it is in `ctest`.
 - [x] **Water that rose and ran dry along its channel** (phase 1 of the water plan): confluences resolved as
       a tree without raising a level, a tributary's water giving way to its river's, floodplains filled
       before channels are cut, detail kept out of the water, duplicates dropped; `net:audit` measures it.
-- [ ] **Water plan, phases 2 to 5**: meanders as sine-generated curves, cut banks and point bars, width
-      from drainage area, rapids and falls, deltas; lake outlines from contours, outlets at the lowest
-      shore point; a fused carve op for the node cap; generation per world cell; texture masks.
+- [x] **Water plan, phase 2**: sine-generated meanders with Kinoshita skew, cut banks and point bars,
+      width from drainage summed at confluences, falls with plunge pools and rapids, deltas and estuaries.
+- [ ] **Water plan, phases 3 and 5**: lake outlines from contours, outlets at the lowest shore point, more
+      basins; generation per world cell; texture masks. A delta's fan is a plain sector, not lobed.
 - [ ] **Generation over an unbounded world**: drawn elements work anywhere, but `generate` analyses one
       `region`; the same region gives the same rivers in the viewer and in any export inside it. Rivers
       everywhere without a region needs the analysis per fixed world cell, a river owned by the cell of

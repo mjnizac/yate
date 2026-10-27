@@ -1321,6 +1321,22 @@ at mouth }`), `depth`, `roughness` (meanders and banks, 0 to 1) and `kind`, whic
 | `lowland` | meanders, a floodplain a metre over the water, two terraces, levees |
 | `braided` | a wide bed of shallow threads and gravel bars |
 
+**Shape of a river.** Its meanders are a sine-generated curve (Langbein and Leopold) with Kinoshita's skew:
+bends that loop and lean downstream, swinging by the kind's `omega` (a lowland river loops, a gorge barely
+bends), wavelength about eleven widths. In a bend the deepest line runs against the outer bank (a cut bank)
+and the bed rises gently to the inner one (a point bar). A generated river's width follows its drainage
+area (`10 * sqrt(A / 1 km2)` metres, within `river.width`), a drawn one's goes from source to mouth as given,
+and below a confluence a river is wider by what joined it (widths add as the root of the areas). Where a
+mountain, gorge or glacial river meets a cliff (25 m or more at 45 % and three times its own slope) it falls
+over it: the step is kept, a plunge pool is dug at its foot and the bed shallows into rapids above it; a
+canyon cuts back through instead.
+
+**Mouths.** A river that ends in the sea or a lake spreads there. Into a lake, or as a lowland or braided
+river into the sea, it splits about 25 widths up into three distributaries over a fan of land a metre and a
+half over the water (a delta); otherwise into the sea, its last stretch widens as a funnel to four times
+(an estuary). `mouth = "delta" | "estuary" | "none"` on a drawn river chooses; the mouth is where it first
+reaches the water, whatever lies beyond in its drawn course.
+
 The valley is an envelope over the channel: the ground is lowered to the level plus the kind's profile
 of the distance, which flares so it meets the ground on a curve; it never raises ground, except the
 floodplain, which fills holes by up to 3 m; every floodplain is filled before any channel is cut, so none

@@ -1303,18 +1303,19 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     // frame and `params` (the element's numbers, kind first), then four values a cell. `Hydrology.Carve`
     // reads it in one node. Both return the block's offset.
     // Header: 20 values, the frame, `params` from 5 to 15, the point count in 16 and where the cells
-    // start in 17. Then the points, four values each, then the cells, four values each.
+    // start in 17. Then the points, six values each (x, z, level, half-width, depth, bank skew), then the
+    // cells, four values each.
     const auto block = [&graph](const std::array<const terrain::FieldGrid*, 4>& fields, const std::pmr::vector<f64_t>& params,
-                                const std::array<const std::pmr::vector<f64_t>*, 4>& points, SourceLocation location) {
+                                const std::array<const std::pmr::vector<f64_t>*, 6>& points, SourceLocation location) {
         const terrain::FieldGrid& frame = *fields[0];
         const usize_t             count = points[0] != nullptr ? points[0]->size() : 0;
-        const usize_t             cells = 20 + count * 4;
+        const usize_t             cells = 20 + count * 6;
         std::pmr::vector<f32_t>   values(cells + frame.values.size() * 4, 0.0f, &memory::General().Resource());
         values[16] = static_cast<f32_t>(count);
         values[17] = static_cast<f32_t>(cells);
         for (usize_t i = 0; i < count; ++i) {
-            for (usize_t k = 0; k < 4; ++k) {
-                values[20 + i * 4 + k] = static_cast<f32_t>((*points[k])[i]);
+            for (usize_t k = 0; k < 6; ++k) {
+                values[20 + i * 6 + k] = static_cast<f32_t>((*points[k])[i]);
             }
         }
         values[0] = static_cast<f32_t>(frame.width);
@@ -1347,6 +1348,9 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         args.Numbers("zs", count, zs);
         args.Numbers("levels", count, levels);
         args.Numbers("halves", count, halves);
+        std::pmr::vector<f64_t> depths(r), skews(r);
+        args.Numbers("depths", count, depths);
+        args.Numbers("skews", count, skews);
         args.Numbers("axis_xs", axis, axisXs);
         args.Numbers("axis_zs", axis, axisZs);
         args.Numbers("axis_levels", axis, axisLevels);
@@ -1361,7 +1365,7 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
             !ok) {
             Fail(location, "{}", ok.error().Message());
         }
-        return block({&distance2, &along, &level, &axisLevel}, params, {&xs, &zs, &levels, &halves}, location);
+        return block({&distance2, &along, &level, &axisLevel}, params, {&xs, &zs, &levels, &halves, &depths, &skews}, location);
     });
     hydrology.set_function("LakeBlock", [block, fieldGrid](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
@@ -1379,7 +1383,7 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         if (Status ok = terrain::PolygonField(xs, zs, cell, margin, distance); !ok) {
             Fail(location, "{}", ok.error().Message());
         }
-        return block({&distance, nullptr, nullptr, nullptr}, params, {nullptr, nullptr, nullptr, nullptr}, location);
+        return block({&distance, nullptr, nullptr, nullptr}, params, {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr}, location);
     });
     hydrology.set_function("Carve", [&graph](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);

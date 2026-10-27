@@ -48,7 +48,10 @@ local function main(params)
 
     -- The closed basin in the south-east, its floor at -90 m.
     local basin = Shapes.Ellipse{ at = { 7000, -7600 }, radii = { 3000, 2100 }, rotation = 15, position = warp }
-    ground = Combine.Min{ a = ground, b = Curves.Clamp{ input = basin + 700.0, min = 0.0, max = 100000.0 } * 0.09 - 90.0 }
+    -- A cone 9 % steep from the floor out to 800 m past the basin's edge, then a wall: it lowers nothing
+    -- further away.
+    ground = Combine.Min{ a = ground, b = Curves.Clamp{ input = basin + 700.0, min = 0.0, max = 100000.0 } * 0.09 - 90.0
+                                          + Curves.Clamp{ input = basin - 800.0, min = 0.0, max = 100000.0 } * 10.0 }
 
     local net = Water.Network{
         terrain = ground, region = { -12000, -12000, 12000, 12000 }, cell = 100.0, sea_level = 0.0, seed = seed,
@@ -58,7 +61,7 @@ local function main(params)
             { source = { -2500, 9200 }, kind = "braided", width = 22, name = "braided" },
             { points = { { 7600, 1200 }, { 5200, 300 }, { 3000, -1400 }, { 700, -2000 }, { -2600, -2600 }, { -6000, -3200 }, { -9000, -3600 } },
               kind = "canyon", width = 24, name = "canyon" },
-            { points = { { 6400, -3700 }, { 6600, -4700 }, { 6900, -5500 }, { 7000, -6300 } }, kind = "gorge", width = 10, name = "gorge" },
+            { points = { { 5600, -2600 }, { 6200, -3700 }, { 6600, -4900 }, { 6900, -5700 }, { 7000, -6400 } }, kind = "gorge", width = 12, name = "gorge" },
             { points = { { 6000, -10600 }, { 3000, -10000 }, { 0, -10600 }, { -3500, -9900 }, { -6500, -10400 }, { -9500, -10000 } },
               kind = "lowland", width = 40, roughness = 0.8, name = "lowland" },
         },
