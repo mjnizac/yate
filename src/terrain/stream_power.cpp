@@ -2,12 +2,14 @@
 
 #include <engine/log.hpp>
 #include <engine/memory/general.hpp>
+#include <engine/platform.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <utility>
@@ -39,6 +41,63 @@ std::mutex                          g_cacheMutex;
 std::array<CacheEntry, kCacheEntries> g_cache{};
 usize_t                             g_cacheNext = 0;
 
+// The same results also go to disk next to the executable, so a new process (every export, every test
+// run) finds what an earlier one computed. The key mixes in when this file was compiled: a rebuilt
+// simulation never reads what the previous build wrote. Delete `<bin>/cache/` to reclaim the space.
+constexpr const char kBuildStamp[]   = __DATE__ " " __TIME__;
+constexpr const char kDiskDirectory[] = "cache";
+constexpr u32_t      kDiskMagic      = 0x43505359u; // "YSPC"
+
+void DiskPath(std::array<char, 512>& out, u64_t key, u64_t check) {
+    const std::string_view root = platform::ExecutableDirectory();
+    std::snprintf(out.data(), out.size(), "%.*s%s/stream_power_%016llx_%016llx.bin",
+                  static_cast<int>(root.size()), root.data(), kDiskDirectory,
+                  static_cast<unsigned long long>(key), static_cast<unsigned long long>(check));
+}
+
+[[nodiscard]] b8_t LoadFromDisk(const char* path, std::span<f64_t> height) {
+    std::FILE* file = std::fopen(path, "rb");
+    if (file == nullptr) {
+        return false;
+    }
+    // Read aside: a truncated file must not leave `height`, the simulation's input, half overwritten.
+    std::pmr::vector<f64_t> values(height.size(), &memory::General().Resource());
+    std::array<u64_t, 2>    header{};
+    const b8_t ok = std::fread(header.data(), sizeof(u64_t), 2, file) == 2 && header[0] == kDiskMagic
+                    && header[1] == height.size()
+                    && std::fread(values.data(), sizeof(f64_t), values.size(), file) == values.size();
+    std::fclose(file);
+    if (ok) {
+        std::memcpy(height.data(), values.data(), height.size_bytes());
+    }
+    return ok;
+}
+
+void SaveToDisk(const char* path, std::span<const f64_t> height) {
+    const std::string_view root = platform::ExecutableDirectory();
+    std::array<char, 512>  directory{};
+    std::snprintf(directory.data(), directory.size(), "%.*s%s", static_cast<int>(root.size()), root.data(),
+                  kDiskDirectory);
+    if (Status made = platform::MakeDirectory(directory.data()); !made) {
+        return;
+    }
+    // Written aside and renamed, so a reader never sees half a file.
+    std::array<char, 520> temporary{};
+    std::snprintf(temporary.data(), temporary.size(), "%s.tmp", path);
+    std::FILE* file = std::fopen(temporary.data(), "wb");
+    if (file == nullptr) {
+        return;
+    }
+    const std::array<u64_t, 2> header = {kDiskMagic, height.size()};
+    const b8_t written = std::fwrite(header.data(), sizeof(u64_t), 2, file) == 2
+                         && std::fwrite(height.data(), sizeof(f64_t), height.size(), file) == height.size();
+    std::fclose(file);
+    std::remove(path);
+    if (!written || std::rename(temporary.data(), path) != 0) {
+        std::remove(temporary.data());
+    }
+}
+
 /// A second, independent hash over the same bytes. A cached result is used only when both match, so a
 /// collision of the first cannot hand back another terrain.
 [[nodiscard]] u64_t MixCheck(u64_t h, const void* data, usize_t bytes) {
@@ -64,6 +123,7 @@ usize_t                             g_cacheNext = 0;
     u64_t h = 0xCBF29CE484222325ull;
     const f64_t numbers[] = {params.cell, params.k, params.m, params.talus, params.diffusion};
     const u32_t counts[]  = {params.width, params.depth, params.iterations, params.refresh};
+    h = Mix(h, kBuildStamp, sizeof(kBuildStamp));
     h = Mix(h, numbers, sizeof(numbers));
     h = Mix(h, counts, sizeof(counts));
     h = Mix(h, height.data(), height.size_bytes());
@@ -75,6 +135,7 @@ usize_t                             g_cacheNext = 0;
     u64_t h = 0x84222325CBF29CE4ull;
     const f64_t numbers[] = {params.cell, params.k, params.m, params.talus, params.diffusion};
     const u32_t counts[]  = {params.width, params.depth, params.iterations, params.refresh};
+    h = MixCheck(h, kBuildStamp, sizeof(kBuildStamp));
     h = MixCheck(h, numbers, sizeof(numbers));
     h = MixCheck(h, counts, sizeof(counts));
     h = MixCheck(h, height.data(), height.size_bytes());
@@ -98,14 +159,22 @@ Status StreamPowerErode(std::span<f64_t> height, std::span<const f64_t> uplift,
             }
         }
     }
-    const auto started = std::chrono::steady_clock::now();
-    if (Status run = StreamPowerRun(height, uplift, params); !run) {
-        return run;
+    std::array<char, 512> path{};
+    DiskPath(path, key, check);
+    if (LoadFromDisk(path.data(), height)) {
+        LOG_INFO("stream power: {}x{} grid, {} step(s), from the disk cache", params.width, params.depth,
+                 params.iterations);
+    } else {
+        const auto started = std::chrono::steady_clock::now();
+        if (Status run = StreamPowerRun(height, uplift, params); !run) {
+            return run;
+        }
+        LOG_INFO("stream power: {}x{} grid, {} step(s) in {:.0f} ms", params.width, params.depth,
+                 params.iterations,
+                 std::chrono::duration<f64_t, std::milli>(std::chrono::steady_clock::now() - started)
+                     .count());
+        SaveToDisk(path.data(), height);
     }
-    LOG_INFO("stream power: {}x{} grid, {} step(s) in {:.0f} ms", params.width, params.depth,
-             params.iterations,
-             std::chrono::duration<f64_t, std::milli>(std::chrono::steady_clock::now() - started)
-                 .count());
 
     std::lock_guard lock(g_cacheMutex);
     CacheEntry& slot = g_cache[g_cacheNext];
