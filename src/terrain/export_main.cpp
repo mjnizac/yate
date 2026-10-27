@@ -33,6 +33,7 @@ void PrintUsage() {
         "  --param key=value      script parameter, repeatable\n"
         "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"
         "  --log-format <text|json>  log encoding (default text)\n"
+        "  --log-level <level>    trace, debug, info, warn, error or off (default info)\n"
         "  --help                 print this message\n"
         "\n"
         "The script defines main(params) and returns a table of outputs. params carries seed,\n"
@@ -87,6 +88,7 @@ struct Options {
     ExportJob        job;
     std::string_view deviceUuid;
     log::Format      logFormat = log::Format::Text;
+    log::Level       logLevel  = log::kCompileLevel;
 };
 
 [[nodiscard]] Result<Options> ParseArguments(int argc, char** argv) {
@@ -176,6 +178,11 @@ struct Options {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--log-format expects text or json, got {}", value);
             }
+        } else if (argument == "--log-level") {
+            if (!log::ParseLevel(value, options.logLevel)) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--log-level expects trace, debug, info, warn, error or off, got {}", value);
+            }
         } else {
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "unknown option {}",
                         argument);
@@ -226,6 +233,7 @@ int main(int argc, char** argv) {
     const Result<Application*> application =
         engine::init(AppInfo{.mode       = RunMode::Headless,
                              .name       = "terrain_export",
+                             .logLevel   = options->logLevel,
                              .logFormat  = options->logFormat,
                              .deviceUuid = options->deviceUuid});
     if (!application) {

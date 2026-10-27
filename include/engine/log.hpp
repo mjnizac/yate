@@ -45,6 +45,19 @@ ENGINE_API void Flush() noexcept;
 
 inline constexpr Level kCompileLevel = static_cast<Level>(ENGINE_LOG_LEVEL);
 
+/// Reads a level as the command lines spell it: trace, debug, info, warn, error or off. False when the
+/// word is none of them.
+[[nodiscard]] inline bool ParseLevel(std::string_view text, Level& out) noexcept {
+    constexpr std::string_view kNames[] = {"trace", "debug", "info", "warn", "error", "fatal", "off"};
+    for (u32_t i = 0; i < 7; ++i) {
+        if (text == kNames[i]) {
+            out = static_cast<Level>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace engine::log
 
 #ifdef IS_ENGINE
