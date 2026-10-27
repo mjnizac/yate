@@ -195,14 +195,35 @@ local function main(params)
     local aprons = {}
     for k, tier in ipairs(tiers) do
         local points = curve(10 + k, function() return tier.z end, tier.spacing, tier.wander)
-        local edge   = fill(points, position)
-        for _, v in ipairs(valleys) do
-            if jitter(v.i, 30 + k) > reach[k] and (v.major or k < 3) then
-                local width = (v.major and 300 or 170) * (1.0 + 0.6 * math.abs(jitter(v.i, 40 + k))) * s
-                local depth = width * (1.2 + 0.8 * math.abs(jitter(v.i, 50 + k)))
-                local z     = zAt(points, v.x)
-                local trough = Shapes.Polyline{ points = { { v.x, z - depth + width }, { v.x + 150 * jitter(v.i, 60 + k), z + 3000 } }, position = notchAt }
-                edge = Combine.SmoothMax{ a = edge, b = width - trough, k = 80.0 }
+        -- The tier's land with its re-entrants, drawn at `at` for the edge and at `notchesAt` for them.
+        local function notched(at, notchesAt)
+            local e = fill(points, at)
+            for _, v in ipairs(valleys) do
+                if jitter(v.i, 30 + k) > reach[k] and (v.major or k < 3) then
+                    local width = (v.major and 300 or 170) * (1.0 + 0.6 * math.abs(jitter(v.i, 40 + k))) * s
+                    local depth = width * (1.2 + 0.8 * math.abs(jitter(v.i, 50 + k)))
+                    local z     = zAt(points, v.x)
+                    local trough = Shapes.Polyline{ points = { { v.x, z - depth + width }, { v.x + 150 * jitter(v.i, 60 + k), z + 3000 } }, position = notchesAt }
+                    e = Combine.SmoothMax{ a = e, b = width - trough, k = 80.0 }
+                end
+            end
+            return e
+        end
+        local edge = notched(position, notchAt)
+        -- Chutes: narrow gullies down the walls along joints (not fluvial channels, which World Machine's
+        -- users keep off cliff faces), each with a larger debris cone below it, through the apron.
+        local chuteCones = 0.0
+        for j = 0, math.floor(18000 / 700) do
+            if jitter(j, 200 + k) > 0.55 then
+                local xc    = -9000 + j * 700 + 250 * jitter(j, 210 + k)
+                local z     = zAt(points, xc)
+                local w     = 25.0 * s
+                local deep  = (60.0 + 80.0 * math.abs(jitter(j, 220 + k))) * s
+                local chute = Shapes.Polyline{ points = { { xc, z - deep + w }, { xc, z + 3000 } }, position = position }
+                edge = Combine.SmoothMax{ a = edge, b = w - chute, k = 15.0 }
+                chuteCones = chuteCones + Curves.Profile{
+                    input = Shapes.Circle{ at = { xc, z }, radius = 1.0 }, kind = "gaussian", sigma = 90.0,
+                }
             end
         end
         firstEdge   = firstEdge or edge
@@ -236,16 +257,18 @@ local function main(params)
         local spread = Noises.fBm{
             frequency = 1.0 / 1800.0, octaves = 2, amplitude = 0.5, seed = seed + 100 + k, position = alongCoast,
         }
-        local reach_ = (130.0 + 140.0 * spread.value) * s
+        local reach_ = (130.0 + 140.0 * spread.value + 120.0 * chuteCones) * s
         local wedge  = Curves.Clamp{ input = (reach_ - (edge - run)) * math.tan(math.rad(35.0)), min = 0.0, max = 100000.0 }
         -- Capped at a third of the tier's rise: uncapped, the wedge kept rising inland and buried the
         -- plateau; capped by the tier's local height instead, it was nothing in front of the foot.
         aprons[#aprons + 1] = { part = part, wedge = Combine.Min{ a = wedge, b = rise * 0.35 } }
     end
-    -- A regional slope with its divide on the main wall's edge (the same curve, without buttresses): in
-    -- front of it every tread leans 1.2 % towards the sea, as benches do (flat ones held water); behind it
-    -- the plateau is the back of a cuesta and dips 2 % inland. Both measured from one edge, so they meet
-    -- in a ridge: measured from z, they met in a trough behind the wall that held a row of pits.
+    -- A regional slope with its divide on the main wall's edge (the same curve, without buttresses or
+    -- re-entrants): in front of it every tread leans 1.2 % towards the sea, as benches do (flat ones held
+    -- water); behind it the plateau is the back of a cuesta and dips 2 % inland. Both measured from one
+    -- edge, so they meet in a ridge: measured from z, they met in a trough behind the wall that held a
+    -- row of pits. Following the re-entrants changed no measurement; following the cracks too made the
+    -- 2 % dip ripple into pits over a sixth of the plateau.
     local wallLine = land(13, function() return -600 end, 2200, 550, c)
     local front    = Curves.Clamp{ input = wallLine, min = 0.0, max = 100000.0 }
     local behind   = Curves.Clamp{ input = -wallLine, min = 0.0, max = 100000.0 }
