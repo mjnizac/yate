@@ -40,6 +40,7 @@ ENGINE_DEFINE_FBM(Fbm2Simplex, vec2, vec3, FbmWeight2, Simplex2D)
 ENGINE_DEFINE_FBM(Fbm2Ridged, vec2, vec3, FbmWeight2, Ridged2D)
 ENGINE_DEFINE_FBM(Fbm2Billow, vec2, vec3, FbmWeight2, Billow2D)
 ENGINE_DEFINE_FBM(Fbm2Cellular, vec2, vec3, FbmWeight2, Cellular2D)
+ENGINE_DEFINE_FBM(Fbm2Cellular3, vec2, vec3, FbmWeight2, Cellular2DF3)
 
 ENGINE_DEFINE_FBM(Fbm3Simplex, vec3, vec4, FbmWeight3, Simplex3D)
 ENGINE_DEFINE_FBM(Fbm3Ridged, vec3, vec4, FbmWeight3, Ridged3D)
@@ -59,6 +60,9 @@ vec3 Fbm2(vec2 p, uint octaves, float amplitude, float persistence, float freque
     }
     if (kBaseFunction == ENGINE_BASE_CELLULAR) {
         return Fbm2Cellular(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+    }
+    if (kBaseFunction == ENGINE_BASE_CELLULAR3) {
+        return Fbm2Cellular3(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
     }
     return Fbm2Simplex(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
 }

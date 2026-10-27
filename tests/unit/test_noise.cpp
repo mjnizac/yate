@@ -300,6 +300,7 @@ int main() {
             {"ridged R2", NoiseKind::Ridged, Domain::R2, {.x = 32, .y = 1, .z = 32}},
             {"billow R2", NoiseKind::Billow, Domain::R2, {.x = 32, .y = 1, .z = 32}},
             {"cellular R2", NoiseKind::Cellular, Domain::R2, {.x = 32, .y = 1, .z = 32}},
+            {"cellular F3 R2", NoiseKind::Cellular3, Domain::R2, {.x = 32, .y = 1, .z = 32}},
             {"simplex R3", NoiseKind::Simplex, Domain::R3, {.x = 16, .y = 16, .z = 16}},
             {"ridged R3", NoiseKind::Ridged, Domain::R3, {.x = 16, .y = 16, .z = 16}},
             {"billow R3", NoiseKind::Billow, Domain::R3, {.x = 16, .y = 16, .z = 16}},

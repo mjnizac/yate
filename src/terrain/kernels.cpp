@@ -338,12 +338,14 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
 
 [[nodiscard]] f32_t HashToUnit(u32_t h) { return static_cast<f32_t>(h >> 8) * (1.0f / 16777216.0f); }
 
-/// Worley F2 - F1 as `1 - 2 (F2 - F1)` with its gradient, mirroring `Cellular2D` in noise.lib.glsl.
-[[nodiscard]] std::array<f32_t, 3> Cellular2D(f32_t px, f32_t py, u32_t seed) {
+/// Worley F2 - F1 as `1 - 2 (F2 - F1)`, or F3 - F1 as `1 - 1.4 (F3 - F1)` (`third`), with the
+/// gradient, mirroring `Cellular2D` and `Cellular2DF3` in noise.lib.glsl.
+[[nodiscard]] std::array<f32_t, 3> Cellular2D(f32_t px, f32_t py, u32_t seed, b8_t third = false) {
     const f32_t cx = std::floor(px);
     const f32_t cy = std::floor(py);
-    f32_t       d1 = 1e9f, d2 = 1e9f;
-    f32_t       c1x = 0.0f, c1y = 0.0f, c2x = 0.0f, c2y = 0.0f;
+    f32_t       d[3] = {1e9f, 1e9f, 1e9f};
+    f32_t       qxs[3] = {0.0f, 0.0f, 0.0f};
+    f32_t       qys[3] = {0.0f, 0.0f, 0.0f};
     for (i32_t j = -2; j <= 2; ++j) {
         for (i32_t i = -2; i <= 2; ++i) {
             const i32_t lx = static_cast<i32_t>(cx) + i;
@@ -351,27 +353,31 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             const u32_t h  = HashLattice2(lx, ly, seed);
             const f32_t qx = static_cast<f32_t>(lx) + HashToUnit(h);
             const f32_t qy = static_cast<f32_t>(ly) + HashToUnit(HashMix(h ^ kHashPhi));
-            const f32_t d  = std::sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
-            if (d < d1) {
-                d2  = d1;
-                c2x = c1x;
-                c2y = c1y;
-                d1  = d;
-                c1x = qx;
-                c1y = qy;
-            } else if (d < d2) {
-                d2  = d;
-                c2x = qx;
-                c2y = qy;
+            const f32_t dd = std::sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
+            // Insert into the three nearest, in the same order as the shader so ties break alike.
+            for (usize_t k = 0; k < 3; ++k) {
+                if (dd < d[k]) {
+                    for (usize_t m = 2; m > k; --m) {
+                        d[m]   = d[m - 1];
+                        qxs[m] = qxs[m - 1];
+                        qys[m] = qys[m - 1];
+                    }
+                    d[k]   = dd;
+                    qxs[k] = qx;
+                    qys[k] = qy;
+                    break;
+                }
             }
         }
     }
-    const f32_t f = d2 - d1;
-    const f32_t i1 = 1.0f / std::max(d1, 1e-6f);
-    const f32_t i2 = 1.0f / std::max(d2, 1e-6f);
-    const f32_t gx = (px - c2x) * i2 - (px - c1x) * i1;
-    const f32_t gy = (py - c2y) * i2 - (py - c1y) * i1;
-    return {1.0f - 2.0f * f, -2.0f * gx, -2.0f * gy};
+    const usize_t far   = third ? 2 : 1;
+    const f32_t   scale = third ? 1.4f : 2.0f;
+    const f32_t   f     = d[far] - d[0];
+    const f32_t   i1    = 1.0f / std::max(d[0], 1e-6f);
+    const f32_t   i2    = 1.0f / std::max(d[far], 1e-6f);
+    const f32_t   gx    = (px - qxs[far]) * i2 - (px - qxs[0]) * i1;
+    const f32_t   gy    = (py - qys[far]) * i2 - (py - qys[0]) * i1;
+    return {1.0f - scale * f, -scale * gx, -scale * gy};
 }
 
 void LatticeGradient2(i32_t x, i32_t y, u32_t seed, f32_t& gx, f32_t& gy) {
@@ -535,7 +541,7 @@ struct BaseSample {
 template <usize_t Axes>
 void ShapeBase(NoiseKind kind, BaseSample<Axes>& sample) {
     // Cellular is its own base function, not a shaping of simplex.
-    if (kind == NoiseKind::Simplex || kind == NoiseKind::Cellular) {
+    if (kind == NoiseKind::Simplex || kind == NoiseKind::Cellular || kind == NoiseKind::Cellular3) {
         return;
     }
     const f32_t sign = sample.value < 0.0f ? -1.0f : 1.0f;
@@ -857,12 +863,13 @@ NoiseSample EvalNoise(const Graph::NoiseParams& params, u32_t seed,
     }
 
     // R2 lives in the (x, z) plane, so the y component of `position` is ignored.
-    const b8_t          cellular = params.kind == NoiseKind::Cellular;
+    const b8_t          third    = params.kind == NoiseKind::Cellular3;
+    const b8_t          cellular = params.kind == NoiseKind::Cellular || third;
     const BaseSample<2> sample   = Fbm<2>(
         params, seed, {position[0], position[2]},
-        [cellular](const std::array<f32_t, 2>& p, u32_t octaveSeed) {
-            const std::array<f32_t, 3> n =
-                cellular ? Cellular2D(p[0], p[1], octaveSeed) : Simplex2D(p[0], p[1], octaveSeed);
+        [cellular, third](const std::array<f32_t, 2>& p, u32_t octaveSeed) {
+            const std::array<f32_t, 3> n = cellular ? Cellular2D(p[0], p[1], octaveSeed, third)
+                                                    : Simplex2D(p[0], p[1], octaveSeed);
             return BaseSample<2>{.value = n[0], .gradient = {n[1], n[2]}};
         });
     result.value       = sample.value + params.offset;

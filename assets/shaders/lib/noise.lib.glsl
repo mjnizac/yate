@@ -246,10 +246,48 @@ vec3 Cellular2D(vec2 p, uint seed) {
     return vec3(1.0 - 2.0 * f, -2.0 * g);
 }
 
+// Worley's F3 - F1 as `1 - 1.4 (F3 - F1)`: it also breaks where the second and third nearest points
+// swap, so the net has more break lines and triple junctions, cracks and blocks rather than cells. The
+// scale keeps one octave inside [-1, 1] as F2 - F1's does. Same search and same tie-breaking order;
+// `Cellular2D` is left as it was so its results stay bit-identical.
+vec3 Cellular2DF3(vec2 p, uint seed) {
+    vec2  cell = floor(p);
+    float d1 = 1e9, d2 = 1e9, d3 = 1e9;
+    vec2  c1 = vec2(0.0), c2 = vec2(0.0), c3 = vec2(0.0);
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
+            ivec2 lattice = ivec2(cell) + ivec2(i, j);
+            uint  h       = HashLattice2(lattice, seed);
+            vec2  point   = vec2(lattice) + vec2(HashToUnit(h), HashToUnit(HashMix(h ^ ENGINE_HASH_PHI)));
+            float d       = length(p - point);
+            if (d < d1) {
+                d3 = d2;
+                c3 = c2;
+                d2 = d1;
+                c2 = c1;
+                d1 = d;
+                c1 = point;
+            } else if (d < d2) {
+                d3 = d2;
+                c3 = c2;
+                d2 = d;
+                c2 = point;
+            } else if (d < d3) {
+                d3 = d;
+                c3 = point;
+            }
+        }
+    }
+    float f = d3 - d1;
+    vec2 g = (p - c3) / max(d3, 1e-6) - (p - c1) / max(d1, 1e-6);
+    return vec3(1.0 - 1.4 * f, -1.4 * g);
+}
+
 // Base function ids, matching engine::terrain::NoiseKind.
-#define ENGINE_BASE_SIMPLEX  0u
-#define ENGINE_BASE_RIDGED   1u
-#define ENGINE_BASE_BILLOW   2u
-#define ENGINE_BASE_CELLULAR 3u
+#define ENGINE_BASE_SIMPLEX   0u
+#define ENGINE_BASE_RIDGED    1u
+#define ENGINE_BASE_BILLOW    2u
+#define ENGINE_BASE_CELLULAR  3u
+#define ENGINE_BASE_CELLULAR3 4u
 
 #endif // ENGINE_LIB_NOISE_GLSL

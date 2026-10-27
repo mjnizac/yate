@@ -181,7 +181,7 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
             "Noise lacunarity must be strictly greater than zero, got {}", params.lacunarity));
     }
 
-    if (params.kind == NoiseKind::Cellular && params.domain == Domain::R3) {
+    if ((params.kind == NoiseKind::Cellular || params.kind == NoiseKind::Cellular3) && params.domain == Domain::R3) {
         return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
                                               location.file, location.line,
                                               "cellular noise is 2D only; drop 'domain = 3'"));

@@ -695,6 +695,10 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
             }
             params.kind = *kind;
         }
+        // Which neighbour the cellular distance is taken to: 2 is F2 - F1, 3 is F3 - F1.
+        if (params.kind == NoiseKind::Cellular && args.Count("order", 2, 2, 3) == 3) {
+            params.kind = NoiseKind::Cellular3;
+        }
         // Strictly positive, not merely non-negative: a frequency, a persistence or a lacunarity of
         // zero collapses the octave sum instead of producing a degenerate but meaningful field, so
         // it is a mistake worth naming rather than a value worth honouring.

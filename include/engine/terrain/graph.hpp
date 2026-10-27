@@ -179,8 +179,10 @@ enum class ShapeKind : u32_t {
 inline constexpr u32_t kMaxShapeSegments = 128;
 
 /// Noise kind a `Noise` node evaluates.
-/// Base function of a noise. `Cellular` is Worley's F2 - F1, ridges along the cell boundaries; R2 only.
-enum class NoiseKind : u32_t { Simplex = 0, Ridged, Billow, Cellular };
+/// Base function of a noise. `Cellular` is Worley's F2 - F1, ridges along the cell boundaries;
+/// `Cellular3` is F3 - F1, which also breaks along the lines where the second and third nearest swap,
+/// so it has more break lines and triple junctions: cracks and blocks rather than cells. R2 only.
+enum class NoiseKind : u32_t { Simplex = 0, Ridged, Billow, Cellular, Cellular3 };
 
 /// What a `Vector` node does.
 enum class VectorOp : u32_t { Extract = 0, Combine };
