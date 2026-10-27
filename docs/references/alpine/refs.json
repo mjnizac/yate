@@ -1,0 +1,17 @@
+{
+  "family": "alpine",
+  "note": "What each image is, so a measurement never treats shaded relief or a photo as heights. kind: heightmap (grey = height), shaded (rendered hillshade), photo, render, unchecked. size_m and height_m are null when unknown: then only scale-free numbers (spectral slope, hypsometric integral) can be compared.",
+  "images": [
+    { "file": "1.png", "kind": "heightmap", "size_m": null, "height_m": null, "measured": { "level": 2, "spectral_slope": 4.00, "hypsometric_integral": 0.312 } },
+    { "file": "2.png", "kind": "heightmap", "size_m": null, "height_m": null, "measured": { "level": 2, "spectral_slope": 3.97, "hypsometric_integral": 0.269 } },
+    { "file": "3.png", "kind": "heightmap", "size_m": null, "height_m": null, "measured": { "level": 2, "spectral_slope": 3.94, "hypsometric_integral": 0.292 } },
+    { "file": "4.png", "kind": "heightmap", "size_m": null, "height_m": null, "measured": { "level": 2, "spectral_slope": 3.97, "hypsometric_integral": 0.294 } },
+    { "file": "heightmap1.jpg", "kind": "shaded", "note": "named heightmap but it is a rendered hillshade" },
+    { "file": "heightmap2.jpg", "kind": "shaded", "note": "named heightmap but it is a rendered hillshade" },
+    { "file": "alpine_massif.jpg", "kind": "unchecked" },
+    { "file": "alpine_peaks.avif", "kind": "unchecked" },
+    { "file": "alpine_rocks_ridges.avif", "kind": "unchecked" },
+    { "file": "model.jpg", "kind": "unchecked" },
+    { "file": "talus.jpg", "kind": "unchecked" }
+  ]
+}
