@@ -70,17 +70,16 @@ stack more noise or parameters.
 
 ## 4. Run and look
 
-```bash
-build/Release/bin/terrain_export --script <script> --min x,z --max x,z --resolution <m> --section 512 --out out/<name>/ --raw
-```
+One command per iteration:
 
 ```bash
-build/Release/bin/terrain_viewer --script <script> --view yaw,pitch,distance --target x,y,z --screenshot out/<name>/view.png
+tools/dev.sh review <script> --bounds minx,minz,maxx,maxz --res <m> [--level L | --no-sea] --sun az,el --target x,y,z --shot yaw,pitch,dist --shot ...
 ```
 
-```bash
-build/Release/bin/terrain_metrics out/<name> [--no-sea | --level L] --hillshade out/<name>/shade.png --sun 180,35
-```
+It leaves `out/review/<script>/` with `metrics.json`, `hillshade.png`, `view_N.png` and prints the relief
+summary; read the images with the Read tool. A reference heightmap is measured directly:
+`build/Release/bin/terrain_metrics <ref.png> --level L`, after checking its `refs.json` says
+`heightmap`.
 
 Use the same three views every run (oblique, grazing, top-down) and keep them in the script's header
 comment. The viewer has no cast shadows: judge geometry on the hillshade, with the sun in front of the

@@ -112,6 +112,25 @@ Unit tests link the engine objects directly and define `IS_ENGINE`, so they can 
 allocators, the Vulkan context and the section pool. `test_compute_roundtrip` needs a Vulkan 1.4
 device and the compiled shaders.
 
+`ctest -L fast` runs the suites that take seconds (about 9 s in Release); `-L slow` the ones that export
+whole terrains or open the viewer. `test_datasets --record-history` appends its timings to
+`tests/history/`; a plain run leaves the tree clean.
+
+### From bash: `tools/dev.sh`
+
+```bash
+tools/dev.sh build Release
+tools/dev.sh test Release -L fast
+tools/dev.sh review assets/scripts/terrains/alpine.lua --bounds -8192,-8192,8192,8192 --res 8 --level 2 --sun 180,35 --shot 20,-30,9000 --shot 0,-89,14000
+```
+
+`build` calls `build.cmd` with the Windows path and keeps only errors and warnings. `test` finds ctest
+and refuses to start while another run holds `out/.ctest.lock`, since two suites share `out/`.
+`review` is one terrain iteration: a raw export with warnings only, `metrics.json`, a hillshade, the
+viewer shots in one process, and a four-line relief summary, all under `out/review/<script>/`.
+Stream-power results are cached on disk (`<bin>/cache/`) until the engine is rebuilt, so repeating a
+review within one build skips the simulation.
+
 ## Profile
 
 Tracy does not support cross-version connections, so the profiler and the client must match.
