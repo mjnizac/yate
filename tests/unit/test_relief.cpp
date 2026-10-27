@@ -81,6 +81,18 @@ void TestPlane() {
     const metrics::Relief s = metrics::MeasureRelief(steep, {.level = kNoSea});
     CHECK_EQ(s.steep35, 1.0);
     CHECK_EQ(s.steep45, 0.0);
+    CHECK_EQ(s.talusShare, 0.0);
+    const metrics::Field scree = Make(128, 10.0, [](double x, double) { return x * 10.0 * std::tan(34.0 / kDegrees); });
+    CHECK_EQ(metrics::MeasureRelief(scree, {.level = kNoSea}).talusShare, 1.0);
+}
+
+void TestWallEdge() {
+    test::Section("a straight wall across the map has two edges as long as the map");
+    // A ramp of slope 2 (63 degrees) from x = 128 to 153, flat on both sides: the ground over 45 degrees
+    // is one band, whose two edges run the 254 interior rows. 2 x 2.54 km on 6.55 km2 of land.
+    const metrics::Field f = Make(256, 10.0, [](double x, double) { return std::clamp((x - 128.0) * 20.0, 0.0, 500.0); });
+    const metrics::Relief r = metrics::MeasureRelief(f, {.level = kNoSea});
+    CHECK(std::fabs(r.wallEdgeDensity - 5.08 / 6.5536) < 0.02);
 }
 
 void TestValley() {
@@ -186,6 +198,7 @@ void TestHillshade() {
 
 int main() {
     TestPlane();
+    TestWallEdge();
     TestValley();
     TestBowl();
     TestRipple();

@@ -38,6 +38,8 @@ namespace {
         {"slope_p999", r.slope[3]},
         {"steep35", r.steep35},
         {"steep45", r.steep45},
+        {"talus_share", r.talusShare},
+        {"wall_edge_density", r.wallEdgeDensity},
         {"local_relief_m", r.localRelief},
         {"hypsometric_integral", r.hypsometricIntegral},
         {"curvature_p90", r.curvatureP90},

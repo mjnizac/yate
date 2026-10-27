@@ -38,6 +38,11 @@ struct Relief {
     /// Share of land cells steeper than 35 and 45 degrees.
     double steep35 = 0.0;
     double steep45 = 0.0;
+    /// Share of land cells between 30 and 38 degrees: talus and scree lie at their angle of repose.
+    double talusShare = 0.0;
+    /// Length of the edge of the ground over 45 degrees, km per square km of land: how much wall there
+    /// is and how winding it is. Pixel edges overstate a diagonal by up to sqrt(2).
+    double wallEdgeDensity = 0.0;
     /// Mean of max - min over the blocks, metres.
     double localRelief = 0.0;
     /// (mean - min) / (max - min) of the land heights: low for a plain with peaks, high for a plateau.
@@ -341,6 +346,7 @@ inline void Drainage(const Field& f, const ReliefOptions& o, Relief& r) {
 
     std::vector<double> slopes;
     std::vector<double> curvatures;
+    std::vector<char>   wall(f.width * f.depth, 0);
     double lowest = std::numeric_limits<double>::infinity();
     double highest = -lowest;
     double sum = 0.0;
@@ -361,6 +367,7 @@ inline void Drainage(const Field& f, const ReliefOptions& o, Relief& r) {
             const double gx = (h(x + 1, z) - h(x - 1, z)) / (2.0 * res);
             const double gz = (h(x, z + 1) - h(x, z - 1)) / (2.0 * res);
             slopes.push_back(std::atan(std::hypot(gx, gz)) * 57.29577951308232);
+            wall[z * f.width + x] = slopes.back() > 45.0 ? 1 : 0;
             const double dxx = h(x + 1, z) - 2.0 * c + h(x - 1, z);
             const double dzz = h(x, z + 1) - 2.0 * c + h(x, z - 1);
             curvatures.push_back(std::fabs(dxx + dzz) / (res * res));
@@ -369,13 +376,30 @@ inline void Drainage(const Field& f, const ReliefOptions& o, Relief& r) {
     if (slopes.empty()) {
         return r;
     }
-    double steep35 = 0, steep45 = 0;
+    double steep35 = 0, steep45 = 0, talus = 0;
     for (const double s : slopes) {
         steep35 += s > 35.0 ? 1.0 : 0.0;
         steep45 += s > 45.0 ? 1.0 : 0.0;
+        talus += s >= 30.0 && s <= 38.0 ? 1.0 : 0.0;
     }
-    r.steep35 = steep35 / static_cast<double>(slopes.size());
-    r.steep45 = steep45 / static_cast<double>(slopes.size());
+    r.steep35    = steep35 / static_cast<double>(slopes.size());
+    r.steep45    = steep45 / static_cast<double>(slopes.size());
+    r.talusShare = talus / static_cast<double>(slopes.size());
+    // The edge of the walls: sample boundaries between ground over 45 degrees and land under it, inside
+    // the outer ring, where no slope was taken.
+    double edges = 0.0;
+    for (std::size_t z = 1; z + 2 < f.depth; ++z) {
+        for (std::size_t x = 1; x + 2 < f.width; ++x) {
+            if (!land(x, z)) {
+                continue;
+            }
+            const char here = wall[z * f.width + x];
+            edges += land(x + 1, z) && wall[z * f.width + x + 1] != here ? 1.0 : 0.0;
+            edges += land(x, z + 1) && wall[(z + 1) * f.width + x] != here ? 1.0 : 0.0;
+        }
+    }
+    const double landKm2 = static_cast<double>(cells) * res * res / 1e6;
+    r.wallEdgeDensity    = landKm2 > 0.0 ? edges * res / 1000.0 / landKm2 : 0.0;
     const std::array<double, 4> p = {0.5, 0.9, 0.99, 0.999};
     for (std::size_t k = 0; k < 4; ++k) {
         r.slope[k] = Percentile(slopes, p[k]);

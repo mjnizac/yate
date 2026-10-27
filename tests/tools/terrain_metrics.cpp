@@ -214,6 +214,8 @@ int main(int argc, char** argv) {
                     relief.slope[0], relief.slope[1], relief.slope[2], relief.slope[3]);
         std::printf("  \"steep35\": %.4f, \"steep45\": %.4f, \"local_relief_m\": %.1f, \"block_m\": %g,\n",
                     relief.steep35, relief.steep45, relief.localRelief, options.block);
+        std::printf("  \"talus_share\": %.4f, \"wall_edge_density\": %.4f,\n", relief.talusShare,
+                    relief.wallEdgeDensity);
         std::printf("  \"hypsometric_integral\": %.4f, \"curvature_p90\": %.6f,\n", relief.hypsometricIntegral,
                     relief.curvatureP90);
         std::printf("  \"pits\": %zu, \"pit_share\": %.5f, \"pit_depth_m\": %.2f,\n", relief.pits, relief.pitShare,
@@ -233,9 +235,10 @@ int main(int argc, char** argv) {
                 r.minChannel, r.hypsometry[0], r.hypsometry[1], r.hypsometry[2], r.hypsometry[3]);
     std::printf("mean slope: shelf (0-120 m deep) %.2f deg, slope (120-2500 m) %.2f deg, below %.2f deg\n", shelf,
                 slope, flat);
-    std::printf("relief: slope p50 %.1f p90 %.1f p99 %.1f p99.9 %.1f deg; %.2f %% over 35 deg, %.2f %% over 45 deg\n",
+    std::printf("relief: slope p50 %.1f p90 %.1f p99 %.1f p99.9 %.1f deg; %.2f %% over 35 deg, %.2f %% over 45 deg; "
+                "%.2f %% at talus angles (30-38); wall edge %.2f km per km2\n",
                 relief.slope[0], relief.slope[1], relief.slope[2], relief.slope[3], relief.steep35 * 100.0,
-                relief.steep45 * 100.0);
+                relief.steep45 * 100.0, relief.talusShare * 100.0, relief.wallEdgeDensity);
     std::printf("relief %.0f m per %g m block; hypsometric integral %.3f; |laplacian| p90 %.2e per m\n",
                 relief.localRelief, options.block, relief.hypsometricIntegral, relief.curvatureP90);
     std::printf("%zu closed depression(s), %.3f %% of the land, deepest %.1f m; drainage %.2f km per km2 "
