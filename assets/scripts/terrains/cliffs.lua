@@ -137,11 +137,18 @@ local function main(params)
         position = Shapes.Warp{ amplitude = 120.0, frequency = 1.0 / 1600.0, octaves = 2, seed = seed + 90 },
     }
 
-    -- Buttresses (stage 2) displace where the tier walls stand, at the scale of a column.
+    -- Buttresses (stage 2) displace where the tier walls stand, at the scale of a column. The breaks are
+    -- distorted F3 - F1 cells (World Machine's Mountain Cliffs thread: distorted Voronoi as break
+    -- points), whose planar faces move the wall in straight blocks with sharp breaks between them, plus
+    -- a little ridged noise so the blocks are not flat-faced. A ridged pattern alone drew even columns.
     local position = c
     if stage >= 2 then
-        local ribs = Noises.Ridged{ frequency = 1.0 / 220.0, octaves = 1, amplitude = columns, seed = seed + 3 }
-        position = Vec.Combine{ c.x, c.z + ribs.value }
+        local cracks = Noises.Cellular{
+            order = 3, frequency = 1.0 / 260.0, octaves = 1, amplitude = columns, seed = seed + 3,
+            position = Shapes.Warp{ amplitude = 40.0, frequency = 1.0 / 400.0, octaves = 1, seed = seed + 4 },
+        }
+        local ribs = Noises.Ridged{ frequency = 1.0 / 220.0, octaves = 1, amplitude = columns * 0.35, seed = seed + 5 }
+        position = Vec.Combine{ c.x, c.z + cracks.value + ribs.value }
     end
     -- Each tier edge wanders on its own, and the two lower tiers thin out and swell along the coast (one
     -- smooth octave, 3.5 km), so the benches pinch out and merge instead of running parallel end to end.
@@ -302,9 +309,13 @@ local function main(params)
                  normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = settled } } } }
     end
 
-    -- 4. Detail, last and small: 2 m of finer noise on the walls only, where no water stands.
-    local grain = Noises.fBm{ frequency = 1.0 / 60.0, octaves = 3, amplitude = 1.0, seed = seed + 11 }
-    local final = settled + grain.value * walls * 2.0
+    -- 4. Detail, last and small: blocky rock on the walls by a morphological opening (shrink then expand,
+    -- World Machine's Expander in Open mode), which squares off thin spikes into blocks, then 2 m of
+    -- finer noise on the walls only, where no water stands.
+    local opened = Filters.Expand{ input = Filters.Shrink{ input = settled, radius = 2 }, radius = 2 }
+    local blocky = Combine.Blend{ a = settled, b = opened, mask = walls }
+    local grain  = Noises.fBm{ frequency = 1.0 / 60.0, octaves = 3, amplitude = 1.0, seed = seed + 11 }
+    local final  = blocky + grain.value * walls * 2.0
     return {
         height  = { value = final, range = { -400, 2400 } },
         normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = final } } },
