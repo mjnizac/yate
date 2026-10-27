@@ -146,6 +146,14 @@ Result<Value> Graph::AddConst(Mapping mapping, std::array<f32_t, 4> components,
         PackFloat(node.params, i, components[i]);
     }
     node.params[4] = mapping.components;
+    // The same constant is the same node: a script that writes `h * 0.5` a hundred times, or a prelude
+    // macro that builds rivers by the dozen, would otherwise spend its node budget on copies of a number.
+    for (u32_t i = 0; i < m_nodeCount; ++i) {
+        const Node& other = m_nodes[i];
+        if (other.kind == OpKind::Const && other.channels[0] == mapping && other.params == node.params) {
+            return Value{.node = i, .channel = 0, .mapping = mapping};
+        }
+    }
     return Append(node, location);
 }
 
@@ -156,6 +164,12 @@ Result<Value> Graph::AddCoords(Domain domain, SourceLocation location) {
     node.channelCount = 1;
     // Coords produces one component per axis of its domain.
     node.channels[0] = Mapping{domain, static_cast<u8_t>(domain == Domain::R3 ? 3 : 2)};
+    // One coordinate field per domain is enough; every shape and grid reads the same one.
+    for (u32_t i = 0; i < m_nodeCount; ++i) {
+        if (m_nodes[i].kind == OpKind::Coords && m_nodes[i].channels[0] == node.channels[0]) {
+            return Value{.node = i, .channel = 0, .mapping = node.channels[0]};
+        }
+    }
     return Append(node, location);
 }
 
