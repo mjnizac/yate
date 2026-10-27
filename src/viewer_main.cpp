@@ -11,6 +11,7 @@
 #include <engine/terrain/export.hpp>
 #include <engine/window_layer.hpp>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -44,8 +45,12 @@ void PrintUsage() {
                "  --width <n>            window width in pixels (default 1600)\n"
                "  --height <n>           window height in pixels (default 900)\n"
                "  --frames <n>           present n frames and exit; 0 runs until closed\n"
+               "  --screenshot <file>    write the last frame as a PNG (implies --frames 90)\n"
+               "  --shot yaw,pitch,dist=<file>  move the camera there, wait for the ring to stream\n"
+               "                         in and write a PNG; repeatable, exits after the last one\n"
                "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"
                "  --log-format <text|json>  log encoding (default text)\n"
+               "  --log-level <level>    trace, debug, info, warn, error or off (default info)\n"
                "  --help                 print this message\n"
                "\n"
                "Left-drag turns, middle-drag pans, the wheel zooms, F switches between orbit\n"
@@ -58,16 +63,76 @@ void PrintUsage() {
                stderr);
 }
 
+/// One `--shot`: a camera view and the file its frame goes to. The target is `--target`'s.
+struct Shot {
+    ViewerLayer::View view;
+    std::string_view  path;
+};
+
 struct Options {
     WindowDesc            window;
     ViewerLayer::Settings viewer;
     terrain::Params       params;
     std::string_view      deviceUuid;
     log::Format           logFormat = log::Format::Text;
+    log::Level            logLevel  = log::kCompileLevel;
     /// Zero runs until the window is closed.
     u64_t frames = 0;
     /// Where the last frame is written as a PNG. Empty means no screenshot.
     std::string_view screenshot;
+    std::array<Shot, 16> shots{};
+    usize_t              shotCount = 0;
+};
+
+/// Takes the `--shot` screenshots in order: moves the camera, waits until the ring has streamed in for a
+/// few frames in a row, captures the next frame and stops the application after the last one. One
+/// process for every view, so the script is loaded once.
+class ShotsLayer final : public Layer {
+public:
+    ShotsLayer(Application& application, WindowLayer& window, ViewerLayer& viewer, const Options& options)
+        : Layer(application), m_window(window), m_viewer(viewer), m_options(options) {}
+
+    [[nodiscard]] const char* Name() const noexcept override { return "ShotsLayer"; }
+
+    void OnUpdate() override {
+        // A couple of frames after the last capture is requested, so it is presented and written.
+        if (m_next >= m_options.shotCount) {
+            if (++m_tail > 2) {
+                App().Stop();
+            }
+            return;
+        }
+        Shot shot = m_options.shots[m_next];
+        shot.view.target = m_options.viewer.view.target;
+        if (m_frames++ == 0) {
+            m_viewer.SetView(shot.view);
+        }
+        m_settled = m_viewer.MissingTiles() == 0 ? m_settled + 1 : 0;
+        if (m_settled < kSettledFrames && m_frames < kMaxFrames) {
+            return;
+        }
+        if (m_frames >= kMaxFrames) {
+            std::fprintf(stderr, "terrain_viewer: %s taken before the ring finished streaming\n", shot.path.data());
+        }
+        if (!m_window.CaptureNextFrame(shot.path.data())) {
+            App().AddExit(ExitCode::FailedToInitializeEngine);
+        }
+        ++m_next;
+        m_frames  = 0;
+        m_settled = 0;
+    }
+
+private:
+    static constexpr u32_t kSettledFrames = 3;
+    static constexpr u32_t kMaxFrames     = 900;
+
+    WindowLayer&   m_window;
+    ViewerLayer&   m_viewer;
+    const Options& m_options;
+    usize_t        m_next    = 0;
+    u32_t          m_frames  = 0;
+    u32_t          m_settled = 0;
+    u32_t          m_tail    = 0;
 };
 
 /// Parses `a,b,c`, three finite numbers.
@@ -248,6 +313,27 @@ template <typename T>
             options.viewer.water.opacity = static_cast<f32_t>(*opacity);
         } else if (argument == "--screenshot") {
             options.screenshot = value;
+        } else if (argument == "--shot") {
+            const usize_t equals = value.find('=');
+            if (equals == std::string_view::npos || equals + 1 == value.size()) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--shot expects yaw,pitch,distance=file.png, got {}", value);
+            }
+            if (options.shotCount == options.shots.size()) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "at most {} --shot views",
+                            options.shots.size());
+            }
+            Result<std::array<f32_t, 3>> view = ParseTriple(argument, value.substr(0, equals));
+            if (!view) {
+                return std::unexpected(view.error());
+            }
+            if (!((*view)[2] > 0.0f)) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--shot needs a distance greater than zero, got {}", value);
+            }
+            options.shots[options.shotCount++] =
+                Shot{.view = {.enabled = true, .yaw = (*view)[0], .pitch = (*view)[1], .distance = (*view)[2]},
+                     .path = value.substr(equals + 1)};
         } else if (argument == "--device") {
             options.deviceUuid = value;
         } else if (argument == "--log-format") {
@@ -256,6 +342,11 @@ template <typename T>
             } else if (value != "text") {
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
                             "--log-format expects text or json, got {}", value);
+            }
+        } else if (argument == "--log-level") {
+            if (!log::ParseLevel(value, options.logLevel)) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--log-level expects trace, debug, info, warn, error or off, got {}", value);
             }
         } else {
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "unknown option {}",
@@ -308,6 +399,7 @@ int main(int argc, char** argv) {
     const Result<Application*> application =
         engine::init(AppInfo{.mode       = RunMode::Graphics,
                              .name       = "terrain_viewer",
+                             .logLevel   = options->logLevel,
                              .logFormat  = options->logFormat,
                              .deviceUuid = options->deviceUuid,
                              .window     = options->window});
@@ -334,7 +426,10 @@ int main(int argc, char** argv) {
     ViewerLayer::Settings viewerSettings = options->viewer;
     viewerSettings.params                = &options->params;
     // Pushed above the window layer, which owns the frame; the viewer registers a recorder with it.
-    (*application)->PushLayer<ViewerLayer>(viewerSettings);
+    ViewerLayer& viewer = (*application)->PushLayer<ViewerLayer>(viewerSettings);
+    if (options->shotCount > 0) {
+        (*application)->PushLayer<ShotsLayer>(window, viewer, *options);
+    }
 
     (*application)->Run();
     const ExitCode exit = (*application)->Exit();

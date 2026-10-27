@@ -1420,6 +1420,15 @@ u32_t ViewerLayer::MissingTiles() const noexcept {
     return m_state->missingTiles + (changing ? 1u : 0u);
 }
 
+void ViewerLayer::SetView(const View& view) noexcept {
+    if (m_state == nullptr) {
+        return;
+    }
+    constexpr f32_t kDegrees = 3.14159265358979f / 180.0f;
+    m_state->camera.SetView(Vec3{view.target[0], view.target[1], view.target[2]}, view.yaw * kDegrees,
+                            view.pitch * kDegrees, view.distance);
+}
+
 u32_t ViewerLayer::Level() const noexcept { return m_state != nullptr ? m_state->level : 0; }
 
 u64_t ViewerLayer::TilesEvaluated() const noexcept {

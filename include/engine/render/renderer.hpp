@@ -96,6 +96,9 @@ public:
     /// Tiles the ring wants that are not resident yet, plus one while a level change is being built.
     /// Zero means streaming has caught up.
     [[nodiscard]] u32_t MissingTiles() const noexcept;
+    /// Moves the orbit camera, as `Settings::view` does at start. The ring follows on later frames;
+    /// `MissingTiles` says when it has caught up.
+    void SetView(const View& view) noexcept;
     /// Level the ring is at. Sample spacing is `resolution * 2^level`.
     [[nodiscard]] u32_t Level() const noexcept;
     /// Tiles evaluated since the last load, which is what says streaming is doing anything.
