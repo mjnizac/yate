@@ -290,12 +290,25 @@ local function main(params)
     -- 70 degree wall at 8 m aliases into spikes), and only the walls get beds: on the lower slope two bed
     -- sets drew a grid of contour lines.
     local steep = Curves.Clamp{ input = Masks.Slope{ input = Terrain.Gradient{ input = ground }, min = 0.0, max = 3.0 }, min = 0.0, max = 1.0 } * 3.0 * walls
+    -- Beds of irregular thickness (Gaea's FractalTerraces against its uniform Terrace): the bed phase is
+    -- taken on a monotone remap of the height, the height plus a noise sampled along the height itself,
+    -- 15 m over 150 m, which keeps its slope under one so no bed folds back.
+    local function remap(input)
+        local wobble = Noises.fBm{
+            frequency = 1.0 / 150.0, octaves = 2, amplitude = 15.0, seed = seed + 110,
+            position = Vec.Combine{ input, Terrain.Const{ value = 0.0 } },
+        }
+        return input + wobble.value
+    end
     local function beds(input, bed, depth)
-        local u = input / bed
+        local u = remap(input) / bed
         return (u - Curves.Terrace{ input = u, step = 1.0, sharpness = 0.5 }) * steep * depth
     end
+    -- The dipping beds tilt 15 to 45 degrees along the coast (World Machine's Strata takes its tilt as
+    -- a spatial parameter), not one plane across the whole map.
+    local tilt    = Noises.fBm{ frequency = 1.0 / 4000.0, octaves = 1, amplitude = 0.5, seed = seed + 120, position = alongCoast }
     local heading = math.rad(140.0)
-    local dip     = (c.x * math.cos(heading) + c.z * math.sin(heading)) * math.tan(math.rad(30.0))
+    local dip     = (c.x * math.cos(heading) + c.z * math.sin(heading)) * math.tan(math.rad(30.0)) * (1.0 + tilt.value)
     local layered = ground + beds(ground, 80.0, 24.0) + beds(ground + dip, 380.0, 40.0)
     if stage == 2 then
         return { height = { value = layered, range = { -400, 2400 } },
