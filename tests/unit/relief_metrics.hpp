@@ -481,9 +481,9 @@ inline void Drainage(const Field& f, const ReliefOptions& o, Relief& r) {
     return image;
 }
 
-/// An 8-bit greyscale PNG with stored (uncompressed) deflate blocks: no zlib needed, larger files.
+/// An 8-bit greyscale (or, with `channels = 3`, RGB) PNG with stored deflate blocks: no zlib needed, larger files.
 [[nodiscard]] inline bool WriteGreyPng(const std::string& path, const std::vector<std::uint8_t>& pixels, std::size_t width,
-                                       std::size_t height) {
+                                       std::size_t height, std::size_t channels = 1) {
     std::array<std::uint32_t, 256> table{};
     for (std::uint32_t n = 0; n < 256; ++n) {
         std::uint32_t c = n;
@@ -516,15 +516,15 @@ inline void Drainage(const Field& f, const ReliefOptions& o, Relief& r) {
     std::vector<std::uint8_t> header;
     be32(header, static_cast<std::uint32_t>(width));
     be32(header, static_cast<std::uint32_t>(height));
-    header.insert(header.end(), {8, 0, 0, 0, 0});
+    header.insert(header.end(), {8, static_cast<std::uint8_t>(channels == 3 ? 2 : 0), 0, 0, 0});
     chunk("IHDR", header);
 
     std::vector<std::uint8_t> raw;
-    raw.reserve((width + 1) * height);
+    raw.reserve((width * channels + 1) * height);
     for (std::size_t z = 0; z < height; ++z) {
         raw.push_back(0);
-        raw.insert(raw.end(), pixels.begin() + static_cast<std::ptrdiff_t>(z * width),
-                   pixels.begin() + static_cast<std::ptrdiff_t>((z + 1) * width));
+        raw.insert(raw.end(), pixels.begin() + static_cast<std::ptrdiff_t>(z * width * channels),
+                   pixels.begin() + static_cast<std::ptrdiff_t>((z + 1) * width * channels));
     }
     std::vector<std::uint8_t> zlib = {0x78, 0x01};
     for (std::size_t at = 0; at < raw.size(); at += 65535) {

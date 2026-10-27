@@ -53,7 +53,8 @@ Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, pa
 
 Nine sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
 cliffs, crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the
-reference's plates.
+reference's plates. `lakes_rivers.lua` drains its grid with `Water.Drain` (breach-and-fill, lakes, rivers)
+and the viewer draws its `lakes` and `rivers` outputs as water; the drainage is still one bounded grid.
 
 ## Verification
 

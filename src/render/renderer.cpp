@@ -69,6 +69,18 @@ constexpr u32_t kLevelChangeFrames = 15;
 /// preview wants to evaluate in one go anyway.
 constexpr u32_t kMaxPreviewSamples = 1024;
 
+/// The water outputs a script may give, in the order the tile's height slot carries them after the height.
+constexpr std::array<std::string_view, 2> kWaterOutputs{"lakes", "rivers"};
+/// Index of an output the script does not have.
+constexpr usize_t kNoOutput = static_cast<usize_t>(-1);
+/// What a tile holds where its script has no water output: far under any terrain, so nothing is drawn.
+/// The bits of -1e6f, for `vkCmdFillBuffer`.
+constexpr u32_t kNoWaterBits = 0xC9742400u;
+/// Flags in the high bits of the push constants' `samples`, read by both viewer shaders.
+constexpr u32_t kDrawLakes  = 1u << 31;
+constexpr u32_t kDrawRivers = 1u << 30;
+constexpr u32_t kDrawSea    = 1u << 29;
+
 /// Which piece of terrain a tile holds.
 ///
 /// Coordinates are in tile units *at its level*, so the same `x` and `z` mean a different patch of world
@@ -169,6 +181,8 @@ struct LoadedGraph {
     /// Index of the height output and of the normals output in the graph's output list.
     usize_t heightOutput  = 0;
     usize_t normalsOutput = 0;
+    /// The `lakes` and `rivers` outputs, `kNoOutput` where the script has none.
+    std::array<usize_t, 2> waterOutputs{kNoOutput, kNoOutput};
     f32_t   heightMinimum = 0.0f;
     f32_t   heightMaximum = 0.0f;
 
@@ -180,6 +194,7 @@ struct LoadedGraph {
         graph.Clear();
         heightOutput  = 0;
         normalsOutput = 0;
+        waterOutputs  = {kNoOutput, kNoOutput};
         heightMinimum = 0.0f;
         heightMaximum = 0.0f;
     }
@@ -200,9 +215,13 @@ struct LoadedGraph {
     for (usize_t i = 0; i < graph.OutputCount(); ++i) {
         const terrain::OutputRequest& output = graph.Output(i);
         const std::string_view        name{output.name.data()};
-        // The output named "height" wins; failing that the first R2->R1 that is not the shadow.
+        // The output named "height" wins; failing that the first R2->R1 that is not the shadow or water.
         const b8_t named = name == "height";
-        if ((named || (!foundHeight && name != "shadow"))
+        const b8_t water = name == kWaterOutputs[0] || name == kWaterOutputs[1];
+        if (water && output.value.mapping == Mapping{Domain::R2, 1}) {
+            loaded.waterOutputs[name == kWaterOutputs[0] ? 0 : 1] = i;
+        }
+        if ((named || (!foundHeight && name != "shadow" && !water))
             && output.value.mapping == Mapping{Domain::R2, 1}) {
             loaded.heightOutput  = i;
             loaded.heightMinimum = output.rangeMin;
@@ -302,6 +321,9 @@ struct Terrain {
     /// radius keeps that halo even when it is also a requested output.
     u32_t heightHalo  = 0;
     u32_t normalsHalo = 0;
+    /// The `lakes` and `rivers` outputs, `kNoOutput` where the script has none. Drawn from the height
+    /// slot, which carries them after the height (see `EvaluateTile`).
+    std::array<usize_t, 2> waterOutputs{kNoOutput, kNoOutput};
     /// Bytes one tight tile takes, with no halo.
     u64_t heightBytes   = 0;
     u64_t normalsBytes  = 0;
@@ -417,6 +439,7 @@ struct TileCache {
     }
     built.heightOutput  = loaded.heightOutput;
     built.normalsOutput = loaded.normalsOutput;
+    built.waterOutputs  = loaded.waterOutputs;
     built.heightMinimum = loaded.heightMinimum;
     built.heightMaximum = loaded.heightMaximum;
 
@@ -470,8 +493,10 @@ struct TileCache {
     const terrain::CompiledOutput& heightOutput  = built.compiled.outputs[built.heightOutput];
     const terrain::CompiledOutput& normalsOutput = built.compiled.outputs[built.normalsOutput];
 
+    // The height slot is three planes: the height, then the lake and the river surfaces. The push
+    // constants have no room for another address, so the water travels with the height it is drawn over.
     Result<vulkan::SectionSlot> height = context.Sections().Acquire(
-        terrain::ClassOf(heightOutput.mapping, extent, 0), built.heightBytes);
+        terrain::ClassOf(Mapping{Domain::R2, 3}, extent, 0), 3 * built.heightBytes);
     if (!height) {
         return std::unexpected(height.error());
     }
@@ -516,10 +541,24 @@ struct TileCache {
         const terrain::CompiledOutput* output;
         const vulkan::SectionSlot*     target;
         u32_t                          halo;
+        u64_t                          offset;
     };
-    const std::array<CopyPlan, 2> copies{{{&heightOutput, &tile.height, built.heightHalo},
-                                          {&normalsOutput, &tile.normals, built.normalsHalo}}};
+    std::array<CopyPlan, 4> copies{{{&heightOutput, &tile.height, built.heightHalo, 0},
+                                    {&normalsOutput, &tile.normals, built.normalsHalo, 0},
+                                    {nullptr, &tile.height, 0, built.heightBytes},
+                                    {nullptr, &tile.height, 0, 2 * built.heightBytes}}};
+    for (usize_t w = 0; w < kWaterOutputs.size(); ++w) {
+        if (built.waterOutputs[w] != kNoOutput) {
+            copies[2 + w].output = &built.compiled.outputs[built.waterOutputs[w]];
+            copies[2 + w].halo   = copies[2 + w].output->halo;
+        }
+    }
     for (const CopyPlan& plan : copies) {
+        if (plan.output == nullptr) {
+            vkCmdFillBuffer(*commands, plan.target->buffer, plan.target->offset + plan.offset,
+                            built.heightBytes, kNoWaterBits);
+            continue;
+        }
         const vulkan::SectionSlot& source     = built.resources.Slot(plan.output->buffer);
         const u32_t                components = plan.output->mapping.components;
         const u64_t rowBytes = static_cast<u64_t>(samples) * components * sizeof(f32_t);
@@ -530,7 +569,7 @@ struct TileCache {
 
         if (plan.halo == 0) {
             const VkBufferCopy copy{.srcOffset = source.offset,
-                                    .dstOffset = plan.target->offset,
+                                    .dstOffset = plan.target->offset + plan.offset,
                                     .size      = rowBytes * samples};
             vkCmdCopyBuffer(*commands, source.buffer, plan.target->buffer, 1, &copy);
             continue;
@@ -541,7 +580,7 @@ struct TileCache {
             const u64_t sourceRow = static_cast<u64_t>(row + plan.halo) * sourceStride
                                     + static_cast<u64_t>(plan.halo) * components * sizeof(f32_t);
             regions[row] = VkBufferCopy{.srcOffset = source.offset + sourceRow,
-                                        .dstOffset = plan.target->offset + row * rowBytes,
+                                        .dstOffset = plan.target->offset + plan.offset + row * rowBytes,
                                         .size      = rowBytes};
         }
         vkCmdCopyBuffer(*commands, source.buffer, plan.target->buffer, samples, regions.data());
@@ -1066,6 +1105,9 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.eye               = {eye.x, eye.y, eye.z};
     panels.params            = &state.params;
     panels.waterEnabled      = state.settings.water.enabled;
+    panels.waterSea          = state.settings.water.sea;
+    panels.waterLakes        = state.settings.water.lakes;
+    panels.waterRivers       = state.settings.water.rivers;
     panels.waterLevel        = state.settings.water.level;
     panels.waterColour       = state.settings.water.colour;
     panels.waterOpacity      = state.settings.water.opacity;
@@ -1078,6 +1120,9 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
         RequestReload();
     }
     state.settings.water.enabled = panels.waterEnabled;
+    state.settings.water.sea     = panels.waterSea;
+    state.settings.water.lakes   = panels.waterLakes;
+    state.settings.water.rivers  = panels.waterRivers;
     state.settings.water.level   = panels.waterLevel;
     state.settings.water.colour  = panels.waterColour;
     state.settings.water.opacity = panels.waterOpacity;
@@ -1203,7 +1248,8 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
 
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
-    constants.samples        = state.terrain.samples;
+    constants.samples        = state.terrain.samples | (water.sea ? kDrawSea : 0u)
+                        | (water.lakes ? kDrawLakes : 0u) | (water.rivers ? kDrawRivers : 0u);
     constants.look           = state.terrain.look;
     constants.eye            = {eye.x, eye.y, eye.z};
     constants.waterLevel     = water.level;
@@ -1260,7 +1306,7 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     // `viewer/water.vert.glsl`).
     // Zero opacity is no water at all, the open sea included: drawn anyway it left a blue plate at the
     // edge of the ring that the terrain shading, skipped at alpha 0, did not explain.
-    if (shadeWater && water.opacity > 0.0f && state.seaPipeline.IsValid()) {
+    if (shadeWater && water.sea && water.opacity > 0.0f && state.seaPipeline.IsValid()) {
         f32_t minX = std::numeric_limits<f32_t>::max();
         f32_t minZ = minX;
         f32_t maxX = std::numeric_limits<f32_t>::lowest();

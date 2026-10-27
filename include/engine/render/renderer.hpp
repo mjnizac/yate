@@ -29,7 +29,12 @@ public:
     struct Water {
         /// Off by default, so a script that has never been shown with water looks as it always did.
         b8_t enabled = false;
-        /// Height of the surface in world metres. Sea level is zero.
+        /// Which bodies are drawn: the sea at `level`, and the script's `lakes` and `rivers` outputs,
+        /// which are water surfaces of their own.
+        b8_t sea    = true;
+        b8_t lakes  = true;
+        b8_t rivers = true;
+        /// Height of the sea in world metres. Sea level is zero.
         f32_t level = 0.0f;
         /// Linear RGB of the water body.
         std::array<f32_t, 3> colour{0.10f, 0.28f, 0.38f};

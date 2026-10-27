@@ -37,6 +37,7 @@ const vec3  kShoreColor = vec3(0.86, 0.88, 0.84);
 layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in float vHeight;
+layout(location = 3) in float vWater;
 
 layout(location = 0) out vec4 outColor;
 
@@ -201,6 +202,8 @@ void main() {
     vec3 lit = albedo * (kSunColor * sun * direct + kSkyColor * sky * ambient);
 
     // Water, computed from the eye and this fragment rather than drawn: alpha zero means none.
+    // The surface over this fragment: the sea when it is drawn, or a lake or river above it.
+    float level = max((pc.samples & 0x20000000u) != 0u ? pc.waterLevel : -1e30, vWater);
     vec4 water = unpackUnorm4x8(pc.waterColour);
     if (water.a > 0.0) {
         vec3  toFragment = vWorldPosition - pc.eye;
@@ -212,10 +215,10 @@ void main() {
         // either side of the surface: it begins at 0 if the eye is under and at the crossing if not, and
         // ends at 1 if the fragment is under and at the crossing if not.
         float dy       = toFragment.y;
-        float crossing = abs(dy) > 1e-6 ? clamp((pc.waterLevel - pc.eye.y) / dy, 0.0, 1.0)
-                                        : (pc.eye.y < pc.waterLevel ? 1.0 : 0.0);
-        float begin    = pc.eye.y < pc.waterLevel ? 0.0 : crossing;
-        float end      = vWorldPosition.y < pc.waterLevel ? 1.0 : crossing;
+        float crossing = abs(dy) > 1e-6 ? clamp((level - pc.eye.y) / dy, 0.0, 1.0)
+                                        : (pc.eye.y < level ? 1.0 : 0.0);
+        float begin    = pc.eye.y < level ? 0.0 : crossing;
+        float end      = vWorldPosition.y < level ? 1.0 : crossing;
         float path     = max(end - begin, 0.0) * distance_;
 
         float cover = water.a * (1.0 - exp(-path / kExtinction));
@@ -223,7 +226,7 @@ void main() {
 
         // The surface is in front of this fragment only when the eye and the fragment are on opposite
         // sides of it. Then what the pixel shows is the surface, and a surface reflects.
-        if ((pc.eye.y - pc.waterLevel) * (vWorldPosition.y - pc.waterLevel) < 0.0) {
+        if ((pc.eye.y - level) * (vWorldPosition.y - level) < 0.0) {
             lit = mix(lit, WaterSurface(lit, direction), water.a);
         }
 
@@ -233,7 +236,7 @@ void main() {
         lit        = mix(lit, kShoreColor, water.a * 0.6
                                                * (1.0 - smoothstep(0.0, band,
                                                                    abs(vWorldPosition.y
-                                                                       - pc.waterLevel))));
+                                                                       - level))));
     }
 
     outColor = vec4(lit, 1.0);

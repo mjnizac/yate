@@ -1244,6 +1244,36 @@ references. The viewer colours these terrains with `look = { palette = "coast" }
 
 ![Archipelagos: scattered, hotspot, arc, atoll](images/lands/archipelagos.png)
 
+---
+
+### Lakes and rivers: `Water.Drain` and `Water.Apply`
+
+`Water.Drain` drains a coarse grid the script built (the lists `Erosion.StreamPower` takes and returns)
+on the CPU and returns its fields as `Terrain.Grid` values:
+
+1. **Breach or fill, per depression** (Lindsay's hybrid): one no deeper than `breach` (3 m) is cut open
+   along its way out; one larger than `lake_area` (20 ha) and deeper than `lake_depth` (2 m) is a lake,
+   the ground keeping its bowl and the water at the spill level; any other is filled.
+2. **Routing and area** (D8 on the result), with `sea_level` as an outlet where given; the grid's edge
+   always is one.
+3. **Rivers** where the area passes `channel_area` (1 km²): centre lines smoothed along the network,
+   width `width_scale * sqrt(A / 1 km²)` and depth `depth_scale * (A / 1 km²)^0.3`, and the distance to the
+   nearest one, so a channel stays sharp at any resolution.
+
+`Water.Apply{ height, water }` carves the rivers into a terrain at full resolution (a parabolic bed, banks
+rising at `bank`) and returns `height`, `lakes` and `rivers`: water surfaces, above the ground where there
+is water and below it elsewhere. Outputs named `lakes` and `rivers` are drawn by the viewer's water.
+
+```lua
+local water = Water.Drain{ values = carved, size = { n, n }, origin = { x0, z0 }, cell = 50, sea_level = 0 }
+local wet   = Water.Apply{ height = water.height + detail, water = water }
+return { height = { value = wet.height }, lakes = { value = wet.lakes }, rivers = { value = wet.rivers } }
+```
+
+Detail added after `Water.Drain` must stay under the slope of the ground or it makes new pits.
+`assets/scripts/terrains/lakes_rivers.lua` is the worked example. The grid is bounded: outside it
+`Terrain.Grid` holds its edge.
+
 ## 11. Recipes
 
 ### A complete terrain

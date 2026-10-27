@@ -55,6 +55,9 @@ public:
         std::array<f32_t, 3> eye{};
         /// Edited in place by the water section; the caller reads them back after `Draw`.
         b8_t                 waterEnabled = false;
+        b8_t                 waterSea     = true;
+        b8_t                 waterLakes   = true;
+        b8_t                 waterRivers  = true;
         f32_t                waterLevel   = 0.0f;
         std::array<f32_t, 3> waterColour{};
         f32_t                waterOpacity = 0.75f;

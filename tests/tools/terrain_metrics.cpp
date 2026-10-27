@@ -13,7 +13,8 @@
 // the ones `test_lands` accepts the Lands macros against (tests/unit/terrain_metrics.hpp); the relief
 // ones are tests/unit/relief_metrics.hpp. `--no-sea` treats every sample as land. `--hillshade` writes
 // the field as a grey image lit from `--sun` (default 315,35: the top left, 35 degrees up), with cast
-// shadows, so the geometry can be judged without the viewer's lighting.
+// shadows, so the geometry can be judged without the viewer's lighting; lakes and rivers in the export
+// (outputs `lakes` and `rivers`) are tinted over it.
 
 #include "relief_metrics.hpp"
 
@@ -187,10 +188,37 @@ int main(int argc, char** argv) {
     const double slope = metrics::MeanSlopeInDepth(field, level, 120.0, 2500.0);
     const double flat  = metrics::MeanSlopeInDepth(field, level, 2500.0, 1e9);
 
-    if (!hillshade.empty()
-        && !metrics::WriteGreyPng(hillshade, metrics::Hillshade(field, azimuth, elevation), field.width, field.depth)) {
-        std::cerr << "terrain_metrics: cannot write " << hillshade << "\n";
-        return 2;
+    if (!hillshade.empty()) {
+        // An export with `lakes` or `rivers` outputs has them tinted over the shading, lakes blue and rivers
+        // cyan, wherever the surface is above the ground.
+        const std::string                directory = path.substr(0, path.find_last_of("/\\"));
+        const std::vector<std::uint8_t>  shade     = metrics::Hillshade(field, azimuth, elevation);
+        std::vector<std::uint8_t>        rgb;
+        const std::array<const char*, 2> names{"/lakes.raw", "/rivers.raw"};
+        const std::array<std::array<int, 3>, 2> tints{{{40, 90, 230}, {0, 220, 230}}};
+        for (std::size_t w = 0; w < names.size(); ++w) {
+            metrics::Field surface;
+            if (!metrics::LoadRaw(directory + names[w], field.width, field.depth, field.resolution, surface)) {
+                continue;
+            }
+            if (rgb.empty()) {
+                for (const std::uint8_t g : shade) {
+                    rgb.insert(rgb.end(), {g, g, g});
+                }
+            }
+            for (std::size_t i = 0; i < shade.size(); ++i) {
+                if (surface.values[i] > field.values[i] + 0.1f) {
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        rgb[3 * i + c] = static_cast<std::uint8_t>((tints[w][c] * 3 + shade[i]) / 4);
+                    }
+                }
+            }
+        }
+        if (!metrics::WriteGreyPng(hillshade, rgb.empty() ? shade : rgb, field.width, field.depth,
+                                   rgb.empty() ? 1 : 3)) {
+            std::cerr << "terrain_metrics: cannot write " << hillshade << "\n";
+            return 2;
+        }
     }
 
     if (json) {

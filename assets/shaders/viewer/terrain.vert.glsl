@@ -24,7 +24,8 @@ layout(push_constant, scalar) uniform Push {
     vec3 tileOrigin;
     // Metres between samples.
     float resolution;
-    // Samples per side of the tile.
+    // Samples per side of the tile in the low 16 bits; above them, which water bodies are drawn: bit 31
+    // lakes, bit 30 rivers, bit 29 the sea at `waterLevel`.
     uint samples;
     // Vertices per side of the rendered grid, which may be coarser than `samples`.
     uint gridVertices;
@@ -41,8 +42,11 @@ pc;
 layout(location = 0) out vec3 vWorldPosition;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out float vHeight;
+// The highest water surface drawn here, lake or river; far below the ground where there is none.
+layout(location = 3) out float vWater;
 
 void main() {
+    uint samples         = pc.samples & 0xFFFFu;
     uint verticesPerSide = max(pc.gridVertices, 2u);
     uint quadsPerSide    = verticesPerSide - 1u;
     uint vertex          = uint(gl_VertexIndex);
@@ -51,12 +55,17 @@ void main() {
     // The rendered grid may be coarser than the data, so a grid vertex maps onto a sample rather than
     // being one. Integer arithmetic, so neighbouring tiles land on exactly the same samples at their
     // shared edge and the seam the compute side works so hard to avoid is not reintroduced here.
-    uint  stride = max(pc.samples - 1u, 1u);
+    uint  stride = max(samples - 1u, 1u);
     uvec2 sampleCoord =
-        min(gridCoord * stride / max(quadsPerSide, 1u), uvec2(pc.samples - 1u));
-    uint  index = sampleCoord.y * pc.samples + sampleCoord.x;
+        min(gridCoord * stride / max(quadsPerSide, 1u), uvec2(samples - 1u));
+    uint  index = sampleCoord.y * samples + sampleCoord.x;
 
+    // The height buffer carries the lake and the river surfaces as two more planes after the height.
     float height = pc.heights.values[index];
+    uint  plane  = samples * samples;
+    float lake   = (pc.samples & 0x80000000u) != 0u ? pc.heights.values[plane + index] : -1e30;
+    float river  = (pc.samples & 0x40000000u) != 0u ? pc.heights.values[2u * plane + index] : -1e30;
+    vWater       = max(lake, river);
     vec3  normal = vec3(pc.normals.values[index * 3u], pc.normals.values[index * 3u + 1u],
                         pc.normals.values[index * 3u + 2u]);
 

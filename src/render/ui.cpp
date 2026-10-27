@@ -186,7 +186,13 @@ b8_t Ui::Draw(Panels& panels) {
         ImGui::Separator();
         ImGui::Checkbox("Water", &panels.waterEnabled);
         if (panels.waterEnabled) {
-            ImGui::DragFloat("Level (m)", &panels.waterLevel, 1.0f);
+            // The level is the sea's; lakes and rivers carry their own surfaces from the script.
+            ImGui::Checkbox("Sea", &panels.waterSea);
+            ImGui::SameLine();
+            ImGui::Checkbox("Lakes", &panels.waterLakes);
+            ImGui::SameLine();
+            ImGui::Checkbox("Rivers", &panels.waterRivers);
+            ImGui::DragFloat("Sea level (m)", &panels.waterLevel, 1.0f);
             ImGui::ColorEdit3("Colour", panels.waterColour.data());
             ImGui::SliderFloat("Opacity", &panels.waterOpacity, 0.0f, 1.0f);
         }

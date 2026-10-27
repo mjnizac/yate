@@ -75,10 +75,10 @@ viewer screenshot. Each item is done when it is in `ctest`.
       passes ordered coarse to fine; the difference between a terrain before and after an erosion
       recombined as debris and broken terraces; terraces cracked by cells before erosion; cells with
       F3 - F1 (more break points than the current F2 - F1) for cliff edges.
-- [ ] **Drainage made valid by breaching as well as filling.** `Erosion.StreamPower` only fills
-      depressions. World Machine's Flow Restructure carves through ridges and fills basins with the
-      least change until every cell has a lower outlet, and goes right before the water; a
-      breach-and-fill pass (Lindsay's hybrid) would serve the rivers and lakes item and the pit metric.
+- [x] **Drainage made valid by breaching as well as filling.** `Hydrology.Drain` (Lindsay's hybrid,
+      decided per depression), and `Water.Drain` in the prelude. `Erosion.StreamPower` still only fills
+      inside, and cuts straight D8 spokes across what it fills: breach the grid with `Hydrology.Drain`
+      before it (`assets/scripts/terrains/lakes_rivers.lua`) until it routes flats itself.
 - [ ] **Vector displacement for real cliffs (roadmap, not now).** A heightfield cannot hold overhangs
       and stretches detail above about 45 degrees. World Machine 4059/4065 added vector displacement
       maps that erosion, thermal weathering and strata run on, converted back to a heightfield plus
@@ -87,9 +87,13 @@ viewer screenshot. Each item is done when it is in `ctest`.
       size and height, so only scale-free numbers (spectral slope, hypsometric integral) can be targets;
       `heightmap1.jpg` and `heightmap2.jpg` are shaded relief, not heights. The cliffs family has no
       heightmap reference at all.
-- [ ] **Rivers and lakes from `Erosion.StreamPower`**: it computes the drainage area and the filled
-      surface and discards both; return them, add `rivers` and `lakes` outputs, and draw lake water at
-      its outlet level in the viewer.
+- [x] **Rivers and lakes**: `Water.Drain` and `Water.Apply` give `lakes` and `rivers` outputs, drawn by
+      the viewer's water with Sea, Lakes and Rivers toggles.
+- [ ] **Rivers and lakes in an unbounded world**: `Water.Drain` runs on one bounded grid and
+      `Terrain.Grid` holds its edge outside it. An infinite world needs the drainage tiled and
+      deterministic per tile, with the export taking only the region asked for.
+- [ ] **The macros do not drain yet**: `Lands`, `Ranges` and the cliffs leave their pits; give them
+      `Water.Drain` and their own `lakes` and `rivers`.
 - [ ] **Later, if the above justifies it**: erosion by a hardness map, environmental layers for biomes
       as outputs, more cells and threads for `StreamPower`.
 
@@ -146,8 +150,8 @@ viewer screenshot. Each item is done when it is in `ctest`.
 - [ ] **The 70 % island touches the map edge in places**: the land is cropped by the window, as a piece
       of a larger landmass; the references mostly leave a sea margin.
 - [ ] **Coast type has no fetch**: exposure is the normal against one wave direction.
-- [ ] **No lakes or rivers as water**: drowned valleys that do not reach the sea count as lagoons in the
-      metrics (10 to 30 on a default island).
+- [ ] **No lakes or rivers as water in the Lands macros**: drowned valleys that do not reach the sea count
+      as lagoons in the metrics (10 to 30 on a default island); see "The macros do not drain yet".
 - [ ] **The grid is 256 cells** (94 m at 24 km): the drainage is as fine as that; a larger map has
       coarser valleys until the grid is raised (`cells`, up to 512).
 

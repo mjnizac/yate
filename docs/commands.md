@@ -186,7 +186,9 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --vie
 
 `--water` draws water at the water level, which is off by default and costs no evaluation to change.
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
-surface; the panel has the same controls and a reload keeps them. Terrain below the level takes the
+sea; the panel has the same controls and a reload keeps them. The panel also toggles the sea, the lakes
+and the rivers apart: a script's outputs named `lakes` and `rivers` are water surfaces of their own (see
+`Water.Apply`), drawn with the same colour. Terrain below the level takes the
 water colour in proportion to the water in front of it, with a pale band where it meets the surface:
 
 ```bash
