@@ -1322,11 +1322,9 @@ default; `area` in square metres overrides the preset's, which are fractions of 
 | `shattered` | a land block cut by scattered channels | `land`, `channels/N` |
 | `chain` | islands side by side along a band | `chain/N` |
 
-`Lands.Continent` is still the grid-built macro (bodies with spines, drainage by `Erosion.StreamPower`, sea
-level by quantile) until it is rebuilt from shapes. `Lands.Island` and `Lands.Archipelago` no longer take
-the old keys (`layout`, `roughness`, `dissection`, `cells`, `aspect`; for an island also `count`, `area`,
-`areas`) and
-say what to use instead.
+`Lands.Island`, `Lands.Archipelago` and `Lands.Continent` no longer take the old keys of the grid-built macro
+(`layout`, `roughness`, `dissection`, `cells`, `aspect`; for an island also `count`, `area`, `areas`) and say
+what to use instead.
 
 There is **one sign convention: land d < 0, coast d = 0, sea d > 0**. Products, each asked for by name in
 `land:outputs{ ... }` (`height` and `normals` are always there; a script holds at most eight outputs):
@@ -1335,12 +1333,12 @@ There is **one sign convention: land d < 0, coast d = 0, sea d > 0**. Products, 
 | --- | --- |
 | `coast_sdf` | signed distance to the coast, metres, land negative |
 | `land_mask` | `1 - Smoothstep(-w, w, d)`: 1 on land, 0 at sea |
-| `land_height` | the ground: the profiles (or the eroded grid of the legacy macros), shaped as a beach or a cliff at the shore |
+| `land_height` | the ground: the profiles and the relief elements, shaped as a beach or a cliff at the shore |
 | `bathymetry` | the sea floor, negative: beach face, shelf, break, slope, abyssal, plus seamounts, guyots and trenches |
 | `surface_height` | the two joined at the coast; it is the script's `height` |
 | `shore_mask` | 1 on the coast, falling to 0 `shore_band` metres either side |
 | `coast_type` | 0 a beach, 1 a cliff (hardness, sediment, exposure and curvature) |
-| `region_id` | the element (or, for the legacy macros, the landmass) a sample belongs to |
+| `region_id` | the element a sample belongs to |
 
 The examples in `assets/scripts/lands/` each say in their header how to view and export them, at a
 resolution suited to their size: `island_dome`, `island_rim`, `island_caldera`, `island_plateau`,
@@ -1351,8 +1349,6 @@ preset, and `archipelago_centers` for islands at given places), `infinite_archip
 variants for the presets. The viewer colours these terrains with `look = { palette = "coast" }`.
 
 ![Lands.Compose: a dome with a bay and a peninsula, cliffs over a lower interior, an atoll, all land with lakes](images/lands/compose.png)
-
-![The legacy macros: an island and a continent](images/lands/island_continent.png)
 
 ![Lands.Archipelago: scattered, cluster, hotspot, arc, atolls, shattered, chain](images/lands/archipelagos.png)
 

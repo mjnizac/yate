@@ -592,6 +592,9 @@ void TestRidgeAndLands() {
     for (const Case& c : cases) {
         check(c.name, c.body);
     }
+    Graph        unnamed;
+    const Status needs = Run(unnamed, "continent_unnamed", "{ seed = 1 }", "Lands.Continent");
+    CHECK(!needs && std::string_view{needs.error().Format().data()}.find("needs a 'preset'") != std::string_view::npos);
     // Every other preset builds with some land and some sea; taklamakan is all land, ocean_only none.
     for (const char* preset : {"continent", "pangea", "old_world", "inland_sea", "isthmus", "fractious", "taklamakan", "ocean_only"}) {
         check(preset, std::string("    local land = Lands.Compose(Lands.Preset{ name = '") + preset + "', seed = 2 })\n"

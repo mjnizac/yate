@@ -1,16 +1,15 @@
--- Continent: several large lobes with ranges along them, cut by rivers into valleys, peninsulas and gulfs.
+-- A continent: a block with lobes, two gulfs, a main range with saddles and spurs and a lower one.
 --
---   terrain_viewer --script assets/scripts/lands/continent.lua --water
+--   terrain_viewer --script assets/scripts/lands/continent.lua --water --resolution 128
+--   terrain_export --script assets/scripts/lands/continent.lua --min -96000,-96000 --max 96000,96000 --resolution 128 --out out/continent
 --
--- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
--- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
--- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
+-- A 192 km map centred on the origin (the viewer shows about 28 km of it around --target). Parameters:
+-- seed, height. Its blocks, ranges ("range/crest/2", "range/spur/5") and seas have ids: `tools/dev.sh lands`
+-- lists them and `edit` changes one.
 
 local function main(params)
     local land = Lands.Continent{
-        seed = params.seed or 3, resolution = params.resolution,
-        size = params.size, land_fraction = params.land_fraction, height = params.height,
-        roughness = params.roughness, dissection = params.dissection, margin = params.margin,
+        preset = "continent", seed = params.seed or 1, resolution = params.resolution, height = params.height,
     }
     return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end
