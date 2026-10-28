@@ -1551,11 +1551,16 @@ void TestShapeSets() {
                                   "        { shape = 'capsule', from = { -160, -40 }, to = { 120, 80 }, width = 60 } } }"),
             [](double x, double z) { return SegmentDistance(x, z, -160.0, -40.0, 120.0, 80.0) - 30.0; }, 2e-3);
 
-    Compare("set: a band of one width is a capsule",
+    // Its segments meet by a smooth minimum a quarter of the width wide (10 m here), so no crease shows where
+    // the nearest one changes.
+    Compare("set: a band is its segments' capsules, joined smoothly",
             Export("set_band", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
                                "        { shape = 'band', width = 40, points = { { -160, 0 }, { 0, 96 }, { 160, 0 } } } } }"),
             [](double x, double z) {
-                return std::min(SegmentDistance(x, z, -160.0, 0.0, 0.0, 96.0), SegmentDistance(x, z, 0.0, 96.0, 160.0, 0.0)) - 20.0;
+                const double a = SegmentDistance(x, z, -160.0, 0.0, 0.0, 96.0) - 20.0;
+                const double b = SegmentDistance(x, z, 0.0, 96.0, 160.0, 0.0) - 20.0;
+                const double h = std::clamp(0.5 + 0.5 * (b - a) / 10.0, 0.0, 1.0);
+                return b + (a - b) * h - 10.0 * h * (1.0 - h);
             },
             2e-3);
 

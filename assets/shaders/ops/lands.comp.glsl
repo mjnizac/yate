@@ -19,7 +19,7 @@
 //                       7 elements  8 bin offsets (bins + 1 of them, into the lists)  9 lists
 //                       10 points  11 global count  12 global list  13 blend  14 margin smooth  15..23 unused
 //   elements, 48 values each:
-//       0 kind  1 operation (0 land, 1 water, 2 seabed)  2 id  3..4 centre x, z  5..6 cos, sin of the rotation
+//       0 kind  1 operation (0 land, 1 water, 2 seabed, 3 relief)  2 id  3..4 centre x, z  5..6 cos, sin of rotation
 //       7 scale  8..19 the shape's numbers  20 smoothing k (m)  21 bounding radius (m)
 //       22 first point  23 point count  24..35 the profile (relief mode)  36 inscribed radius (ellipse,
 //       superellipse, radial)  37..39 a land element's trench: depth, offset from its coast, sigma  40..47 unused
@@ -37,8 +37,9 @@
 //   27 sigma, 28 Hi, 29 W, 30 start  5 tilt H0, edge, gradient, direction x, z, floor: a plane rising across
 //   the element from its centre, H0 at the centre, held smoothly above `floor`
 // In relief mode channel 0 is the height above the sea: each land element containing the sample raises its
-// profile over its own distance inland held to the set's, and the profiles join by a smooth maximum
-// `blend` metres wide (header 13).
+// profile over its own distance inland held to the set's, and the profiles join by their maximum (a smooth one
+// would raise where two equal plateaus overlap); relief elements add theirs, joined by a smooth maximum
+// `blend` metres of height wide (header 13).
 //
 // In seabed mode channel 0 is what to add to the sea floor: seabed elements (operation 2, which the coast
 // ignores) raise their profiles over their own distance inland, and land elements with a trench sink it.
@@ -132,7 +133,10 @@ float PointsDistance(FloatBuffer data, uint points, uint first, uint count, vec2
             vec2  ab = pb - pa;
             float h  = clamp(dot(p - pa, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
             float w  = mix(At(data, a + 2u), At(data, b + 2u), h);
-            best     = min(best, length(p - pa - ab * h) - 0.5 * w);
+            // Segments of different widths meet by a smooth minimum a quarter of their width wide: a hard one
+            // leaves a crease where the nearest segment changes.
+            float dw = length(p - pa - ab * h) - 0.5 * w;
+            best     = i == 0u ? dw : SmoothMin(best, dw, 0.25 * w);
         }
     }
     return polygon && inside ? -best : best;
@@ -242,7 +246,7 @@ void main() {
         uint  e    = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
         float op   = At(data, e + 1u);
         if (op > 1.5) {
-            continue; // A seabed element raises the sea floor only (seabed mode).
+            continue; // Seabed and relief elements change no coast.
         }
         float dist = ElementDistance(data, e, points, p, reach);
         float k    = At(data, e + 20u);
@@ -270,24 +274,48 @@ void main() {
     float value = min(d, reach);
     if (ParamUint(1) == 1u) {
         // Each land element containing the sample raises its profile over its own distance inland, held
-        // to the set's (so a bay or a lake cut later brings it down to the shore); the profiles join by a
-        // smooth maximum `blend` metres wide. An element that does not contain the sample adds nothing,
+        // to the set's (so a bay or a lake cut later brings it down to the shore); the profiles join by their
+        // maximum. An element that does not contain the sample adds nothing,
         // which is also why the bins may leave it out.
+        //
+        // Relief elements (operation 3: ranges, massifs, valleys) change no coast: those containing the
+        // sample add their profiles to the land's, the raised ones joined by a smooth maximum and the sunk
+        // ones by a smooth minimum `blend` metres of height wide, faded in over `blend` metres from the shore.
         float blend = max(At(data, block + 13u), 1e-3);
         float shore = max(-d, 0.0);
         bool  any   = false;
+        float up    = 0.0;
+        float down  = 0.0;
+        bool  rose  = false;
+        bool  sank  = false;
         for (uint i = 0u; i < count; ++i) {
-            uint e = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
-            if (At(data, e + 1u) < 0.5) {
-                float s = min(-ElementDistance(data, e, points, p, reach), shore);
+            uint  e  = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
+            float op = At(data, e + 1u);
+            if (op < 0.5) {
+                // Plus a quarter of its smoothing, as far as the fillet where it joins a neighbour reaches
+                // (smin(a, b, k) >= min(a, b) - k / 4): there its own distance is near 0 though the land goes on, and
+                // the profile would dip along the seam.
+                float s = min(0.25 * At(data, e + 20u) - ElementDistance(data, e, points, p, reach), shore);
                 if (s > 0.0) {
                     float h = Profile(data, e, s, p);
-                    value   = any ? -SmoothMin(-value, -h, blend) : h;
+                    value   = any ? max(value, h) : h;
                     any     = true;
+                }
+            } else if (op > 2.5) {
+                float s = -ElementDistance(data, e, points, p, reach);
+                if (s > 0.0) {
+                    float h = Profile(data, e, s, p);
+                    if (h >= 0.0) {
+                        up   = rose ? -SmoothMin(-up, -h, blend) : h;
+                        rose = true;
+                    } else {
+                        down = sank ? SmoothMin(down, h, blend) : h;
+                        sank = true;
+                    }
                 }
             }
         }
-        value = any ? value : 0.0;
+        value = (any ? value : 0.0) + (up + down) * smoothstep(0.0, blend, shore);
     }
     if (ParamUint(1) == 2u) {
         // The sea floor's own forms: seabed elements raise their profiles over their own distance inland
@@ -300,7 +328,7 @@ void main() {
         for (uint i = 0u; i < count; ++i) {
             uint  e  = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
             float op = At(data, e + 1u);
-            if (op > 1.5) {
+            if (op > 1.5 && op < 2.5) {
                 float s = -ElementDistance(data, e, points, p, reach);
                 if (s > 0.0) {
                     float h = Profile(data, e, s, p);

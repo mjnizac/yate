@@ -480,6 +480,63 @@ void TestArchipelagoPresets() {
     CHECK(!refused && std::string_view{refused.error().Format().data()}.find("no longer takes 'layout'") != std::string_view::npos);
 }
 
+void TestRidgeAndLands() {
+    test::Section("a ridge is as high as asked, with its saddles and its spurs");
+    struct Case {
+        const char* name;
+        const char* body;
+    };
+    const Case cases[] = {
+        // "A range 1000 m high along this line, two saddles, spurs every 2400 m."
+        {"ridge", R"(
+    local land = Lands.Compose{ seed = 1, frame = { size = 40000 }, profile = { 'flat', height = 100, edge = 400 }, elements = {
+        { shape = 'fill' },
+        { id = 'r', ridge = { points = { { -15000, -2000 }, { 15000, 2000 } }, width = 2000, height = 1000, saddles = 2,
+                              spacing = 2400 } } } }
+    local xs, zs = {}, {}
+    for k = 0, 3000 do xs[#xs + 1], zs[#zs + 1] = -15000 + 10 * k, -2000 + 4000 * k / 3000 end
+    local h = Terrain.Sample{ value = land.land_height, xs = xs, zs = zs, cell = 4 }
+    local top = -math.huge
+    for k = 1, #h do top = math.max(top, h[k]) end
+    expect(math.abs(top - 1100) <= 20, 'the crest stands ' .. (top - 100) .. ' m over the land, 1000 asked')
+    for _, at in ipairs({ 1000, 2000 }) do
+        local low = math.huge
+        for k = at - 100, at + 100 do low = math.min(low, h[k + 1]) end
+        expect(low < 100 + 750, 'no saddle near ' .. (10 * at) .. ' m along the crest: ' .. low)
+    end
+    local spurs = {}
+    for _, e in ipairs(land.info.elements) do
+        if tostring(e.id):find('^r/spur/') then spurs[#spurs + 1] = e end
+    end
+    expect(#spurs == 13, #spurs .. ' spurs along 30.3 km at 2400 m')
+    local mids = { xs = {}, zs = {} }
+    for k, e in ipairs(spurs) do
+        mids.xs[k], mids.zs[k] = e.at[1], e.at[2]
+        if k > 1 then
+            local d = math.sqrt((e.from[1] - spurs[k - 1].from[1]) ^ 2 + (e.from[2] - spurs[k - 1].from[2]) ^ 2)
+            expect(math.abs(d - 2400) <= 240, e.id .. ' is ' .. d .. ' m from the last')
+        end
+    end
+    for k, v in ipairs(Terrain.Sample{ value = land.land_height, xs = mids.xs, zs = mids.zs, cell = 4 }) do
+        expect(v > 100 + 400, spurs[k].id .. ' does not stand out: ' .. v)
+    end)"},
+    };
+    const auto check = [](const char* name, const std::string& body) {
+        Graph        graph;
+        const Status ran = RunBody(graph, name, body);
+        ++test::g_checks;
+        if (!ran) {
+            ++test::g_failures;
+            std::printf("FAIL %s: %s\n", name, ran.error().Format().data());
+        } else {
+            std::printf("     %s\n", name);
+        }
+    };
+    for (const Case& c : cases) {
+        check(c.name, c.body);
+    }
+}
+
 void TestErrors() {
     test::Section("a wrong composition is refused with what was expected");
     struct Case {
@@ -500,6 +557,8 @@ void TestErrors() {
         {"remove_unknown", "{ frame = { size = 1000 }, profile = 'cone', elements = { { shape = 'circle', radius = 5 } }, remove = { 'x' } }", "names 'x'"},
         {"area_polygon", "{ frame = { size = 1000 }, profile = 'cone', elements = { { shape = 'polygon', area = 5, points = { { 0, 0 }, { 1, 0 }, { 0, 1 } } } } }",
          "cannot be sized by 'area'"},
+        {"ridge_key", "{ frame = { size = 1000 }, profile = 'cone', elements = { { ridge = { points = { { 0, 0 }, { 100, 0 } }, width = 10, height = 5, crest = 2 } } } }",
+         "does not take 'crest'"},
     };
     for (const Case& c : cases) {
         Graph        graph;
@@ -529,6 +588,7 @@ int main() {
     TestPresets();
     TestScatter();
     TestArchipelagoPresets();
+    TestRidgeAndLands();
     TestErrors();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();

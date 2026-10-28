@@ -337,7 +337,7 @@ local SET_KINDS = {
 local SET_KEYS = {
     "shape", "id", "water", "smooth", "at", "rotation", "scale", "radius", "radii", "size", "rounding",
     "exponent", "harmonics", "from", "to", "length", "width", "aperture", "angle", "reach", "points",
-    "profile", "seabed", "trench",
+    "profile", "seabed", "trench", "relief",
 }
 
 local function number_of(where, e, key, default)
@@ -501,10 +501,11 @@ local function encode_element(i, e, points)
     end
 
     local radians = math.rad(rotation)
-    if e.water and e.seabed then
-        fail(where .. " cannot be both water and seabed")
+    local operations = (e.water and 1 or 0) + (e.seabed and 1 or 0) + (e.relief and 1 or 0)
+    if operations > 1 then
+        fail(where .. " is at most one of water, seabed and relief")
     end
-    v[1], v[2], v[3] = kind, e.water and 1.0 or (e.seabed and 2.0 or 0.0), number_of(where, e, "id", i)
+    v[1], v[2], v[3] = kind, e.water and 1.0 or (e.seabed and 2.0 or (e.relief and 3.0 or 0.0)), number_of(where, e, "id", i)
     v[4], v[5], v[6], v[7], v[8] = at[1], at[2], math.cos(radians), math.sin(radians), scale
     for k = 1, 12 do v[8 + k] = shape[k] or 0.0 end
     v[21] = number_of(where, e, "smooth", 0.0)

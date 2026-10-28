@@ -339,7 +339,9 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
                             inside = !inside;
                         }
                     } else {
-                        best = std::min(best, d - 0.5f * (at(pa + 2) + (at(pb + 2) - at(pa + 2)) * h));
+                        const f32_t w  = at(pa + 2) + (at(pb + 2) - at(pa + 2)) * h;
+                        const f32_t dw = d - 0.5f * w;
+                        best           = i == 0 ? dw : smoothMin(best, dw, 0.25f * w);
                     }
                 }
                 dist = polygon && inside ? -best : best;
@@ -428,7 +430,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         for (u32_t i = 0; i < count; ++i) {
             const u32_t e  = elements + index(first + i) * kElement;
             const f32_t op = at(e + 1);
-            if (op > 1.5f) {
+            if (op > 1.5f && op < 2.5f) {
                 const f32_t s = -distance(e, px, pz);
                 if (s > 0.0f) {
                     const f32_t h = profile(e, s);
@@ -442,20 +444,33 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         }
         return {raise - std::pow(trench, 0.25f), id};
     }
-    f32_t       value = 0.0f;
-    b8_t        any   = false;
+    f32_t value = 0.0f, up = 0.0f, down = 0.0f;
+    b8_t  any = false, rose = false, sank = false;
     for (u32_t i = 0; i < count; ++i) {
-        const u32_t e = elements + index(first + i) * kElement;
-        if (at(e + 1) < 0.5f) {
-            const f32_t s = std::min(-distance(e, px, pz), shore);
+        const u32_t e  = elements + index(first + i) * kElement;
+        const f32_t op = at(e + 1);
+        if (op < 0.5f) {
+            const f32_t s = std::min(0.25f * at(e + 20) - distance(e, px, pz), shore);
             if (s > 0.0f) {
                 const f32_t h = profile(e, s);
-                value         = any ? -smoothMin(-value, -h, blend) : h;
+                value         = any ? std::max(value, h) : h;
                 any           = true;
+            }
+        } else if (op > 2.5f) {
+            const f32_t s = -distance(e, px, pz);
+            if (s > 0.0f) {
+                const f32_t h = profile(e, s);
+                if (h >= 0.0f) {
+                    up   = rose ? -smoothMin(-up, -h, blend) : h;
+                    rose = true;
+                } else {
+                    down = sank ? smoothMin(down, h, blend) : h;
+                    sank = true;
+                }
             }
         }
     }
-    return {any ? value : 0.0f, id};
+    return {(any ? value : 0.0f) + (up + down) * Smooth(0.0f, blend, shore), id};
 }
 
 class Sampler {

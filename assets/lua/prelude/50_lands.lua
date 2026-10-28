@@ -1219,6 +1219,89 @@ local function scatter(e, id, ctx)
     return entries, slots - skipped, skipped
 end
 
+-- --- Ridge: a range from one element ----------------------------------------------------------------
+
+local RIDGE_KEYS = { points = true, width = true, height = true, saddles = true, spurs = true, spacing = true }
+
+-- The relief elements one `ridge` element stands for: the crest in pieces, each a band tapering at its ends
+-- so the pieces meet in saddles, and spurs off it at intervals on alternating sides (Azgaar's "Range" built
+-- from shapes: its spurs walk downhill every few cells, these are capsules every `spacing` metres, 1.2
+-- widths by default).
+local function ridge(e, id, ctx)
+    local where = "Lands.Compose ridge '" .. tostring(id) .. "'"
+    local r = e.ridge
+    if type(r) ~= "table" then
+        fail(where .. " expects 'ridge' as { points = { { x, z }, ... }, width = m, height = m, saddles = n, spurs = true }")
+    end
+    for key in pairs(r) do
+        if not RIDGE_KEYS[key] then
+            fail(where .. " does not take '" .. tostring(key) .. "'; it takes points, width, height, saddles, spurs and spacing")
+        end
+    end
+    local path = r.points
+    if type(path) ~= "table" or #path < 2 then
+        fail(where .. " needs 'points', at least two { x, z } points along its crest")
+    end
+    if type(r.width) ~= "number" or r.width <= 0 or type(r.height) ~= "number" then
+        fail(where .. " needs 'width' (metres across, above zero) and 'height' (metres)")
+    end
+    local h = engine.hasher((ctx.seed or 0) * 7919 + salt_of(tostring(id)))
+    local width, height = r.width, r.height
+    -- The path by arc length.
+    local along, total = { 0.0 }, 0.0
+    for k = 2, #path do
+        total = total + math.sqrt((path[k][1] - path[k - 1][1]) ^ 2 + (path[k][2] - path[k - 1][2]) ^ 2)
+        along[k] = total
+    end
+    local function at(d)
+        for k = 2, #path do
+            if d <= along[k] or k == #path then
+                local u = (d - along[k - 1]) / math.max(along[k] - along[k - 1], 1e-9)
+                local dx, dz = path[k][1] - path[k - 1][1], path[k][2] - path[k - 1][2]
+                local l = math.max(math.sqrt(dx * dx + dz * dz), 1e-9)
+                return path[k - 1][1] + dx * u, path[k - 1][2] + dz * u, dx / l, dz / l
+            end
+        end
+    end
+    local entries = {}
+    local function add(key, element)
+        element.relief = true
+        entries[#entries + 1] = { e = element, id = id .. "/" .. key }
+    end
+    -- The crest: `saddles + 1` pieces, overlapping by a width, each a band 0.4 of its width at its ends.
+    -- The highest piece is `height`, the others 0.8 to 1 of it.
+    local pieces, top = (r.saddles or 2) + 1, 0.0
+    for k = 1, pieces do top = math.max(top, h(k, 1)) end
+    for k = 1, pieces do
+        local d0 = math.max((k - 1) / pieces * total - width * 0.5, 0.0)
+        local d1 = math.min(k / pieces * total + width * 0.5, total)
+        local points = {}
+        for q = 0, 6 do
+            local x, z = at(d0 + (d1 - d0) * q / 6)
+            local taper = 1.0 - 0.6 * math.abs(q / 3 - 1.0) ^ 2
+            points[#points + 1] = { x, z, width * taper }
+        end
+        add("crest/" .. k, { shape = "band", points = points,
+                             profile = { "cone", height = height * (0.8 + 0.2 * h(k, 1) / top), width = width * 0.5 } })
+    end
+    -- Spurs: from the crest at intervals, alternating sides, turned 20 to 40 degrees from the normal.
+    if r.spurs ~= false then
+        local spacing = r.spacing or width * 1.2
+        local n = math.max(1, math.floor(total / spacing + 0.5))
+        for k = 1, n do
+            local x, z, tx, tz = at((k - 0.5) * total / n)
+            local side = k % 2 == 0 and 1.0 or -1.0
+            local turn = math.rad((20.0 + 20.0 * h(100 + k, 1)) * (h(100 + k, 2) < 0.5 and 1.0 or -1.0))
+            local nx, nz = -tz * side, tx * side
+            local dx, dz = nx * math.cos(turn) - nz * math.sin(turn), nx * math.sin(turn) + nz * math.cos(turn)
+            local length = width * (0.6 + 0.6 * h(100 + k, 3))
+            add("spur/" .. k, { shape = "capsule", from = { x, z }, to = { x + dx * length, z + dz * length }, width = width * 0.35,
+                                profile = { "cone", height = height * 0.55, width = width * 0.175 } })
+        end
+    end
+    return entries
+end
+
 -- Moves an element by (dx, dz): its ends if it has them, its placement otherwise (points are in the
 -- element's own space, so moving `at` moves them).
 local function moved(e, dx, dz)
@@ -1238,7 +1321,8 @@ local function edited(t, ctx)
     -- The declared land, which what a scatter generates keeps away from.
     ctx.obstacles = {}
     for i, e in ipairs(t.elements) do
-        if type(e) == "table" and e.scatter == nil and not e.water and not e.seabed and e.shape ~= "fill" then
+        if type(e) == "table" and e.scatter == nil and e.ridge == nil and not e.water and not e.seabed and not e.relief
+           and e.shape ~= "fill" then
             local out = sized("Lands.Compose element " .. i, e)
             local at_ = out.at or (out.from and { (out.from[1] + out.to[1]) * 0.5, (out.from[2] + out.to[2]) * 0.5 }) or { 0.0, 0.0 }
             if out.from then out.length = math.sqrt((out.to[1] - out.from[1]) ^ 2 + (out.to[2] - out.from[2]) ^ 2) end
@@ -1269,9 +1353,11 @@ local function edited(t, ctx)
             for _, entry in ipairs(entries) do
                 add(entry)
                 -- A later scatter keeps away from this land too.
-                local out = (not entry.e.water and not entry.e.seabed) and sized("Lands.Compose element", entry.e) or nil
+                local out = (not entry.e.water and not entry.e.seabed and not entry.e.relief) and sized("Lands.Compose element", entry.e) or nil
                 if out then ctx.obstacles[#ctx.obstacles + 1] = { x = out.at[1], z = out.at[2], r = bound_of(out) } end
             end
+        elseif copy.ridge ~= nil then
+            for _, entry in ipairs(ridge(copy, tostring(id), ctx)) do add(entry) end
         else
             add({ e = copy, id = id })
         end
@@ -1401,7 +1487,7 @@ function Lands.Compose(t)
             local generated, declared = 0.0, 0.0
             for _, entry in ipairs(source) do
                 local e = entry.e
-                if not e.water and not e.seabed and e.shape ~= "fill" then
+                if not e.water and not e.seabed and not e.relief and e.shape ~= "fill" then
                     local a = geometric_area(sized("Lands.Compose element", e)) or 0.0
                     if entry.scatter then generated = generated + a else declared = declared + a end
                 end
@@ -1467,7 +1553,7 @@ function Lands.Compose(t)
     -- has no crease where two coasts are equally near; the coast itself is the hard union.
     local set, raised, floor, joined = Shapes.Set{ elements = elements, reach = reach, relief = true, seabed = true,
                                                    margin = 0.5 * (shelf_width + slope_width),
-                                                   blend = math.max(size * 0.01, 4.0 * resolution) }
+                                                   blend = math.max(relief * 0.05, 1.0) }
     local coast_sdf  = set.value
     local transition = math.max(resolution * 1.5, 12.0)
     local land_mask  = 1.0 - Curves.Smoothstep{ input = coast_sdf, min = -transition, max = transition }
@@ -1540,9 +1626,9 @@ function Lands.Compose(t)
         local e, m = elements[i], measured[i]
         local row = {
             id = names[i], shape = e.shape, role = entry.e.role,
-            kind = e.water and "water" or (e.seabed and "seabed" or "land"),
+            kind = e.water and "water" or (e.seabed and "seabed" or (e.relief and "relief" or "land")),
             at = e.at or (e.from and { (e.from[1] + e.to[1]) * 0.5, (e.from[2] + e.to[2]) * 0.5 }) or { 0.0, 0.0 },
-            area = geometric_area(e), radius = bound_of(e),
+            area = geometric_area(e), radius = bound_of(e), from = e.from, to = e.to,
         }
         if m then
             row.area_measured = m.cells * cell * cell
