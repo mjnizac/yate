@@ -298,7 +298,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
                 }
                 r *= a;
                 dr *= a;
-                const f32_t g = dr / std::max(rho, 1e-3f);
+                const f32_t g = dr / std::max(rho, at(e + 36));
                 dist = (rho - r) / std::sqrt(1.0f + g * g);
                 break;
             }
@@ -346,6 +346,10 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
                 break;
             }
             default: return -reach;
+        }
+        if (kind == 1 || kind == 3 || kind == 4) {
+            const f32_t inner = at(e + 36);
+            dist              = (rho - inner) + (dist - (rho - inner)) * Smooth(0.25f * inner, inner, rho);
         }
         return dist * scale;
     };
@@ -402,23 +406,28 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             }
             case 5: {
                 const f32_t along = (px - at(e + 3)) * at(e + 28) + (pz - at(e + 4)) * at(e + 29);
-                return Smooth(0.0f, b, s) * std::max(a + at(e + 27) * along, 0.0f);
+                const f32_t floor = at(e + 30);
+                return Smooth(0.0f, b, s) * -smoothMin(-(a + at(e + 27) * along), -floor, std::max(0.25f * std::abs(a - floor), 1.0f));
             }
             default: return 0.0f;
         }
     };
     const f32_t blend = std::max(at(block + 13), 1e-3f);
-    const f32_t s     = std::max(-d, 0.0f);
-    f32_t       sum = 0.0f, total = 0.0f;
+    const f32_t shore = std::max(-d, 0.0f);
+    f32_t       value = 0.0f;
+    b8_t        any   = false;
     for (u32_t i = 0; i < count; ++i) {
         const u32_t e = elements + index(first + i) * kElement;
         if (at(e + 1) < 0.5f) {
-            const f32_t w = std::exp(-std::max(distance(e, px, pz) - best, 0.0f) / blend);
-            sum += w * profile(e, s);
-            total += w;
+            const f32_t s = std::min(-distance(e, px, pz), shore);
+            if (s > 0.0f) {
+                const f32_t h = profile(e, s);
+                value         = any ? -smoothMin(-value, -h, blend) : h;
+                any           = true;
+            }
         }
     }
-    return {total > 0.0f ? sum / total : 0.0f, id};
+    return {any ? value : 0.0f, id};
 }
 
 class Sampler {

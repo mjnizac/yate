@@ -36,6 +36,8 @@ engine_add_unit_test(test_relief)
 engine_add_unit_test(test_hydrology)
 # Rivers, lakes and the sea of Water.Network, through the CPU sampler.
 engine_add_unit_test(test_water)
+# Lands.Compose, the land made of shapes, through the CPU sampler.
+engine_add_unit_test(test_compose)
 
 # The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only
 # metrics and nothing from the engine; libspng only to read reference heightmaps given as PNG.
@@ -106,6 +108,6 @@ set_tests_properties(test_datasets PROPERTIES TIMEOUT 900)
 # `ctest -L fast` while iterating (seconds), the whole suite before a commit (minutes). The slow ones
 # export whole terrains through the executables or run the viewer.
 set_tests_properties(test_allocators test_mapping test_errors test_compiler test_lua_errors
-                     test_output_files test_lands test_relief test_hydrology test_water test_compute_roundtrip test_noise
+                     test_output_files test_lands test_relief test_hydrology test_water test_compose test_compute_roundtrip test_noise
                      test_kernels test_seams test_erosion PROPERTIES LABELS fast)
 set_tests_properties(test_cli test_geometry test_library test_viewer test_datasets PROPERTIES LABELS slow)

@@ -549,6 +549,411 @@ local function product_ranges(r)
     }
 end
 
+-- Everything a land is after its coast: the type of coast, the ground with its shore, the sea floor and
+-- the outputs, from the signed distance to the coast `o.coast_sdf` (land negative) and `o.ground`, the
+-- relief over the land (gullied here when `o.gullies`). `o.t` is the caller's table, for the shore and
+-- coast keys; `o.lagoon`, when given, is 1 where the sea is a lagoon.
+local function finish(o)
+    local t, seed, size, resolution, relief, coast = o.t, o.seed, o.size, o.resolution, o.relief, o.coast
+    local coast_sdf = o.coast_sdf
+
+    -- The type of coast: 0 a beach, 1 a cliff.
+    local wave = math.rad(t.wave_from or 225.0)
+    local gradient = Terrain.Gradient{ input = coast_sdf }
+    local facing = gradient.x * math.cos(wave) + gradient.z * math.sin(wave)
+    local exposure = Curves.Clamp{ input = 0.5 + 0.5 * facing, min = 0.0, max = 1.0 }
+    local blur_radius = math.min(math.max(math.floor(size * 0.01 / resolution + 0.5), 2), 24)
+    local convexity = Curves.Clamp{
+        input = (Filters.Blur{ input = coast_sdf, radius = blur_radius } - coast_sdf) / (size * 0.01),
+        min = -1.0, max = 1.0,
+    } * 0.5 + 0.5
+    local function regional(offset, salt)
+        return Curves.Smoothstep{
+            input = Noises.fBm{ frequency = 1.0 / (size * 0.25), octaves = 2, amplitude = 0.6, seed = seed + salt }.value
+                    + offset,
+            min = -0.5, max = 0.5,
+        }
+    end
+    local hard = regional((t.hardness or 0.0) + coast.hardness, 71)
+    local sed  = regional((t.sediment or 0.0) + coast.sediment, 73)
+    local raw  = 0.50 * hard + 0.22 * exposure + 0.13 * convexity + 0.15 - 0.45 * sed
+    local coast_type = Curves.Smoothstep{ input = raw, min = 0.20, max = 0.70 }
+
+    -- The ground: the relief, gullied at the scale it cannot show if asked, over a beach or cliff profile at
+    -- the shore.
+    local u = Curves.Clamp{ input = -coast_sdf, min = 0.0, max = 1.0e6 }
+    local beach_w = t.beach_width or math.min(math.max(size * 0.0025, 20.0), 300.0)
+    local cliff_w = t.cliff_width or math.min(math.max(size * 0.001, 10.0), 100.0)
+    local beach_h = t.beach_height or 6.0
+    local cliff_h = t.cliff_height or math.min(relief * 0.15, 80.0)
+    local sb = Curves.Clamp{ input = u / beach_w, min = 0.0, max = 1.0 }
+    local sc = Curves.Clamp{ input = u / cliff_w, min = 0.0, max = 1.0 }
+    local beach = beach_h * (1.0 - (1.0 - sb) * (1.0 - sb))
+    local cliff = cliff_h * (1.0 - (1.0 - sc) * (1.0 - sc))
+    local shore = Combine.Blend{ a = beach, b = cliff, mask = coast_type }
+
+    local ground = o.ground
+    if o.additive then
+        -- The ground is the relief as given, below the sea too (a caldera's floor); the shore profile is
+        -- added only where the land meets the sea.
+        local inland = Curves.Smoothstep{ input = u, min = 0.0, max = math.max(size * 0.01, 60.0) }
+        o.land_height = ground + shore * (1.0 - inland)
+    end
+    if o.gullies then
+        ground = Erosion.Gullies{
+            input = ground, cell = math.max(size * 0.012, 60.0), octaves = 3, strength = math.min(relief * 0.04, 30.0),
+            full = 0.5, seed = seed + 53,
+        }
+    end
+    -- The shore profile rises to the ground over a few hundred metres, so a high coast is a cliff and a low
+    -- one a beach.
+    local land_height = o.land_height
+    if land_height == nil then
+        local inland = Curves.Smoothstep{ input = u, min = 0.0, max = math.max(size * 0.01, 60.0) }
+        land_height = Curves.Clamp{
+            input = Combine.Blend{ a = shore, b = Combine.Max{ a = ground, b = shore }, mask = inland },
+            min = 0.0, max = relief * 2.5,
+        }
+    end
+
+    -- The sea floor: a shallow beach face, a shelf, a break, a slope and an abyssal plain. Steeper offshore
+    -- of a cliff.
+    local shelf_width, shelf_depth, slope_width, abyssal_depth = o.shelf_width, o.shelf_depth, o.slope_width, o.abyssal_depth
+    local off = Curves.Clamp{ input = coast_sdf, min = 0.0, max = 1.0e7 }
+    local sf = Curves.Clamp{ input = off / 160.0, min = 0.0, max = 1.0 }
+    local face = (3.0 + 22.0 * coast_type) * (1.0 - (1.0 - sf) * (1.0 - sf))
+    local on_shelf = shelf_depth * Curves.Clamp{ input = off / shelf_width, min = 0.0, max = 1.0 }
+    local sl = Curves.Clamp{ input = (off - shelf_width) / slope_width, min = 0.0, max = 1.0 }
+    local on_slope = (abyssal_depth - shelf_depth) * (sl * sl * (3.0 - 2.0 * sl))
+    local floor_noise = Noises.fBm{
+        frequency = 1.0 / (size * 0.3), octaves = 3, amplitude = 0.03, seed = seed + 51,
+    }
+    local depth = (face + on_shelf + on_slope) * (1.0 + floor_noise.value)
+    if o.lagoon then
+        local inside = Curves.Smoothstep{ input = o.lagoon, min = 0.3, max = 0.7 }
+        depth = Combine.Blend{
+            a = depth, b = Curves.Clamp{ input = depth, min = 0.0, max = t.lagoon_depth or 45.0 }, mask = inside,
+        }
+    end
+    local bathymetry = -depth
+
+    local surface_height = Combine.Blend{ a = bathymetry, b = land_height, mask = o.land_mask }
+
+    local band = t.shore_band or math.max(size * 0.01, 4.0 * resolution)
+    local shore_mask = 1.0 - Curves.Smoothstep{
+        input = Combine.Max{ a = coast_sdf, b = -coast_sdf }, min = 0.0, max = band,
+    }
+
+    local info = o.info
+    info.margin = {
+        shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
+    }
+    info.height_max, info.depth_max = relief * 1.6, abyssal_depth * 1.05
+    local land = {
+        coast_sdf = coast_sdf, land_mask = o.land_mask, land_height = land_height,
+        bathymetry = bathymetry, surface_height = surface_height, shore_mask = shore_mask,
+        coast_type = coast_type, region_id = o.region_id, info = info,
+    }
+
+    -- The script's outputs: `height` and `normals` always, then whatever is asked for by name (a script
+    -- holds at most eight outputs, so the rest are on demand).
+    function land:outputs(names)
+        local ranges = product_ranges(self.info)
+        local result = {
+            height  = { value = self.surface_height, range = ranges.surface_height },
+            normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = self.surface_height } } },
+            look    = { palette = "coast" },
+        }
+        for _, name in ipairs(names or {}) do
+            if ranges[name] == nil or name == "surface_height" then
+                if name ~= "surface_height" then
+                    fail("Lands: '" .. tostring(name) .. "' is not a product; they are coast_sdf, land_mask, "
+                         .. "land_height, bathymetry, shore_mask, coast_type and region_id (height is the surface)")
+                end
+            else
+                result[name] = { value = self[name], range = ranges[name] }
+            end
+        end
+        return result
+    end
+    return land
+end
+
+-- --- Lands.Compose --------------------------------------------------------------------------------
+
+-- Land and water made of simple shapes, each with an id, combined in list order in one node
+-- (`Shapes.Set`): nothing is assumed about where the land is or how it rises.
+
+local COMPOSE_KEYS = {
+    seed = true, resolution = true, frame = true, elements = true, height = true, profile = true, hypsometry = true,
+    margin = true, shelf_width = true, shelf_depth = true, slope_width = true, abyssal_depth = true,
+    coast = true, wave_from = true, hardness = true, sediment = true, shore_band = true, lagoon_depth = true,
+    beach_width = true, beach_height = true, cliff_width = true, cliff_height = true,
+}
+-- The keys an element takes beyond a `Shapes.Set` element's.
+local ELEMENT_OWN = { area = true, aspect = true, role = true, name = true, profile = true }
+
+-- 4 a b times the integral of (1 - x^n)^(1/n) over [0, 1]: the area of a superellipse of radii a, b.
+local function superellipse_area(a, b, n)
+    local steps, sum = 4096, 0.0
+    for i = 1, steps do
+        local x = (i - 0.5) / steps
+        sum = sum + (1.0 - x ^ n) ^ (1.0 / n)
+    end
+    return 4.0 * a * b * sum / steps
+end
+
+-- How far inland an element's ground can be from its coast, before `scale`: what a profile's widths are
+-- fractions of when a preset is given without them.
+local function inradius(e)
+    local s = e.shape
+    if s == "circle" then return e.radius end
+    if s == "ellipse" or s == "superellipse" then return math.min(e.radii[1], e.radii[2]) end
+    if s == "box" then return 0.5 * math.min(e.size[1], e.size[2]) end
+    if s == "radial" then
+        local spread = 0.0
+        for _, h in ipairs(e.harmonics or {}) do spread = spread + math.abs(h[2] or 0.0) end
+        return e.radius * (1.0 - spread)
+    end
+    if s == "band" and e.width == nil then
+        local sum = 0.0
+        for _, p in ipairs(e.points) do sum = sum + (p[3] or 0.0) end
+        return 0.5 * sum / math.max(#e.points, 1)
+    end
+    if s == "capsule" or s == "ring" or s == "arc" or s == "band" then return 0.5 * (e.width or 0.0) end
+    if s == "sector" then
+        local h = math.sin(math.rad(e.angle * 0.5))
+        return e.reach * h / (1.0 + h)
+    end
+    if s == "polygon" then
+        local area, n = 0.0, #e.points
+        for k = 1, n do
+            local a, b = e.points[k], e.points[k % n + 1]
+            area = area + a[1] * b[2] - b[1] * a[2]
+        end
+        return 0.8 * math.sqrt(math.abs(area) * 0.5 / math.pi)
+    end
+    return nil
+end
+
+local PRESETS = { dome = true, cone = true, plateau = true, rim = true, caldera = true, tilt = true, flat = true }
+
+-- A profile given by name, or as { "name", key = value, ... }, as `Shapes.Set` numbers: every width a
+-- fraction of the element's inradius `r` and every height of `relief`, unless the script gives it.
+local function profile_of(where, p, r, relief, rotation)
+    local name, given = p, {}
+    if type(p) == "table" then
+        name, given = p[1], p
+        local known = { height = true, width = true, edge = true, at = true, sigma = true, inner = true, start = true,
+                        gradient = true, direction = true, low = true }
+        for key in pairs(p) do
+            if key ~= 1 and not known[key] then
+                fail(where .. " profile does not take '" .. tostring(key) .. "'; it takes the preset's name first, "
+                     .. "then height, width, edge, at, sigma, inner, start, gradient, direction or low")
+            end
+        end
+    end
+    if not PRESETS[name] then
+        fail(where .. " has profile '" .. tostring(name) .. "'; expected dome, cone, plateau, rim, caldera, tilt or flat")
+    end
+    local function g(key, default) if given[key] ~= nil then return given[key] end return default end
+    local h = g("height", relief)
+    if name == "dome" or name == "cone" then
+        return { kind = name, height = h, width = g("width", r) }
+    elseif name == "plateau" or name == "flat" then
+        return { kind = "plateau", height = name == "flat" and g("height", math.max(relief * 0.03, 4.0)) or h,
+                 edge = g("edge", r * (name == "flat" and 0.3 or 0.15)) }
+    elseif name == "rim" or name == "caldera" then
+        local at = g("at", r * 0.12)
+        return { kind = "rim", height = h, at = at, sigma = g("sigma", r * 0.06),
+                 inner = g("inner", name == "caldera" and -0.15 * h or 0.3 * h),
+                 width = g("width", r * (name == "caldera" and 0.15 or 0.4)),
+                 start = g("start", name == "caldera" and at * 1.5 or 0.0) }
+    end
+    -- A plane rising `gradient` per metre towards `direction`, `low` on the low side of the inscribed circle,
+    -- never under `low`.
+    local low      = g("low", h * 0.1)
+    local gradient = g("gradient", h * 0.9 / math.max(2.0 * r, 1.0))
+    return { kind = "tilt", height = low + gradient * r, floor = low, edge = g("edge", r * 0.1),
+             gradient = gradient, direction = g("direction", rotation or 0.0) }
+end
+
+-- `out`, the element sized, with its profile: its own, or the composition's. Land needs one; water has none.
+-- `out.inland` is how far in its profile reaches, for the composition's reach.
+local function with_profile(where, e, out, relief, default_profile)
+    if e.water then
+        if e.profile ~= nil then
+            fail(where .. " is water and takes no profile")
+        end
+        return out
+    end
+    local p = e.profile or default_profile
+    if p == nil then
+        fail(where .. " needs a profile, its own or the composition's 'profile': dome, cone, plateau, rim, caldera, "
+             .. "tilt or flat. Nothing is assumed about how land rises")
+    end
+    local r = inradius(out)
+    if r == nil then
+        r = math.max(relief * 10.0, 1000.0)
+    end
+    r = r * (out.scale or 1.0)
+    out.profile = profile_of(where, p, r, relief, out.rotation)
+    out.inland = r
+    return out
+end
+
+-- An element of `Lands.Compose` as a `Shapes.Set` element: `area` (square metres) sets its size from the
+-- shape's closed-form area, `aspect` (x over z) its proportions where the shape has two radii.
+local function set_element(i, e, number, relief, default_profile)
+    local where = "Lands.Compose element " .. i
+    if type(e) ~= "table" then
+        fail(where .. " must be a table")
+    end
+    local out = {}
+    for key, value in pairs(e) do
+        if not ELEMENT_OWN[key] then out[key] = value end
+    end
+    out.id = number
+    if e.area == nil then
+        return with_profile(where, e, out, relief, default_profile)
+    end
+    if type(e.area) ~= "number" or e.area <= 0 then
+        fail(where .. " needs 'area' as square metres above zero")
+    end
+    local area   = e.area / (e.scale or 1.0) ^ 2
+    local aspect = e.aspect or 1.0
+    local shape  = e.shape
+    if shape == "circle" then
+        out.radius = math.sqrt(area / math.pi)
+    elseif shape == "ellipse" or shape == "superellipse" then
+        local unit = shape == "ellipse" and math.pi or superellipse_area(1.0, 1.0, e.exponent or 4.0)
+        local rz = math.sqrt(area / (unit * aspect))
+        out.radii = { rz * aspect, rz }
+    elseif shape == "box" then
+        local depth = math.sqrt(area / aspect)
+        out.size = { depth * aspect, depth }
+    elseif shape == "radial" then
+        local spread = 0.0
+        for _, h in ipairs(e.harmonics or {}) do spread = spread + 0.5 * (h[2] or 0.0) ^ 2 end
+        out.radius = math.sqrt(area / (math.pi * (1.0 + spread)))
+    elseif shape == "ring" then
+        if type(e.width) ~= "number" then fail(where .. " needs 'width' to size a ring by its area") end
+        out.radius = area / (2.0 * math.pi * e.width)
+    elseif shape == "capsule" and type(e.length) == "number" then
+        -- pi r^2 + 2 L r = area, L the length between the caps' centres.
+        local r = (-e.length + math.sqrt(e.length * e.length + math.pi * area)) / math.pi
+        out.width = 2.0 * r
+    else
+        fail(where .. " cannot be sized by 'area' as a " .. tostring(shape)
+             .. "; give its dimensions (area works for circle, ellipse, superellipse, box, radial, ring and a capsule with a length)")
+    end
+    return with_profile(where, e, out, relief, default_profile)
+end
+
+function Lands.Compose(t)
+    if type(t) ~= "table" then
+        fail("Lands.Compose expects a table of named arguments, as in Lands.Compose{ ... }")
+    end
+    for key in pairs(t) do
+        if not COMPOSE_KEYS[key] then
+            local list = {}
+            for k in pairs(COMPOSE_KEYS) do list[#list + 1] = k end
+            table.sort(list)
+            fail("Lands.Compose does not take '" .. tostring(key) .. "'; it accepts " .. table.concat(list, ", "))
+        end
+    end
+    local frame = t.frame
+    if type(frame) ~= "table" or type(frame.size) ~= "number" or frame.size <= 0 then
+        fail("Lands.Compose needs 'frame' as { size = metres }, the side of the map centred on the origin")
+    end
+    if type(t.elements) ~= "table" then
+        fail("Lands.Compose needs 'elements', a list of shapes of land and water")
+    end
+    local seed       = t.seed or 0
+    local resolution = t.resolution or 8.0
+    local size       = frame.size
+    local relief     = t.height or 600.0
+    local margin     = MARGINS[t.margin or "compressed"]
+    local coast      = COASTS[t.coast or "mixed"]
+    if margin == nil then
+        fail("Lands.Compose margin must be 'compressed' or 'geologic', got '" .. tostring(t.margin) .. "'")
+    end
+    if coast == nil then
+        fail("Lands.Compose coast must be 'mixed', 'rocky', 'sedimentary' or 'cliff', got '" .. tostring(t.coast) .. "'")
+    end
+    local width_scale   = margin.scale and size * 0.5 or 1.0
+    local shelf_depth   = t.shelf_depth or margin.shelf_depth
+    local abyssal_depth = t.abyssal_depth or margin.abyssal_depth
+    local shelf_width   = t.shelf_width or margin.shelf_width * width_scale
+    local slope_width   = t.slope_width or margin.slope_width * width_scale
+    if abyssal_depth <= shelf_depth or shelf_width <= 0 or slope_width <= 0 then
+        fail("Lands.Compose needs abyssal_depth greater than shelf_depth and positive widths")
+    end
+
+    -- Ids: a script names an element with any string or number; the node carries numbers from 1.
+    local elements, ids, names = {}, {}, {}
+    for i, e in ipairs(t.elements) do
+        local id = e.id ~= nil and e.id or i
+        if ids[id] then
+            fail("Lands.Compose element " .. i .. " repeats the id '" .. tostring(id) .. "'")
+        end
+        ids[id], names[i] = i, id
+        elements[i] = set_element(i, e, i, relief, t.profile)
+    end
+
+    -- Measured as far as the sea floor reaches and as far inland as a profile rises.
+    local reach = shelf_width + slope_width
+    for _, e in ipairs(elements) do
+        reach = math.max(reach, (e.inland or 0.0) * 1.05)
+        e.inland = nil
+    end
+    local set, raised = Shapes.Set{ elements = elements, reach = reach, relief = true,
+                                    blend = math.max(size * 0.01, 4.0 * resolution) }
+    local coast_sdf  = set.value
+    local transition = math.max(resolution * 1.5, 12.0)
+    local land_mask  = 1.0 - Curves.Smoothstep{ input = coast_sdf, min = -transition, max = transition }
+
+    -- Lagoons: water elements with `role = "lagoon"` are shallow (`lagoon_depth`) whatever their distance
+    -- from the coast, as inside an atoll's ring.
+    local lagoons = {}
+    for i, e in ipairs(t.elements) do
+        if e.role == "lagoon" then
+            if not e.water then
+                fail("Lands.Compose element " .. i .. " has role 'lagoon' and must be water")
+            end
+            local copy = {}
+            for key, value in pairs(elements[i]) do copy[key] = value end
+            copy.water = nil
+            lagoons[#lagoons + 1] = copy
+        end
+    end
+    local lagoon = nil
+    if #lagoons > 0 then
+        lagoon = 1.0 - Curves.Smoothstep{ input = Shapes.Set{ elements = lagoons, reach = reach }.value,
+                                          min = -transition, max = transition }
+    end
+
+    -- The hypsometry: how much of the land is low, as a fixed curve of the height over `height` (monotone, so
+    -- it keeps the order of heights and the drainage): low x^2, balanced x, high 1 - (1 - x)^2.
+    local hypsometry = t.hypsometry or "balanced"
+    local ground = raised.value
+    if hypsometry == "low" then
+        ground = Curves.Power{ input = ground / relief, exponent = 2.0 } * relief
+    elseif hypsometry == "high" then
+        ground = ground * (2.0 - ground / relief)
+    elseif hypsometry ~= "balanced" then
+        fail("Lands.Compose hypsometry must be 'low', 'balanced' or 'high', got '" .. tostring(hypsometry) .. "'")
+    end
+
+    return finish{
+        t = t, seed = seed, size = size, resolution = resolution, relief = relief, coast = coast,
+        coast_sdf = coast_sdf, land_mask = land_mask, region_id = set.id,
+        ground = ground, gullies = false, additive = true, lagoon = lagoon,
+        shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
+        info = { size = size, extent = size * 0.5, regions = #elements, ids = names },
+    }
+end
+
 function Lands.Island(t)
     t = t or {}
     if type(t) ~= "table" then
@@ -667,118 +1072,17 @@ function Lands.Island(t)
     local land_mask  = 1.0 - Curves.Smoothstep{ input = coast_sdf, min = -transition, max = transition }
     local region_id  = Curves.Terrace{ input = sample(grid.region), step = 1.0, sharpness = 1.0 }
 
-    -- 4. The type of coast: 0 a beach, 1 a cliff.
-    local wave = math.rad(t.wave_from or 225.0)
-    local gradient = Terrain.Gradient{ input = coast_sdf }
-    local facing = gradient.x * math.cos(wave) + gradient.z * math.sin(wave)
-    local exposure = Curves.Clamp{ input = 0.5 + 0.5 * facing, min = 0.0, max = 1.0 }
-    local blur_radius = math.min(math.max(math.floor(size * 0.01 / resolution + 0.5), 2), 24)
-    local convexity = Curves.Clamp{
-        input = (Filters.Blur{ input = coast_sdf, radius = blur_radius } - coast_sdf) / (size * 0.01),
-        min = -1.0, max = 1.0,
-    } * 0.5 + 0.5
-    local function regional(offset, salt)
-        return Curves.Smoothstep{
-            input = Noises.fBm{ frequency = 1.0 / (size * 0.25), octaves = 2, amplitude = 0.6, seed = seed + salt }.value
-                    + offset,
-            min = -0.5, max = 0.5,
-        }
-    end
-    local hard = regional((t.hardness or 0.0) + coast.hardness, 71)
-    local sed  = regional((t.sediment or 0.0) + coast.sediment, 73)
-    local raw  = 0.50 * hard + 0.22 * exposure + 0.13 * convexity + 0.15 - 0.45 * sed
-    local coast_type = Curves.Smoothstep{ input = raw, min = 0.20, max = 0.70 }
-
-    -- 5. The ground: the grid's eroded relief plus gullies at the scale the grid cannot show, over a beach
-    -- or cliff profile at the shore.
-    local u = Curves.Clamp{ input = -coast_sdf, min = 0.0, max = 1.0e6 }
-    local beach_w = t.beach_width or math.min(math.max(size * 0.0025, 20.0), 300.0)
-    local cliff_w = t.cliff_width or math.min(math.max(size * 0.001, 10.0), 100.0)
-    local beach_h = t.beach_height or 6.0
-    local cliff_h = t.cliff_height or math.min(relief * 0.15, 80.0)
-    local sb = Curves.Clamp{ input = u / beach_w, min = 0.0, max = 1.0 }
-    local sc = Curves.Clamp{ input = u / cliff_w, min = 0.0, max = 1.0 }
-    local beach = beach_h * (1.0 - (1.0 - sb) * (1.0 - sb))
-    local cliff = cliff_h * (1.0 - (1.0 - sc) * (1.0 - sc))
-    local shore = Combine.Blend{ a = beach, b = cliff, mask = coast_type }
-
-    local eroded = sample(grid.relief)
-    local gullied = Erosion.Gullies{
-        input = eroded, cell = math.max(size * 0.012, 60.0), octaves = 3, strength = math.min(relief * 0.04, 30.0),
-        full = 0.5, seed = seed + 53,
-    }
-    -- The shore profile rises to the grid's ground over a few hundred metres, so a high coast is a cliff
-    -- and a low one a beach.
-    local inland = Curves.Smoothstep{ input = u, min = 0.0, max = math.max(size * 0.01, 60.0) }
-    local land_height = Curves.Clamp{
-        input = Combine.Blend{ a = shore, b = Combine.Max{ a = gullied, b = shore }, mask = inland },
-        min = 0.0, max = relief * 2.5,
-    }
-
-    -- 6. The sea floor: a shallow beach face, a shelf, a break, a slope and an abyssal plain. Steeper
-    -- offshore of a cliff.
-    local off = Curves.Clamp{ input = coast_sdf, min = 0.0, max = 1.0e7 }
-    local sf = Curves.Clamp{ input = off / 160.0, min = 0.0, max = 1.0 }
-    local face = (3.0 + 22.0 * coast_type) * (1.0 - (1.0 - sf) * (1.0 - sf))
-    local on_shelf = shelf_depth * Curves.Clamp{ input = off / shelf_width, min = 0.0, max = 1.0 }
-    local sl = Curves.Clamp{ input = (off - shelf_width) / slope_width, min = 0.0, max = 1.0 }
-    local on_slope = (abyssal_depth - shelf_depth) * (sl * sl * (3.0 - 2.0 * sl))
-    local floor_noise = Noises.fBm{
-        frequency = 1.0 / (size * 0.3), octaves = 3, amplitude = 0.03, seed = seed + 51,
-    }
-    local depth = (face + on_shelf + on_slope) * (1.0 + floor_noise.value)
-    if layout == "atoll" then
-        local inside = Curves.Smoothstep{ input = sample(grid.lagoon), min = 0.3, max = 0.7 }
-        depth = Combine.Blend{
-            a = depth, b = Curves.Clamp{ input = depth, min = 0.0, max = t.lagoon_depth or 45.0 }, mask = inside,
-        }
-    end
-    local bathymetry = -depth
-
-    local surface_height = Combine.Blend{ a = bathymetry, b = land_height, mask = land_mask }
-
-    local band = t.shore_band or math.max(size * 0.01, 4.0 * resolution)
-    local shore_mask = 1.0 - Curves.Smoothstep{
-        input = Combine.Max{ a = coast_sdf, b = -coast_sdf }, min = 0.0, max = band,
-    }
-
-    local island = {
-        coast_sdf = coast_sdf, land_mask = land_mask, land_height = land_height,
-        bathymetry = bathymetry, surface_height = surface_height, shore_mask = shore_mask,
-        coast_type = coast_type, region_id = region_id,
+    return finish{
+        t = t, seed = seed, size = size, resolution = resolution, relief = relief, coast = coast,
+        coast_sdf = coast_sdf, land_mask = land_mask, region_id = region_id,
+        ground = sample(grid.relief), gullies = true,
+        lagoon = layout == "atoll" and sample(grid.lagoon) or nil,
+        shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
         info = {
             size = size, extent = extent, layout = layout, bands = active, land_fraction = land_fraction,
             regions = grid.regions, masses = grid.masses, sea_level_in_grid = grid.level,
-            margin = {
-                shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width,
-                abyssal_depth = abyssal_depth,
-            },
-            height_max = relief * 1.6, depth_max = abyssal_depth * 1.05,
         },
     }
-
-    -- The script's outputs: `height` and `normals` always, then whatever is asked for by name (a script
-    -- holds at most eight outputs, so the rest are on demand).
-    function island:outputs(names)
-        local ranges = product_ranges(self.info)
-        local result = {
-            height  = { value = self.surface_height, range = ranges.surface_height },
-            normals = { value = Terrain.Normals{ input = Terrain.Gradient{ input = self.surface_height } } },
-            look    = { palette = "coast" },
-        }
-        for _, name in ipairs(names or {}) do
-            if ranges[name] == nil or name == "surface_height" then
-                if name ~= "surface_height" then
-                    fail("Lands: '" .. tostring(name) .. "' is not a product; they are coast_sdf, land_mask, "
-                         .. "land_height, bathymetry, shore_mask, coast_type and region_id (height is the surface)")
-                end
-            else
-                result[name] = { value = self[name], range = ranges[name] }
-            end
-        end
-        return result
-    end
-    return island
 end
 
 -- An archipelago: `Lands.Island` with a `layout` of scattered, hotspot, arc or atoll.

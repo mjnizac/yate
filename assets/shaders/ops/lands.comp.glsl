@@ -21,7 +21,8 @@
 //   elements, 48 values each:
 //       0 kind  1 operation (0 land, 1 water)  2 id  3..4 centre x, z  5..6 cos, sin of the rotation
 //       7 scale  8..19 the shape's numbers  20 smoothing k (m)  21 bounding radius (m)
-//       22 first point  23 point count  24..35 the profile (relief mode)  36..47 unused
+//       22 first point  23 point count  24..35 the profile (relief mode)  36 inscribed radius (ellipse,
+//       superellipse, radial)  37..47 unused
 //   points, 3 values each (x, z, width), in the element's local space.
 //
 // Shapes and their numbers (8..):
@@ -33,11 +34,11 @@
 // Profiles (24.., relief mode), over s, the distance inland from the coast of the whole set:
 //   0 none  1 dome H, W  2 cone H, W  3 plateau H, edge  4 rim: a crest of height Hr at c metres inland
 //   (gaussian, sigma), plus an interior rising to Hi over W metres from `start`: 24 kind, 25 Hr, 26 c,
-//   27 sigma, 28 Hi, 29 W, 30 start  5 tilt H0, edge, gradient, direction x, z: a plane rising across the
-//   element from its centre
-// In relief mode channel 0 is the height above the sea of the land elements' profiles, blended by weights
-// exp(-(d_i - d_min) / blend) on each element's own distance so neighbours with different profiles meet
-// without a step; header 13 is `blend` in metres.
+//   27 sigma, 28 Hi, 29 W, 30 start  5 tilt H0, edge, gradient, direction x, z, floor: a plane rising across
+//   the element from its centre, H0 at the centre, held smoothly above `floor`
+// In relief mode channel 0 is the height above the sea: each land element containing the sample raises its
+// profile over its own distance inland held to the set's, and the profiles join by a smooth maximum
+// `blend` metres wide (header 13).
 //
 // Parameters: 0 block offset, 1 mode (0 coast, 1 relief).
 
@@ -88,7 +89,8 @@ float RadialDistance(FloatBuffer data, uint e, vec2 p) {
     }
     r  *= radius;
     dr *= radius;
-    return (rho - r) / sqrt(1.0 + (dr / max(rho, 1e-3)) * (dr / max(rho, 1e-3)));
+    float g = dr / max(rho, At(data, e + 36u));
+    return (rho - r) / sqrt(1.0 + g * g);
 }
 
 float ArcDistance(vec2 p, float radius, float aperture, float width) {
@@ -157,6 +159,12 @@ float ElementDistance(FloatBuffer data, uint e, uint points, vec2 world, float r
             break;
         default: return -reach;
     }
+    // Inside the inscribed circle the distance of the oval and radial shapes is that circle's, blended in: their
+    // estimates depend on the direction there and would make a star at the centre. The edge is untouched.
+    if (kind == 1u || kind == 3u || kind == 4u) {
+        float inner = At(data, e + 36u);
+        dist        = mix(length(p) - inner, dist, smoothstep(0.25 * inner, inner, length(p)));
+    }
     return dist * scale;
 }
 
@@ -179,7 +187,9 @@ float Profile(FloatBuffer data, uint e, float s, vec2 world) {
         case 5u: {
             vec2  u     = vec2(At(data, e + 28u), At(data, e + 29u));
             float along = dot(world - vec2(At(data, e + 3u), At(data, e + 4u)), u);
-            return smoothstep(0.0, b, s) * max(a + At(data, e + 27u) * along, 0.0);
+            // The plane, held above its floor by a smooth maximum so the low side is level ground, not a crease.
+            float floor_ = At(data, e + 30u);
+            return smoothstep(0.0, b, s) * -SmoothMin(-(a + At(data, e + 27u) * along), -floor_, max(0.25 * abs(a - floor_), 1.0));
         }
         default: return 0.0;
     }
@@ -242,21 +252,25 @@ void main() {
     }
     float value = d;
     if (ParamUint(1) == 1u) {
-        // The profiles over the distance inland of the whole set, each weighted by how near its own
-        // element is against the nearest one.
+        // Each land element containing the sample raises its profile over its own distance inland, held
+        // to the set's (so a bay or a lake cut later brings it down to the shore); the profiles join by a
+        // smooth maximum `blend` metres wide. An element that does not contain the sample adds nothing,
+        // which is also why the bins may leave it out.
         float blend = max(At(data, block + 13u), 1e-3);
-        float s     = max(-d, 0.0);
-        float sum   = 0.0;
-        float total = 0.0;
+        float shore = max(-d, 0.0);
+        bool  any   = false;
         for (uint i = 0u; i < count; ++i) {
             uint e = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
             if (At(data, e + 1u) < 0.5) {
-                float w = exp(-max(ElementDistance(data, e, points, p, reach) - best, 0.0) / blend);
-                sum   += w * Profile(data, e, s, p);
-                total += w;
+                float s = min(-ElementDistance(data, e, points, p, reach), shore);
+                if (s > 0.0) {
+                    float h = Profile(data, e, s, p);
+                    value   = any ? -SmoothMin(-value, -h, blend) : h;
+                    any     = true;
+                }
             }
         }
-        value = total > 0.0 ? sum / total : 0.0;
+        value = any ? value : 0.0;
     }
     if (WantsChannel(0u)) {
         StoreScalar(0u, index, value);

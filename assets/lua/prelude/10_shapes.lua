@@ -358,7 +358,7 @@ local function pair_of(where, e, key)
 end
 
 local PROFILE_KINDS = { dome = 1, cone = 2, plateau = 3, rim = 4, tilt = 5 }
-local PROFILE_KEYS = { "kind", "height", "width", "edge", "at", "sigma", "inner", "start", "gradient", "direction" }
+local PROFILE_KEYS = { "kind", "height", "width", "edge", "at", "sigma", "inner", "start", "gradient", "direction", "floor" }
 
 -- A profile's numbers (element values 25..36): what the relief mode raises over the distance inland.
 local function encode_profile(where, p, v)
@@ -390,6 +390,7 @@ local function encode_profile(where, p, v)
         local direction = math.rad(number_of(where .. " profile", p, "direction", 0.0))
         v[27], v[28] = positive("edge"), number_of(where .. " profile", p, "gradient")
         v[29], v[30] = math.cos(direction), math.sin(direction)
+        v[31] = number_of(where .. " profile", p, "floor", 0.0)
     end
 end
 
@@ -426,6 +427,9 @@ local function encode_element(i, e, points)
             end
         end
         bound = math.sqrt(r[1] * r[1] + r[2] * r[2])
+        -- The inscribed circle: under exponent 2 the oval pinches in towards a diamond.
+        local n = shape[3] or 2.0
+        v[37] = math.min(r[1], r[2]) * (n >= 2.0 and 1.0 or 2.0 ^ (0.5 - 1.0 / n))
     elseif e.shape == "box" then
         local s = pair_of(where, e, "size")
         shape[1], shape[2], shape[3] = s[1] * 0.5, s[2] * 0.5, number_of(where, e, "rounding", 0.0)
@@ -449,6 +453,7 @@ local function encode_element(i, e, points)
             fail(where .. " needs the harmonic amplitudes to add up to less than 1, or the radius turns negative")
         end
         bound = r * (1.0 + spread)
+        v[37] = r * (1.0 - spread)
     elseif e.shape == "capsule" then
         local width = number_of(where, e, "width")
         if e.from ~= nil or e.to ~= nil then
@@ -508,8 +513,8 @@ local function encode_element(i, e, points)
 end
 
 -- The block of `elements` (see lands.comp.glsl): `reach` is the distance past which nothing is measured,
--- `bin` the side of the bins (chosen from the elements when not given), `blend` how far apart in metres
--- two elements' distances are for their profiles to mix (the relief mode).
+-- `bin` the side of the bins (chosen from the elements when not given), `blend` the width in metres of the
+-- smooth maximum two overlapping elements' profiles join with (the relief mode).
 function Shapes.SetBlock(t)
     check("Shapes.SetBlock", t, { "elements", "reach", "bin", "blend" })
     local list = t.elements
