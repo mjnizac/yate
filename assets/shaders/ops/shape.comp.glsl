@@ -20,6 +20,7 @@
 #version 460
 
 #include "lib/kernel.lib.glsl"
+#include "lib/shape.lib.glsl"
 
 layout(constant_id = 3) const uint kShapeKind     = 0;
 layout(constant_id = 4) const uint kShapeSegments = 1;
@@ -34,23 +35,6 @@ layout(constant_id = 4) const uint kShapeSegments = 1;
 #define SHAPE_RESOLVE_POLYLINE 7u
 
 const float kNoDistance = 1.0e30;
-
-float SegmentDistance(vec2 p, vec2 a, vec2 b) {
-    vec2  pa            = p - a;
-    vec2  ba            = b - a;
-    float lengthSquared = dot(ba, ba);
-    float h             = lengthSquared > 0.0 ? dot(pa, ba) / lengthSquared : 0.0;
-    h                   = clamp(h, 0.0, 1.0);
-    return length(pa - ba * h);
-}
-
-bool SegmentCrosses(vec2 p, vec2 a, vec2 b) {
-    if ((a.y > p.y) == (b.y > p.y)) {
-        return false;
-    }
-    float xAt = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
-    return p.x < xAt;
-}
 
 void main() {
     uvec3 local = LocalSample();
@@ -73,23 +57,13 @@ void main() {
     vec2 p = LoadVec2(0u, InputIndex(0u, local));
 
     if (kShapeKind == SHAPE_CIRCLE) {
-        StoreScalar(0u, index, length(p) - ParamFloat(0));
+        StoreScalar(0u, index, CircleDistance(p, ParamFloat(0)));
     } else if (kShapeKind == SHAPE_ELLIPSE) {
-        vec2  r  = vec2(ParamFloat(0), ParamFloat(1));
-        float k0 = length(p / r);
-        float k1 = length(p / (r * r));
-        // The usual bound on the distance rather than the exact one; the exact ellipse distance is a
-        // quartic. It is exact on the axes and only approximate away from the edge.
-        StoreScalar(0u, index, k1 > 0.0 ? k0 * (k0 - 1.0) / k1 : -min(r.x, r.y));
+        StoreScalar(0u, index, EllipseDistance(p, vec2(ParamFloat(0), ParamFloat(1))));
     } else if (kShapeKind == SHAPE_BOX) {
-        float rounding = ParamFloat(2);
-        vec2  q        = abs(p) - (vec2(ParamFloat(0), ParamFloat(1)) - vec2(rounding));
-        float inside   = max(q.x, q.y);
-        StoreScalar(0u, index,
-                    length(max(q, vec2(0.0))) + (inside < 0.0 ? inside : 0.0) - rounding);
+        StoreScalar(0u, index, BoxDistance(p, vec2(ParamFloat(0), ParamFloat(1)), ParamFloat(2)));
     } else if (kShapeKind == SHAPE_BOX_CHEBYSHEV) {
-        vec2 q = abs(p) - vec2(ParamFloat(0), ParamFloat(1));
-        StoreScalar(0u, index, max(q.x, q.y));
+        StoreScalar(0u, index, BoxChebyshevDistance(p, vec2(ParamFloat(0), ParamFloat(1))));
     } else {
         float distance_ = kNoDistance;
         float parity    = 0.0;
