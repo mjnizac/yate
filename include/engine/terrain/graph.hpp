@@ -7,6 +7,7 @@
 #include <array>
 #include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -384,7 +385,7 @@ public:
     [[nodiscard]] Result<Value> AddWater(Value position, Value aux, u32_t block, u32_t receiver, WaterMode mode,
                                          SourceLocation location);
     /// What a `Lands` node computes from its block.
-    enum class LandsMode : u32_t { Coast = 0, Relief };
+    enum class LandsMode : u32_t { Coast = 0, Relief, Seabed };
     /// The shapes of the block at `block` (see `AddGridBlock` and `lands.comp.glsl`) at `position`.
     [[nodiscard]] Result<Value> AddLands(Value position, u32_t block, LandsMode mode, SourceLocation location);
     [[nodiscard]] Result<Value> AddGrid(Value position, std::span<const f32_t> values,
@@ -400,6 +401,10 @@ public:
     };
     void                     SetLook(Look look) noexcept { m_look = look; }
     [[nodiscard]] const Look& GetLook() const noexcept { return m_look; }
+    /// What the script reports about what it built, as a JSON object (`engine.report` in the prelude):
+    /// written to an export's metadata as `script_report`. Empty for none.
+    void SetReport(std::string_view json);
+    [[nodiscard]] std::string_view Report() const noexcept { return m_report; }
 
     /// Every grid's values, back to back; a grid node's parameter word 0 is its offset in here.
     [[nodiscard]] std::span<const f32_t> GridData() const noexcept { return m_gridData; }
@@ -516,6 +521,7 @@ private:
     /// a node, and can be megabytes. Given the general allocator on first use.
     std::pmr::vector<f32_t> m_gridData;
     Look                    m_look{};
+    std::pmr::string        m_report;
 };
 
 /// A graph is large, because the spec asks for fixed-capacity storage so that building one never

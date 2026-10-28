@@ -19,10 +19,10 @@
 //                       7 elements  8 bin offsets (bins + 1 of them, into the lists)  9 lists
 //                       10 points  11 global count  12 global list  13..23 unused
 //   elements, 48 values each:
-//       0 kind  1 operation (0 land, 1 water)  2 id  3..4 centre x, z  5..6 cos, sin of the rotation
+//       0 kind  1 operation (0 land, 1 water, 2 seabed)  2 id  3..4 centre x, z  5..6 cos, sin of the rotation
 //       7 scale  8..19 the shape's numbers  20 smoothing k (m)  21 bounding radius (m)
 //       22 first point  23 point count  24..35 the profile (relief mode)  36 inscribed radius (ellipse,
-//       superellipse, radial)  37..47 unused
+//       superellipse, radial)  37..39 a land element's trench: depth, offset from its coast, sigma  40..47 unused
 //   points, 3 values each (x, z, width), in the element's local space.
 //
 // Shapes and their numbers (8..):
@@ -40,7 +40,10 @@
 // profile over its own distance inland held to the set's, and the profiles join by a smooth maximum
 // `blend` metres wide (header 13).
 //
-// Parameters: 0 block offset, 1 mode (0 coast, 1 relief).
+// In seabed mode channel 0 is what to add to the sea floor: seabed elements (operation 2, which the coast
+// ignores) raise their profiles over their own distance inland, and land elements with a trench sink it.
+//
+// Parameters: 0 block offset, 1 mode (0 coast, 1 relief, 2 seabed).
 
 #version 460
 
@@ -230,9 +233,13 @@ void main() {
     float id   = 0.0;
     for (uint i = 0u; i < count; ++i) {
         uint  e    = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
+        float op   = At(data, e + 1u);
+        if (op > 1.5) {
+            continue; // A seabed element raises the sea floor only (seabed mode).
+        }
         float dist = ElementDistance(data, e, points, p, reach);
         float k    = At(data, e + 20u);
-        if (At(data, e + 1u) < 0.5) {
+        if (op < 0.5) {
             d = SmoothMin(d, dist, k);
             if (dist < best) {
                 best = dist;
@@ -271,6 +278,31 @@ void main() {
             }
         }
         value = any ? value : 0.0;
+    }
+    if (ParamUint(1) == 2u) {
+        // The sea floor's own forms: seabed elements raise their profiles over their own distance inland
+        // (joined by a smooth maximum), and a land element with a trench sinks a gaussian of its depth
+        // `offset` metres off its coast. Channel 0 is what to add to the margin's floor.
+        float blend  = max(At(data, block + 13u), 1e-3);
+        float raise  = 0.0;
+        float trench = 0.0;
+        bool  any    = false;
+        for (uint i = 0u; i < count; ++i) {
+            uint  e  = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
+            float op = At(data, e + 1u);
+            if (op > 1.5) {
+                float s = -ElementDistance(data, e, points, p, reach);
+                if (s > 0.0) {
+                    float h = Profile(data, e, s, p);
+                    raise   = any ? -SmoothMin(-raise, -h, blend) : h;
+                    any     = true;
+                }
+            } else if (op < 0.5 && At(data, e + 37u) > 0.0) {
+                float t = (ElementDistance(data, e, points, p, reach) - At(data, e + 38u)) / At(data, e + 39u);
+                trench  = max(trench, At(data, e + 37u) * exp(-0.5 * t * t));
+            }
+        }
+        value = raise - trench;
     }
     if (WantsChannel(0u)) {
         StoreScalar(0u, index, value);

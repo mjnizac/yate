@@ -328,6 +328,9 @@ struct ExportMetadata {
     u32_t depth = 1;
 
     std::array<Output, kMaxOutputs> outputs{};
+    /// The script's report (`Graph::Report`), a JSON object written as `script_report`; empty for none.
+    /// A view into the graph, which outlives the write.
+    std::string_view scriptReport;
     usize_t                         outputCount = 0;
 
     Timings timings;

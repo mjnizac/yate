@@ -1742,6 +1742,35 @@ void TestShapeSets() {
         CHECK(std::fabs(At(rim, 240.0, 0.0)) < 1e-6);           // Nothing at sea.
     }
 
+    // A composition anchored to the world, 100 km from the origin: two exports whose windows overlap agree
+    // byte for byte where they overlap, so the world can be exported piece by piece.
+    {
+        const std::string script = std::string(ENGINE_SOURCE_ROOT) + "/assets/scripts/lands/infinite_islands.lua";
+        Grid west, east;
+        west.originX = 97000.0, west.originZ = -56000.0, west.spacing = 16.0, west.side = 64, west.section = 32;
+        east         = west;
+        east.originX = west.originX + 16.0 * 40.0;  // 40 samples east: 24 columns shared.
+        east.section = 16;
+        const Field a = RunExport(script, std::string(kDirectory) + "/world_west", west, "height");
+        const Field b = RunExport(script, std::string(kDirectory) + "/world_east", east, "height");
+        ++test::g_checks;
+        if (!a.Ok() || !b.Ok()) {
+            ++test::g_failures;
+            std::printf("FAIL world anchored: no field (%.200s)\n", (a.Ok() ? b : a).error.c_str());
+        } else {
+            std::size_t differ = 0, land = 0;
+            for (std::size_t row = 0; row < 64; ++row) {
+                for (std::size_t column = 0; column < 24; ++column) {
+                    const float va = a.values[row * 64 + 40 + column], vb = b.values[row * 64 + column];
+                    differ += std::memcmp(&va, &vb, sizeof(float)) != 0 ? 1 : 0;
+                    land += va > 0.0f ? 1 : 0;
+                }
+            }
+            std::printf("     world anchored: %zu of %d shared samples differ (%zu on land)\n", differ, 64 * 24, land);
+            CHECK(differ == 0 && land > 100);
+        }
+    }
+
     // The GPU against the CPU sampler, which is what a script measures areas and places elements with.
     const Field agree = Export("set_agree", "    local set = Shapes.Set{ reach = 400, elements = {\n"
                                             "        { shape = 'radial', radius = 150, harmonics = { { 4, 0.15, 1 }, { 7, 0.05, 2 } }, rotation = 17 },\n"

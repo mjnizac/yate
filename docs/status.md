@@ -24,9 +24,10 @@ vector maps and raw `f32` volumes with a metadata sidecar; `terrain_viewer` (Gra
 graph as a GPU-displaced grid with an orbit camera (`--view`, `--target`), a ring of streamed tiles,
 hot reload, `--screenshot`, and the analytic sea level (`--water`, off by default).
 
-Seventeen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular, with an optional
+Nineteen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular, with an optional
 `position`), `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`,
-`ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies` and `Grid`, plus
+`ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies`, `Grid`, `Water` and `Lands` (a list
+of shapes in one node), plus
 `Erosion.StreamPower`, a whole-grid simulation on the CPU. The script API is
 `Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`, `Erosion.*`,
 `Geometry.*`, and the Lua prelude's `Shapes.*`, `Landforms.*`, `Ranges.*` (the alpine macro) and `Dunes.*`
@@ -42,11 +43,17 @@ Dune fields from `Dunes.Field`, the dune macro (`terrains/dunes.lua`, `terrains/
 three styles: `"procedural"` (default, analytic, no repetition, about 0.6 s), `"simulated"`
 (`Erosion.Wind`, periodic) and `"star"`; previews in `docs/images/dunes/`.
 
-Islands, archipelagos and continents from `Lands.Island`, `Lands.Archipelago` and `Lands.Continent`, the
-lands macro (`assets/scripts/lands/`): bodies with spines, drainage by `Erosion.StreamPower`, sea level by
-quantile (70 % land by default), one signed coast distance, a margin with a shelf and a slope, a coast
-type, and four archipelago layouts; measured with `terrain_metrics` and four golden datasets
-(`lands_*`); previews in `docs/images/lands/`.
+Islands and any other land and sea from `Lands.Compose` (`assets/scripts/lands/`): simple shapes first,
+detail after. A list of elements (land, water, sea-floor forms) with ids, combined in order in the `Lands`
+op (`Shapes.Set`), each land element raised by its own profile (dome, cone, plateau, rim, caldera, tilt,
+flat: nothing assumed), the coast, shore and margin from the one signed distance, seamounts, guyots and
+trenches, lagoons, edits by id, and the resolved elements reported to the export's metadata
+(`tools/dev.sh lands`, `lands-check`). Bounded maps or the unbounded world (`frame.world_cell`). Island
+presets in `Lands.Island` (`high_island`, `low_island`, `volcano`, `caldera`, `rim_island`, `mesa_island`,
+`atoll`); scripts run in about 0.1 s against 6 s for the grid-built island. `Lands.Archipelago` and
+`Lands.Continent` are still the grid-built macro (bodies with spines, drainage by `Erosion.StreamPower`, sea
+level by quantile). Golden datasets `lands_*` (13); previews in `docs/images/lands/`. The plan is in
+`docs/lands_plan.md` (local): phase 1 (islands) is done, phases 2 (archipelagos) and 3 (continents) are next.
 
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.
@@ -60,11 +67,13 @@ shows every kind on one map.
 
 ## Verification
 
-Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has 18 suites:
+Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has 21 suites:
 `test_allocators`, `test_mapping`, `test_errors`, `test_compiler`, `test_lua_errors`,
-`test_output_files`, `test_cli`, `test_geometry`, `test_lands`, `test_relief`, `test_library`, `test_compute_roundtrip`, `test_noise`,
-`test_kernels`, `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. Both passed 18 of 18 on the last run;
-Release can fail the intermittent `volume_r3` timing in `test_datasets` (see known defects). Run one
+`test_output_files`, `test_lands`, `test_relief`, `test_hydrology`, `test_water`, `test_compose`,
+`test_cli`, `test_geometry`, `test_library`, `test_compute_roundtrip`, `test_noise`, `test_kernels`,
+`test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. On the last run Release passed all but the
+intermittent `volume_r3` timing in `test_datasets` and Debug all but `test_viewer`'s "distance picks the
+level" (see known defects). Run one
 suite at a time: two runs share `out/` and fail each other.
 
 Four of those look at something the engine did not itself produce, which is the property the earlier
@@ -119,8 +128,10 @@ Open, with the measurements, in `docs/todo.md`:
   carves are at the scale of the cell and differ. Finer than 2 m the count is capped at 96.
 * **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
   it. Adding diagonal neighbours was tried and measured worse.
-* **`volume_r3` timing in `test_datasets`** runs 21 to 52 % over its 20 ms baseline in Release, against a
+* **`volume_r3` timing in `test_datasets`** runs 21 to 80 % over its 20 ms baseline in Release, against a
   25 % failure threshold; the baseline or the tolerance needs a decision.
+* **`test_viewer` fails in Debug** on "distance picks the level" (`MissingTiles() == 0`), before and after
+  the lands work, on this machine; Release passes. Not investigated (todo).
 * **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not
   reproduce locally; Linux has never built. Both need the log of the failing step.
 * **Water at the ring's edge** shows a plate where the surface stands above a lower floor (todo).

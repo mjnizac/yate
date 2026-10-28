@@ -114,6 +114,10 @@ viewer screenshot. Each item is done when it is in `ctest`.
 
 ## Viewer and performance
 
+- [ ] **`test_viewer` fails in Debug** on "distance picks the level" (`MissingTiles() == 0`), also without
+      the lands work; Release passes. Find whether the Debug build is too slow for the frame budget the
+      test allows or tiles are really missing.
+
 - [ ] **Tiles are evaluated one submit and wait at a time** (`EvaluateTile`): batch several tiles per
       submission and add them to the cache when their timeline value is reached.
 - [ ] **Lua work is repeated on every level change**: the macros rebuild resolution-independent CPU grids
@@ -159,17 +163,29 @@ viewer screenshot. Each item is done when it is in `ctest`.
 
 ## Lands macro (`Lands.*`)
 
+The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail after.
+
+- [x] **Phase 1, islands**: the `Lands` op and `Shapes.Set` (a list of shapes with ids in one node, through
+      bins), `Lands.Compose` (areas, profiles per element with no assumed shape, lagoons, seamounts, guyots,
+      active margins, edits by id, the report in metadata, bounded maps and `frame.world_cell`), island
+      presets in `Lands.Island`, `terrain_metrics --by-id`, `dev.sh lands` and `lands-check`, 9 new goldens.
+- [ ] **Phase 2, archipelagos**: `scatter` (Poisson in a bounded map, hash-priority Poisson per world cell),
+      patterns (cluster, line, arc, ring, centers), `land_fraction` by bisection, classification by area;
+      `Lands.Archipelago` rebuilt on `Lands.Compose`.
+- [ ] **Phase 3, continents and other lands**: ridges with spurs and saddles, Azgaar-style presets as
+      compositions (mediterranean, pangea, peninsula, isthmus, inland sea...), `edge_margin`;
+      `Lands.Continent` rebuilt; the references measured.
+- [ ] **The margin creases on the medial axis** between two coasts (a straight ridge in the bathymetry
+      where the nearest coast changes): the distance is a hard minimum there. Smooth it in the detail phase.
+- [ ] **A rim island's interior is a closed basin**: what the profile says, but nothing drains it yet.
+- [ ] **The report samples 3 x 65 k points on the CPU** (60 to 130 ms of script time); fine for exports, it
+      is paid again at every level change in the viewer.
 - [ ] **No real references measured yet**: the heightmaps in `docs/references/{islands,archipelagos,
       continents}` have not been run through `terrain_metrics`; per-type acceptance numbers wait for it.
-- [ ] **A chain, an arc and an atoll reach 6 to 12 % of the map**, not 70 %: the layouts keep their
-      islands apart. A broader chain (islands side by side) would fill more of a square.
-- [ ] **The 70 % island touches the map edge in places**: the land is cropped by the window, as a piece
-      of a larger landmass; the references mostly leave a sea margin.
+- [ ] **A chain, an arc and an atoll reach 6 to 12 % of the map** (the legacy archipelago layouts), not
+      70 %: phase 2 replaces them.
 - [ ] **Coast type has no fetch**: exposure is the normal against one wave direction.
-- [ ] **No lakes or rivers as water in the Lands macros**: drowned valleys that do not reach the sea count
-      as lagoons in the metrics (10 to 30 on a default island); see "The macros do not drain yet".
-- [ ] **The grid is 256 cells** (94 m at 24 km): the drainage is as fine as that; a larger map has
-      coarser valleys until the grid is raised (`cells`, up to 512).
+- [ ] **No lakes or rivers as water in the Lands macros**: see "The macros do not drain yet".
 
 ## Dune macro (`Dunes.*`)
 

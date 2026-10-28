@@ -636,6 +636,10 @@ local function finish(o)
         }
     end
     local bathymetry = -depth
+    if o.seabed then
+        -- The sea floor's own forms, never brought up to the surface.
+        bathymetry = bathymetry + Combine.Min{ a = o.seabed, b = depth - 2.0 }
+    end
 
     local surface_height = Combine.Blend{ a = bathymetry, b = land_height, mask = o.land_mask }
 
@@ -686,12 +690,13 @@ end
 
 local COMPOSE_KEYS = {
     seed = true, resolution = true, frame = true, elements = true, height = true, profile = true, hypsometry = true,
+    edit = true, remove = true,
     margin = true, shelf_width = true, shelf_depth = true, slope_width = true, abyssal_depth = true,
     coast = true, wave_from = true, hardness = true, sediment = true, shore_band = true, lagoon_depth = true,
     beach_width = true, beach_height = true, cliff_width = true, cliff_height = true,
 }
 -- The keys an element takes beyond a `Shapes.Set` element's.
-local ELEMENT_OWN = { area = true, aspect = true, role = true, name = true, profile = true }
+local ELEMENT_OWN = { area = true, aspect = true, role = true, name = true, profile = true, margin = true }
 
 -- 4 a b times the integral of (1 - x^n)^(1/n) over [0, 1]: the area of a superellipse of radii a, b.
 local function superellipse_area(a, b, n)
@@ -787,17 +792,18 @@ local function with_profile(where, e, out, relief, default_profile)
         end
         return out
     end
-    local p = e.profile or default_profile
+    local p = e.profile or (e.seabed and "cone") or default_profile
     if p == nil then
         fail(where .. " needs a profile, its own or the composition's 'profile': dome, cone, plateau, rim, caldera, "
              .. "tilt or flat. Nothing is assumed about how land rises")
     end
     local r = inradius(out)
     if r == nil then
-        r = math.max(relief * 10.0, 1000.0)
+        r = math.max(relief.land * 10.0, 1000.0)
     end
     r = r * (out.scale or 1.0)
-    out.profile = profile_of(where, p, r, relief, out.rotation)
+    -- A seabed form is measured from the abyssal floor, half its depth high unless told.
+    out.profile = profile_of(where, p, r, e.seabed and relief.seabed or relief.land, out.rotation)
     out.inland = r
     return out
 end
@@ -850,6 +856,122 @@ local function set_element(i, e, number, relief, default_profile)
     return with_profile(where, e, out, relief, default_profile)
 end
 
+-- The closed-form area of a `Shapes.Set` element in square metres, or nil for a shape that has none (a
+-- band, a fill).
+local function geometric_area(e)
+    local s, area = e.shape, nil
+    if s == "circle" then
+        area = math.pi * e.radius ^ 2
+    elseif s == "ellipse" then
+        area = math.pi * e.radii[1] * e.radii[2]
+    elseif s == "superellipse" then
+        area = superellipse_area(e.radii[1], e.radii[2], e.exponent or 4.0)
+    elseif s == "box" then
+        area = e.size[1] * e.size[2] - (4.0 - math.pi) * (e.rounding or 0.0) ^ 2
+    elseif s == "radial" then
+        local spread = 0.0
+        for _, h in ipairs(e.harmonics or {}) do spread = spread + 0.5 * h[2] ^ 2 end
+        area = math.pi * e.radius ^ 2 * (1.0 + spread)
+    elseif s == "ring" then
+        area = 2.0 * math.pi * e.radius * e.width
+    elseif s == "capsule" then
+        local length = e.length or math.sqrt((e.to[1] - e.from[1]) ^ 2 + (e.to[2] - e.from[2]) ^ 2)
+        area = math.pi * (e.width * 0.5) ^ 2 + length * e.width
+    elseif s == "arc" then
+        area = e.radius * math.rad(e.aperture) * e.width + math.pi * e.width ^ 2 * 0.25
+    elseif s == "sector" then
+        area = math.rad(e.angle) * 0.5 * e.reach ^ 2
+    elseif s == "polygon" then
+        area = 0.0
+        for k = 1, #e.points do
+            local a, b = e.points[k], e.points[k % #e.points + 1]
+            area = area + a[1] * b[2] - b[1] * a[2]
+        end
+        area = math.abs(area) * 0.5
+    end
+    return area and area * (e.scale or 1.0) ^ 2
+end
+
+-- Moves an element by (dx, dz): its ends if it has them, its placement otherwise (points are in the
+-- element's own space, so moving `at` moves them).
+local function moved(e, dx, dz)
+    local function shift(p) return { p[1] + dx, p[2] + dz } end
+    if e.from then
+        e.from, e.to = shift(e.from), shift(e.to)
+    else
+        e.at = shift(e.at or { 0.0, 0.0 })
+    end
+end
+
+-- The elements as given, less `remove`, with `edit` applied: { e, id } in order, the id being the
+-- element's `id` or its place in the given list. An edit replaces the keys it names, except `scale`, which
+-- multiplies, and `offset = { dx, dz }`, which moves the element.
+local function edited(t)
+    local list, at = {}, {}
+    for i, e in ipairs(t.elements) do
+        if type(e) ~= "table" then
+            fail("Lands.Compose element " .. i .. " must be a table")
+        end
+        local id = e.id ~= nil and e.id or i
+        if at[id] then
+            fail("Lands.Compose element " .. i .. " repeats the id '" .. tostring(id) .. "'")
+        end
+        local copy = {}
+        for key, value in pairs(e) do copy[key] = value end
+        list[#list + 1] = { e = copy, id = id }
+        at[id] = #list
+    end
+    local function find(id, what)
+        if at[id] == nil then
+            local known = {}
+            for _, entry in ipairs(list) do known[#known + 1] = tostring(entry.id) end
+            fail("Lands.Compose " .. what .. " names '" .. tostring(id) .. "', which is no element's id; the ids are "
+                 .. table.concat(known, ", "))
+        end
+        return list[at[id]]
+    end
+    if t.edit ~= nil then
+        if type(t.edit) ~= "table" then
+            fail("Lands.Compose expects 'edit' as { [id] = { key = value, ... } }")
+        end
+        for id, change in pairs(t.edit) do
+            local e = find(id, "edit").e
+            if type(change) ~= "table" then
+                fail("Lands.Compose edit of '" .. tostring(id) .. "' must be a table of keys to change")
+            end
+            for key, value in pairs(change) do
+                if key == "scale" and e.area then
+                    -- An element sized by its area keeps that meaning: scaled, its area grows by the square.
+                    e.area = e.area * value * value
+                elseif key == "scale" then
+                    e.scale = (e.scale or 1.0) * value
+                elseif key == "offset" then
+                    if type(value) ~= "table" or type(value[1]) ~= "number" or type(value[2]) ~= "number" then
+                        fail("Lands.Compose edit of '" .. tostring(id) .. "' needs offset as { dx, dz }")
+                    end
+                    moved(e, value[1], value[2])
+                else
+                    e[key] = value
+                end
+            end
+        end
+    end
+    if t.remove ~= nil then
+        if type(t.remove) ~= "table" then
+            fail("Lands.Compose expects 'remove' as a list of ids")
+        end
+        local gone = {}
+        for _, id in ipairs(t.remove) do gone[find(id, "remove")] = true end
+        local kept = {}
+        for _, entry in ipairs(list) do
+            if not gone[entry] then kept[#kept + 1] = entry end
+        end
+        list = kept
+    end
+    for _, entry in ipairs(list) do entry.e.id = nil end
+    return list
+end
+
 function Lands.Compose(t)
     if type(t) ~= "table" then
         fail("Lands.Compose expects a table of named arguments, as in Lands.Compose{ ... }")
@@ -863,15 +985,29 @@ function Lands.Compose(t)
         end
     end
     local frame = t.frame
-    if type(frame) ~= "table" or type(frame.size) ~= "number" or frame.size <= 0 then
-        fail("Lands.Compose needs 'frame' as { size = metres }, the side of the map centred on the origin")
+    -- A map of `size` metres centred on the origin, or the unbounded world (`world_cell`): there the scales
+    -- of the coast and the shore follow the world cell, never the window, so any two exports agree, and
+    -- `region` is only where the report measures.
+    local size, window
+    if type(frame) == "table" and type(frame.world_cell) == "number" and frame.world_cell > 0 then
+        size = frame.world_cell
+        window = frame.region or { -2.0 * size, -2.0 * size, 2.0 * size, 2.0 * size }
+        if type(window) ~= "table" or #window ~= 4 or window[3] <= window[1] or window[4] <= window[2] then
+            fail("Lands.Compose expects frame.region as { min_x, min_z, max_x, max_z }")
+        end
+    elseif type(frame) == "table" and type(frame.size) == "number" and frame.size > 0 then
+        size = frame.size
+        window = { -size * 0.5, -size * 0.5, size * 0.5, size * 0.5 }
+    else
+        fail("Lands.Compose needs 'frame' as { size = metres }, the side of the map centred on the origin, or "
+             .. "{ world_cell = metres, region = { min_x, min_z, max_x, max_z } } for the unbounded world")
     end
     if type(t.elements) ~= "table" then
         fail("Lands.Compose needs 'elements', a list of shapes of land and water")
     end
     local seed       = t.seed or 0
     local resolution = t.resolution or 8.0
-    local size       = frame.size
+
     local relief     = t.height or 600.0
     local margin     = MARGINS[t.margin or "compressed"]
     local coast      = COASTS[t.coast or "mixed"]
@@ -892,13 +1028,35 @@ function Lands.Compose(t)
 
     -- Ids: a script names an element with any string or number; the node carries numbers from 1.
     local elements, ids, names = {}, {}, {}
-    for i, e in ipairs(t.elements) do
-        local id = e.id ~= nil and e.id or i
+    local source = edited(t)
+    for i, entry in ipairs(source) do
+        local e = entry.e
+        local id = entry.id
         if ids[id] then
             fail("Lands.Compose element " .. i .. " repeats the id '" .. tostring(id) .. "'")
         end
         ids[id], names[i] = i, id
-        elements[i] = set_element(i, e, i, relief, t.profile)
+        elements[i] = set_element(i, e, i, { land = relief, seabed = abyssal_depth * 0.5 }, t.profile)
+        -- An active margin: a trench off this element's coast, at the foot of the slope.
+        if e.margin ~= nil then
+            local m = e.margin
+            if e.water or e.seabed then
+                fail("Lands.Compose element " .. i .. " takes 'margin' only as land")
+            end
+            if m == "active" then
+                m = {}
+            elseif m == "passive" then
+                m = nil
+            elseif type(m) ~= "table" then
+                fail("Lands.Compose element " .. i .. " margin must be 'passive', 'active' or { depth, offset, width }")
+            end
+            if m then
+                elements[i].trench = {
+                    depth = m.depth or abyssal_depth * 0.8, offset = m.offset or shelf_width + 0.9 * slope_width,
+                    width = m.width or slope_width * 0.15,
+                }
+            end
+        end
     end
 
     -- Measured as far as the sea floor reaches and as far inland as a profile rises.
@@ -907,7 +1065,7 @@ function Lands.Compose(t)
         reach = math.max(reach, (e.inland or 0.0) * 1.05)
         e.inland = nil
     end
-    local set, raised = Shapes.Set{ elements = elements, reach = reach, relief = true,
+    local set, raised, floor = Shapes.Set{ elements = elements, reach = reach, relief = true, seabed = true,
                                     blend = math.max(size * 0.01, 4.0 * resolution) }
     local coast_sdf  = set.value
     local transition = math.max(resolution * 1.5, 12.0)
@@ -916,7 +1074,8 @@ function Lands.Compose(t)
     -- Lagoons: water elements with `role = "lagoon"` are shallow (`lagoon_depth`) whatever their distance
     -- from the coast, as inside an atoll's ring.
     local lagoons = {}
-    for i, e in ipairs(t.elements) do
+    for i, entry in ipairs(source) do
+        local e = entry.e
         if e.role == "lagoon" then
             if not e.water then
                 fail("Lands.Compose element " .. i .. " has role 'lagoon' and must be water")
@@ -945,26 +1104,72 @@ function Lands.Compose(t)
         fail("Lands.Compose hypsometry must be 'low', 'balanced' or 'high', got '" .. tostring(hypsometry) .. "'")
     end
 
+    -- The elements as resolved, reported to the export's metadata: what was asked for (the shape's
+    -- closed-form area) and what came out of the composition (area, centroid and highest profile by id,
+    -- measured on the CPU over the frame).
+    local cell = math.max(window[3] - window[1], window[4] - window[2]) / 256
+    local nx = math.max(math.floor((window[3] - window[1]) / cell + 0.5), 1)
+    local nz = math.max(math.floor((window[4] - window[2]) / cell + 0.5), 1)
+    local ox, oz = window[1] + cell * 0.5, window[2] + cell * 0.5
+    local sampled = {
+        d = Terrain.Sample{ value = coast_sdf, origin = { ox, oz }, size = { nx, nz }, cell = cell },
+        id = Terrain.Sample{ value = set.id, origin = { ox, oz }, size = { nx, nz }, cell = cell },
+        h = Terrain.Sample{ value = raised.value, origin = { ox, oz }, size = { nx, nz }, cell = cell },
+    }
+    local measured = {}
+    for k = 1, nx * nz do
+        if sampled.d[k] < 0.0 then
+            local i = math.floor(sampled.id[k] + 0.5)
+            local m = measured[i] or { cells = 0, x = 0.0, z = 0.0, top = -math.huge }
+            m.cells = m.cells + 1
+            m.x = m.x + ox + ((k - 1) % nx) * cell
+            m.z = m.z + oz + ((k - 1) // nx) * cell
+            m.top = math.max(m.top, sampled.h[k])
+            measured[i] = m
+        end
+    end
+    local listed, land_cells = {}, 0
+    for i, entry in ipairs(source) do
+        local e, m = elements[i], measured[i]
+        local row = {
+            id = names[i], shape = e.shape, role = entry.e.role,
+            kind = e.water and "water" or (e.seabed and "seabed" or "land"),
+            at = e.at or (e.from and { (e.from[1] + e.to[1]) * 0.5, (e.from[2] + e.to[2]) * 0.5 }) or { 0.0, 0.0 },
+            area = geometric_area(e),
+        }
+        if m then
+            row.area_measured = m.cells * cell * cell
+            row.centroid = { m.x / m.cells, m.z / m.cells }
+            row.highest = m.top
+            land_cells = land_cells + m.cells
+        end
+        listed[i] = row
+    end
+    engine.report("lands", {
+        frame = frame, window = window, land_fraction = land_cells / (nx * nz), cell = cell, elements = listed,
+    })
+
     return finish{
         t = t, seed = seed, size = size, resolution = resolution, relief = relief, coast = coast,
         coast_sdf = coast_sdf, land_mask = land_mask, region_id = set.id,
-        ground = ground, gullies = false, additive = true, lagoon = lagoon,
+        ground = ground, gullies = false, additive = true, lagoon = lagoon, seabed = floor.value,
         shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
         info = { size = size, extent = size * 0.5, regions = #elements, ids = names },
     }
 end
 
-function Lands.Island(t)
+-- The grid-built macro behind `Lands.Archipelago` and `Lands.Continent` until they are rebuilt from shapes.
+local function legacy_island(t)
     t = t or {}
     if type(t) ~= "table" then
-        fail("Lands.Island expects a table of named arguments, as in Lands.Island{ ... }")
+        fail("Lands expects a table of named arguments, as in Lands.Archipelago{ ... }")
     end
     for key in pairs(t) do
         if not ACCEPTED[key] then
             local list = {}
             for k in pairs(ACCEPTED) do list[#list + 1] = k end
             table.sort(list)
-            fail("Lands.Island does not take '" .. tostring(key) .. "'; it accepts " .. table.concat(list, ", "))
+            fail("Lands does not take '" .. tostring(key) .. "'; it accepts " .. table.concat(list, ", "))
         end
     end
 
@@ -977,17 +1182,17 @@ function Lands.Island(t)
     local margin     = MARGINS[t.margin or "compressed"]
     local coast      = COASTS[t.coast or "mixed"]
     if not LAYOUTS[layout] then
-        fail("Lands.Island layout must be 'single', 'scattered', 'hotspot', 'arc', 'atoll' or 'continent', got '"
+        fail("Lands layout must be 'single', 'scattered', 'hotspot', 'arc', 'atoll' or 'continent', got '"
              .. tostring(layout) .. "'")
     end
     if margin == nil then
-        fail("Lands.Island margin must be 'compressed' or 'geologic', got '" .. tostring(t.margin) .. "'")
+        fail("Lands margin must be 'compressed' or 'geologic', got '" .. tostring(t.margin) .. "'")
     end
     if coast == nil then
-        fail("Lands.Island coast must be 'mixed', 'rocky', 'sedimentary' or 'cliff', got '" .. tostring(t.coast) .. "'")
+        fail("Lands coast must be 'mixed', 'rocky', 'sedimentary' or 'cliff', got '" .. tostring(t.coast) .. "'")
     end
     if roughness < 0 or roughness > 1 or resolution <= 0 or relief <= 0 or size <= 0 then
-        fail("Lands.Island needs roughness in [0, 1], and resolution, height and size greater than zero")
+        fail("Lands needs roughness in [0, 1], and resolution, height and size greater than zero")
     end
     -- 70 % of a map, unless the layout cannot: islands kept apart by straits fill about 40 % of a square, a
     -- ring round a lagoon or a chain of islands much less. Asking for more merges them into one mass.
@@ -995,11 +1200,11 @@ function Lands.Island(t)
         or ((layout == "atoll" and 0.4) or (layout == "scattered" and 0.4)
             or ((layout == "hotspot" or layout == "arc") and 0.12) or 0.7)
     if land_fraction <= 0.02 or land_fraction >= 0.95 then
-        fail("Lands.Island needs land_fraction between 0.02 and 0.95")
+        fail("Lands needs land_fraction between 0.02 and 0.95")
     end
     local dissection = t.dissection or 1.0
     if dissection < 0 or dissection > 3 then
-        fail("Lands.Island needs dissection between 0 and 3")
+        fail("Lands needs dissection between 0 and 3")
     end
 
     local polygons
@@ -1022,7 +1227,7 @@ function Lands.Island(t)
     local shelf_width   = t.shelf_width or margin.shelf_width * width_scale
     local slope_width   = t.slope_width or margin.slope_width * width_scale
     if abyssal_depth <= shelf_depth or shelf_width <= 0 or slope_width <= 0 then
-        fail("Lands.Island needs abyssal_depth greater than shelf_depth and positive widths")
+        fail("Lands needs abyssal_depth greater than shelf_depth and positive widths")
     end
 
     -- 1. The macro grid, on the CPU.
@@ -1085,7 +1290,169 @@ function Lands.Island(t)
     }
 end
 
--- An archipelago: `Lands.Island` with a `layout` of scattered, hotspot, arc or atoll.
+-- --- Presets --------------------------------------------------------------------------------------
+
+-- Islands as compositions of shapes: `Lands.Preset` returns the `Lands.Compose` table, to change before it
+-- is built; `Lands.Island` builds it. Every choice is drawn from `seed`, every size from `size` and
+-- `land_fraction`, and every element has an id an `edit` can name.
+
+local ISLAND_PRESETS = {
+    -- fraction of the map that is land, the highest ground, the coast
+    high_island = { fraction = 0.30, height = 900, coast = "mixed" },
+    low_island  = { fraction = 0.25, height = 12, coast = "sedimentary" },
+    volcano     = { fraction = 0.20, height = 1400, coast = "rocky" },
+    caldera     = { fraction = 0.20, height = 650, coast = "rocky" },
+    rim_island  = { fraction = 0.28, height = 380, coast = "cliff" },
+    mesa_island = { fraction = 0.25, height = 320, coast = "cliff" },
+    atoll       = { fraction = 0.08, height = 5, coast = "sedimentary" },
+}
+local PRESET_KEYS = { name = true, seed = true, size = true, land_fraction = true, height = true }
+-- Keys the grid-built island took that a composition of shapes has no use for.
+local RETIRED = {
+    layout = "an archipelago is Lands.Archipelago; a single island takes a 'preset'",
+    roughness = "the coast's detail comes after the shapes (phase 4 of the lands plan); edit the shapes",
+    dissection = "drainage comes after the shapes; edit the shapes",
+    cells = "nothing is simulated on a grid", count = "an island is one composition; see Lands.Archipelago",
+    aspect = "edit the 'main' element's aspect", area = "draw it as a polygon element in Lands.Compose",
+    areas = "draw them as polygon elements in Lands.Compose",
+}
+
+-- A lobed outline from the seed: two harmonics, one broad and one finer, at random phases.
+local function lobed(h, salt, broad, fine)
+    return {
+        { 2 + math.floor(h(salt, 1) * 2), broad * (0.6 + 0.4 * h(salt, 2)), h(salt, 3) * 2.0 * math.pi },
+        { 5 + math.floor(h(salt, 4) * 2), fine * (0.5 + 0.5 * h(salt, 5)), h(salt, 6) * 2.0 * math.pi },
+    }
+end
+
+function Lands.Preset(t)
+    if type(t) ~= "table" then
+        fail("Lands.Preset expects a table of named arguments, as in Lands.Preset{ name = 'high_island' }")
+    end
+    for key in pairs(t) do
+        if not PRESET_KEYS[key] then
+            fail("Lands.Preset does not take '" .. tostring(key) .. "'; it takes name, seed, size, land_fraction "
+                 .. "and height, and returns the Lands.Compose table to change")
+        end
+    end
+    local p = ISLAND_PRESETS[t.name]
+    if p == nil then
+        local names = {}
+        for k in pairs(ISLAND_PRESETS) do names[#names + 1] = k end
+        table.sort(names)
+        fail("Lands.Preset has no preset '" .. tostring(t.name) .. "'; the presets are " .. table.concat(names, ", "))
+    end
+    local seed = t.seed or 0
+    local size = t.size or 24000.0
+    local fraction = t.land_fraction or p.fraction
+    if fraction <= 0.0 or fraction >= 0.9 then
+        fail("Lands.Preset needs land_fraction between 0 and 0.9")
+    end
+    local h = engine.hasher(seed + 7000)
+    local area = fraction * size * size
+    local turn = h(1, 1) * 360.0
+    local elements
+    if t.name == "high_island" then
+        -- A main mass and two lobes joined to it, each rising to its own summit, and a bay.
+        local r = math.sqrt(area * 0.8 / math.pi)
+        elements = { { id = "main", shape = "radial", area = area * 0.8, rotation = turn, harmonics = lobed(h, 10, 0.18, 0.07),
+                       profile = "dome" } }
+        for i = 1, 2 do
+            local a = math.rad(turn + 120.0 * i + 40.0 * (h(20 + i, 1) - 0.5))
+            elements[#elements + 1] = {
+                id = "lobe" .. i, shape = "radial", area = area * (i == 1 and 0.13 or 0.07), smooth = r * 0.3,
+                at = { math.cos(a) * r * 0.85, math.sin(a) * r * 0.85 }, harmonics = lobed(h, 30 + i, 0.15, 0.05),
+                profile = { "dome", height = (t.height or p.height) * (0.45 + 0.2 * h(20 + i, 2)) },
+            }
+        end
+        local b = math.rad(turn + 60.0)
+        elements[#elements + 1] = { id = "bay", shape = "ellipse", water = true, radii = { r * 0.28, r * 0.17 },
+                                    at = { math.cos(b) * r * 0.95, math.sin(b) * r * 0.95 }, rotation = math.deg(b),
+                                    smooth = r * 0.04 }
+    elseif t.name == "low_island" then
+        elements = { { id = "main", shape = "radial", area = area, rotation = turn, harmonics = lobed(h, 10, 0.25, 0.08),
+                       profile = "flat" } }
+    elseif t.name == "volcano" then
+        local r = math.sqrt(area / math.pi)
+        local a = math.rad(turn)
+        elements = {
+            { id = "main", shape = "radial", area = area, harmonics = lobed(h, 10, 0.06, 0.04), profile = "cone",
+              margin = "active" },
+            { id = "parasite", shape = "circle", radius = r * 0.22, at = { math.cos(a) * r * 0.6, math.sin(a) * r * 0.6 },
+              smooth = r * 0.12, profile = { "cone", height = (t.height or p.height) * 0.38 } },
+        }
+    elseif t.name == "caldera" then
+        local r = math.sqrt(area / math.pi)
+        elements = {
+            { id = "main", shape = "radial", area = area, harmonics = lobed(h, 10, 0.07, 0.03), profile = "caldera" },
+            { id = "breach", shape = "sector", water = true, reach = r * 1.2, angle = 14 + 10 * h(2, 1), rotation = turn,
+              smooth = r * 0.04 },
+        }
+    elseif t.name == "rim_island" then
+        elements = { { id = "main", shape = "radial", area = area, rotation = turn, harmonics = lobed(h, 10, 0.18, 0.07),
+                       profile = { "rim", inner = (t.height or p.height) * 0.37 } } }
+    elseif t.name == "mesa_island" then
+        local r = math.sqrt(area / math.pi)
+        local a = math.rad(turn + 150.0)
+        elements = {
+            { id = "main", shape = "superellipse", area = area * 0.92, aspect = 1.3 + 0.5 * h(2, 2), exponent = 3,
+              rotation = turn, profile = { "plateau", edge = r * 0.08 } },
+            { id = "butte", shape = "superellipse", area = area * 0.08, aspect = 1.4, exponent = 2.5, smooth = r * 0.1,
+              at = { math.cos(a) * r * 1.05, math.sin(a) * r * 1.05 }, rotation = turn + 40,
+              profile = { "plateau", height = (t.height or p.height) * 0.65, edge = r * 0.06 } },
+        }
+    else -- atoll: a ring of reef round a lagoon, cut by three passes, with one larger islet
+        local r = size * 0.33
+        local width = math.max(area / (2.0 * math.pi * r), 40.0)
+        elements = {
+            { id = "reef", shape = "ring", radius = r, width = width },
+            { id = "lagoon", shape = "circle", water = true, role = "lagoon", radius = r - width * 0.5 },
+        }
+        for i = 1, 3 do
+            local a = math.rad(turn + 120.0 * i + 50.0 * (h(40 + i, 1) - 0.5))
+            elements[#elements + 1] = { id = "pass" .. i, shape = "circle", water = true, radius = width * (0.8 + 0.5 * h(40 + i, 2)),
+                                        at = { math.cos(a) * r, math.sin(a) * r }, smooth = width * 0.2 }
+        end
+        local a = math.rad(turn + 60.0)
+        elements[#elements + 1] = { id = "motu", shape = "ellipse", radii = { width * 1.8, width * 0.8 },
+                                    at = { math.cos(a) * r, math.sin(a) * r }, rotation = math.deg(a) + 90, smooth = width * 0.4 }
+    end
+    return {
+        seed = seed, frame = { size = size }, height = t.height or p.height, coast = p.coast,
+        profile = t.name == "atoll" and "flat" or nil,
+        lagoon_depth = t.name == "atoll" and 25 or nil, elements = elements,
+    }
+end
+
+-- An island from a preset (see `Lands.Preset`), built: the preset's keys, plus any `Lands.Compose` key,
+-- which overrides the preset's (`edit` and `remove` change its elements by id).
+function Lands.Island(t)
+    if type(t) ~= "table" then
+        fail("Lands.Island expects a table of named arguments, as in Lands.Island{ preset = 'high_island' }")
+    end
+    for key in pairs(t) do
+        if RETIRED[key] then
+            fail("Lands.Island no longer takes '" .. key .. "': " .. RETIRED[key])
+        end
+    end
+    if t.preset == nil then
+        local names = {}
+        for k in pairs(ISLAND_PRESETS) do names[#names + 1] = k end
+        table.sort(names)
+        fail("Lands.Island needs a 'preset': " .. table.concat(names, ", ") .. ". Nothing is assumed about the island")
+    end
+    local compose = Lands.Preset{ name = t.preset, seed = t.seed, size = t.size, land_fraction = t.land_fraction,
+                                  height = t.height }
+    for key, value in pairs(t) do
+        if not (PRESET_KEYS[key] or key == "preset") then
+            compose[key] = value
+        end
+    end
+    return Lands.Compose(compose)
+end
+
+-- An archipelago: the grid-built macro with a `layout` of scattered, hotspot, arc or atoll (to be rebuilt
+-- from shapes in phase 2 of the lands plan).
 function Lands.Archipelago(t)
     t = t or {}
     if type(t) ~= "table" then
@@ -1107,7 +1474,7 @@ function Lands.Archipelago(t)
         copy.beach_width  = copy.beach_width or 60.0
         copy.cliff_height = copy.cliff_height or 6.0
     end
-    return Lands.Island(copy)
+    return legacy_island(copy)
 end
 
 -- A continent, as a region and not as a planet: several large lobes with ranges along them, drained by
@@ -1121,7 +1488,7 @@ function Lands.Continent(t)
     for key, value in pairs(t) do copy[key] = value end
     copy.layout = "continent"
     copy.height = copy.height or 1800.0
-    return Lands.Island(copy)
+    return legacy_island(copy)
 end
 
 _G.Lands = Lands

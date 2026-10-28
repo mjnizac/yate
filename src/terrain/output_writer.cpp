@@ -103,6 +103,12 @@ public:
 
     void Key(const char* key, u32_t value) { Key(key, static_cast<u64_t>(value)); }
 
+    /// `json` written as it is: a value the caller has already formatted.
+    void Raw(const char* key, std::string_view json) {
+        Separator();
+        std::fprintf(m_file, "\"%s\": %.*s", key, static_cast<int>(json.size()), json.data());
+    }
+
     void Key(const char* key, f64_t value) {
         Separator();
         std::fprintf(m_file, "\"%s\": %.9g", key, value);
@@ -1390,6 +1396,10 @@ Status WriteMetadata(std::string_view path, const ExportMetadata& metadata) {
         json.End();
     }
     json.EndArray();
+
+    if (!metadata.scriptReport.empty()) {
+        json.Raw("script_report", metadata.scriptReport);
+    }
 
     json.BeginObject("timings_ms");
     json.Key("total", metadata.timings.totalMs);

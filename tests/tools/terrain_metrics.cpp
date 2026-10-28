@@ -2,7 +2,7 @@
 //
 //   terrain_metrics <export dir or height.raw> [--width N --depth N --resolution M] [--level L]
 //                   [--no-sea] [--box kmin,kmax] [--block M] [--channel M2] [--json]
-//                   [--hillshade out.png [--sun azimuth,elevation]] [--pits out.png]
+//                   [--hillshade out.png [--sun azimuth,elevation]] [--pits out.png] [--by-id]
 //   terrain_metrics <reference.png> [--resolution M] [--vertical M] ...
 //
 // Given a directory it reads `metadata.json` for the size and the spacing. Given a PNG (8 or 16 bits,
@@ -14,13 +14,17 @@
 // ones are tests/unit/relief_metrics.hpp. `--no-sea` treats every sample as land. `--hillshade` writes
 // the field as a grey image lit from `--sun` (default 315,35: the top left, 35 degrees up), with cast
 // shadows, so the geometry can be judged without the viewer's lighting; lakes and rivers in the export
-// (outputs `lakes` and `rivers`) are tinted over it.
+// (outputs `lakes` and `rivers`) are tinted over it. `--by-id` reads the export's `region_id` output too and
+// prints, as JSON, each id's land: its area, centroid, bounding box, highest sample and whether it touches
+// the edge; what `Lands.Compose` reports it asked for (`script_report` in metadata.json) can be checked
+// against it.
 
 #include "relief_metrics.hpp"
 
 #include <spng.h>
 
 #include <cstdlib>
+#include <map>
 #include <iostream>
 #include <string>
 
@@ -85,6 +89,7 @@ int main(int argc, char** argv) {
     double      width = 0, depth = 0, resolution = 0, level = 0;
     int         boxMin = 2, boxMax = 7;
     bool        json = false;
+    bool        byId = false;
     metrics::ReliefOptions options;
     std::string hillshade;
     std::string pitsPath;
@@ -109,6 +114,8 @@ int main(int argc, char** argv) {
                 boxMin = std::atoi(range.substr(0, comma).c_str());
                 boxMax = std::atoi(range.substr(comma + 1).c_str());
             }
+        } else if (arg == "--by-id") {
+            byId = true;
         } else if (arg == "--json") {
             json = true;
         } else if (arg == "--no-sea") {
@@ -173,6 +180,49 @@ int main(int argc, char** argv) {
                       << "\n";
             return 2;
         }
+    }
+    if (byId) {
+        // Each id's land, from the `region_id` output next to the heights.
+        const std::string directory = path.substr(0, path.find_last_of("/\\"));
+        metrics::Field    ids;
+        if (!metrics::LoadRaw(directory + "/region_id.raw", field.width, field.depth, field.resolution, ids)) {
+            std::cerr << "terrain_metrics: --by-id needs the region_id output exported raw next to height.raw\n";
+            return 2;
+        }
+        struct Land {
+            std::size_t cells = 0;
+            double      x = 0.0, z = 0.0, top = -1e30;
+            std::size_t x0 = ~std::size_t{0}, z0 = ~std::size_t{0}, x1 = 0, z1 = 0;
+            bool        edge = false;
+        };
+        std::map<long, Land> lands;
+        for (std::size_t z = 0; z < field.depth; ++z) {
+            for (std::size_t x = 0; x < field.width; ++x) {
+                const std::size_t i = z * field.width + x;
+                if (!(field.values[i] > level)) {
+                    continue;
+                }
+                Land& l = lands[std::lround(ids.values[i])];
+                ++l.cells;
+                l.x += static_cast<double>(x), l.z += static_cast<double>(z);
+                l.top = std::max(l.top, static_cast<double>(field.values[i]));
+                l.x0 = std::min(l.x0, x), l.z0 = std::min(l.z0, z), l.x1 = std::max(l.x1, x), l.z1 = std::max(l.z1, z);
+                l.edge = l.edge || x == 0 || z == 0 || x + 1 == field.width || z + 1 == field.depth;
+            }
+        }
+        // Positions in samples from the export's corner, and areas in square metres.
+        std::printf("{\"resolution\": %g, \"ids\": [", resolution);
+        bool first = true;
+        for (const auto& [id, l] : lands) {
+            const double n = static_cast<double>(l.cells);
+            std::printf("%s\n  {\"id\": %ld, \"area_m2\": %.6g, \"centroid_samples\": [%.2f, %.2f], "
+                        "\"box_samples\": [%zu, %zu, %zu, %zu], \"highest_m\": %.2f, \"touches_edge\": %s}",
+                        first ? "" : ",", id, n * resolution * resolution, l.x / n, l.z / n, l.x0, l.z0, l.x1, l.z1,
+                        l.top, l.edge ? "true" : "false");
+            first = false;
+        }
+        std::printf("\n]}\n");
+        return 0;
     }
     const metrics::Report r = metrics::Measure(field, level, boxMin, boxMax);
     if (!pitsPath.empty()) {

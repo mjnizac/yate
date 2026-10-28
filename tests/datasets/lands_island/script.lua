@@ -1,16 +1,17 @@
--- Island: one elongated mass with a spine, drained by rivers whose valleys become inlets where they meet the sea.
+-- Island from a preset: a main mass, two lobes and a bay by default, every element with an id.
 --
---   terrain_viewer --script assets/scripts/lands/island.lua --water
+--   terrain_viewer --script assets/scripts/lands/island.lua --water --resolution 8
+--   terrain_export --script assets/scripts/lands/island.lua --min -12000,-12000 --max 12000,12000 --resolution 8 --out out/island
 --
--- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
--- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
--- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
+-- The map is `size` metres across (24 km by default), centred on the origin. Parameters: seed, preset
+-- (high_island by default: high_island, low_island, volcano, caldera, rim_island, mesa_island, atoll), size,
+-- land_fraction, height, margin ("compressed" or "geologic").
 
 local function main(params)
     local land = Lands.Island{
-        seed = params.seed or 1, resolution = params.resolution,
-        size = params.size, land_fraction = params.land_fraction, height = params.height,
-        roughness = params.roughness, dissection = params.dissection, margin = params.margin, coast = params.coast or "mixed",
+        preset = params.preset or "high_island", seed = params.seed or 1, resolution = params.resolution,
+        size = params.size, land_fraction = params.land_fraction, height = params.height, margin = params.margin,
+        coast = "mixed",
     }
     return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end

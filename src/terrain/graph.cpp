@@ -81,6 +81,14 @@ void Graph::Clear() noexcept {
     m_outputCount = 0;
     m_gridData.clear();
     m_look = Look{};
+    m_report.clear();
+}
+
+void Graph::SetReport(std::string_view json) {
+    if (m_report.get_allocator().resource() != &memory::General().Resource()) {
+        m_report = std::pmr::string(&memory::General().Resource());
+    }
+    m_report.assign(json.begin(), json.end());
 }
 
 const Graph::Node& Graph::NodeAt(u32_t index) const {

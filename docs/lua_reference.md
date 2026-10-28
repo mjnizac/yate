@@ -919,6 +919,40 @@ shoulder. For distances it rounds the join of two shapes.
 | Rounding the corner where two shapes touch | 5-10% of their size |
 | A crater lip against a ceiling | 20-40 m |
 
+### `Shapes.Set`: many shapes in one node
+
+`Shapes.Set{ elements = { ... }, reach = 2000 }` combines a list of shapes **in list order in one node**
+(the `Lands` op), however long the list: a land element joins what came before it with a smooth minimum
+`smooth` metres wide, a water element (`water = true`) cuts it. `.value` is the signed distance (land
+negative) held to `[-reach, reach]`, `.id` the `id` of the land element a sample belongs to (0 where there
+is none; land under a later water element no longer owns the sample, so an islet in a bay has its own id).
+The elements are found through bins, so a sample costs the elements near it, not the whole list. Built from
+`Shapes.*` nodes instead, a hundred islands would fill the graph's 1024 nodes.
+
+| Element key | Meaning |
+| --- | --- |
+| `shape` | `circle` (`radius`), `ellipse` (`radii`), `box` (`size`, `rounding`), `superellipse` (`radii`, `exponent`, 4 by default: squarer above 2, a diamond at 1), `radial` (`radius`, `harmonics = { { k, amplitude, phase }, ... }`, at most 3, amplitudes adding to under 1), `capsule` (`from`, `to` or `length`, `width`), `ring` (`radius`, `width`), `arc` (`radius`, `aperture` in degrees, `width`), `sector` (`reach`, `angle` in degrees), `polygon` (`points`), `band` (`points` of `{ x, z, width }`, or `width`), `fill` (everywhere) |
+| `at`, `rotation`, `scale` | placement, as `Terrain.Transform`: degrees, +x towards +z |
+| `water`, `seabed` | a cut instead of land; a form of the sea floor that the coast ignores |
+| `smooth` | the join's width in metres; 0 is a hard union |
+| `id` | a number for `.id`; the place in the list by default |
+| `profile` | `{ kind = "dome" \| "cone" (height, width) \| "plateau" (height, edge) \| "rim" (height, at, sigma, inner, width, start) \| "tilt" (height, edge, gradient, direction, floor) }`, for `relief` |
+| `trench` | `{ depth, offset, width }`: a gaussian trench `offset` metres off a land element's coast, for `seabed` |
+
+With `relief = true` the second value returned is the height of the profiles: each land element raises
+its own profile over its own distance inland held to the set's (a bay or a lake cut later brings it down to
+the shore), and overlapping profiles join by a smooth maximum `blend` metres wide. With `seabed = true` the
+third is what to add to a sea floor: seabed elements up, trenches down. The radial outline is the
+harmonic island of mapgen2 (Red Blob Games) without noise, and its area is closed-form: `pi R^2 (1 + sum
+a_k^2 / 2)`.
+
+```lua
+local coast, height = Shapes.Set{ reach = 3000, relief = true, elements = {
+    { shape = "radial", radius = 4000, harmonics = { { 3, 0.2, 0.5 } }, profile = { kind = "dome", height = 600, width = 3000 } },
+    { shape = "ellipse", radii = { 900, 500 }, at = { 0, -3600 }, water = true, smooth = 200 },
+} }
+```
+
 ### `Landforms.*`: heights from shapes
 
 Each returns a height in metres over `R2 -> R1`. `height` and `depth` may be a number or a field, so a
@@ -1198,62 +1232,87 @@ stacked surfaces. A scarp can be vertical, never undercut.
 
 ### Islands, archipelagos and continents: `Lands.*` (the lands macro)
 
-`Lands.Island`, `Lands.Archipelago` and `Lands.Continent` generate land and sea elaborately, not from
-drawn shapes. A coarse grid is built on the CPU the way the references are formed:
+Land and sea are **composed from simple shapes first, detail after**: `Lands.Compose` takes a list of
+`Shapes.Set` elements (land, water and sea-floor forms, each with an id), raises each land element by its
+own profile, and builds the coast, the shore and the sea floor from the one signed distance. **Nothing is
+assumed about the land**: where it is, how much of the map it covers (all of it, none of it), and how it
+rises (a dome, cliffs higher than the interior, a caldera below the sea) are all said by the script.
 
-1. **Bodies**: elongated, rotated masses (an island, the islands of a chain, the lobes of a continent),
-   each with a bent spine of higher ground, seen through a domain warp and lumps at two scales.
-2. **Rivers**: `Erosion.StreamPower` cuts that into a dendritic drainage with the valleys running to
-   the map edge, which is the base level.
-3. **Sea level by quantile**: `land_fraction` of the map (0.7 by default) is above it, so low valleys
-   become inlets and rias and ridges become peninsulas.
-4. **The signed distance to the coast** is taken on the grid; everything on the GPU is a function of it,
-   plus the coast's own three-band warp and gullies at the scale the grid cannot show.
+```lua
+local land = Lands.Compose{
+    seed = 1, frame = { size = 24000 }, height = 900, profile = "dome",
+    elements = {
+        { id = "main", shape = "radial", area = 150e6, harmonics = { { 2, 0.15, 0.3 }, { 5, 0.06, 1.2 } } },
+        { id = "peninsula", shape = "capsule", from = { 4500, 1200 }, to = { 9500, 2600 }, width = 2200,
+          smooth = 900, profile = { "dome", height = 260 } },
+        { id = "bay", shape = "ellipse", water = true, radii = { 2200, 1300 }, at = { -800, -6200 }, smooth = 300 },
+    },
+    edit = { peninsula = { scale = 1.2 } },   -- refine by id without rewriting the element
+}
+return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
+```
 
-`size` is the side of the map in metres (24 km by default): export or view it over that window centred on
-the origin and `land_fraction` of it is land. There is **one sign convention: land d < 0, coast d = 0,
-sea d > 0**. Products, each asked for by name in `land:outputs{ ... }` (`height` and `normals` are always
-there; a script holds at most eight outputs):
+| Key | Meaning |
+| --- | --- |
+| `frame` | `{ size = m }`, a map centred on the origin, or `{ world_cell = m, region = { x0, z0, x1, z1 } }` for the unbounded world: the coast's and the shore's scales follow the world cell, never the window, so exports of any window agree, and `region` is only where the report measures |
+| `elements` | `Shapes.Set` elements, plus `area` (square metres, sizes the shape from its closed-form area), `aspect` (x over z), `role` (`"lagoon"` makes a water element shallow; any other text is a label), `margin` (`"active"` adds a trench at the foot of the slope, or `{ depth, offset, width }`) and `profile` as a preset |
+| `profile` | the default profile of land elements: `dome`, `cone`, `plateau`, `rim` (a crest near the coast over a lower interior), `caldera` (the crest round a floor below the sea), `tilt` (a plane rising towards `direction`) or `flat`, or `{ "rim", inner = 140, ... }` to set its numbers. Widths default to fractions of the element's inscribed radius and heights to `height`. A land element with no profile is an error |
+| `height` | the profiles' height in metres; a seabed element's is half the abyssal depth |
+| `hypsometry` | `low`, `balanced` (default) or `high`: a fixed monotone curve of the height, so drainage order is kept |
+| `edit`, `remove` | `{ [id] = { key = value } }` replaces keys of an element; `scale` multiplies (an element sized by `area` grows by its square) and `offset = { dx, dz }` moves it. `remove = { id, ... }` drops elements |
+| `margin`, `coast`, `shelf_*`, `slope_width`, `abyssal_depth`, `beach_*`, `cliff_*`, `lagoon_depth`, `wave_from`, `hardness`, `sediment`, `shore_band` | the sea floor and the shore, as before |
+
+The products are those of the table below; `region_id` is the id of the element a sample belongs to (its
+place in the list). An export's `metadata.json` holds `script_report.lands`: every element as resolved (id,
+shape, kind, centre, closed-form `area`) and what it measured on the frame (`area_measured`, `centroid`,
+`highest`), with the land fraction. `tools/dev.sh lands <script> --bounds ...` prints it next to
+`terrain_metrics --by-id`, and `tools/dev.sh lands-check ... --expect count=6,area=2e6..4e6,land=0.2..0.4`
+checks a request against what was built.
+
+**`Lands.Island{ preset = ..., seed, size, land_fraction, height }`** builds an island from a preset,
+which `Lands.Preset{ name = ... }` returns as the `Lands.Compose` table to change before building. Any
+`Lands.Compose` key passes through, so `edit` reaches the preset's elements by id.
+
+| Preset | Elements (ids) | Default land, height |
+| --- | --- | --- |
+| `high_island` | `main` (lobed dome), `lobe1`, `lobe2` (lower domes joined to it), `bay` | 30 %, 900 m |
+| `low_island` | `main` (flat, a few metres) | 25 %, 12 m |
+| `volcano` | `main` (cone, active margin), `parasite` (flank cone) | 20 %, 1400 m |
+| `caldera` | `main` (caldera, floor below the sea), `breach` (a sector of sea) | 20 %, 650 m |
+| `rim_island` | `main` (rim: cliffs higher than the interior) | 28 %, 380 m |
+| `mesa_island` | `main`, `butte` (plateaus) | 25 %, 320 m |
+| `atoll` | `reef` (ring), `lagoon`, `pass1`..`pass3`, `motu` | 8 %, 5 m |
+
+`Lands.Archipelago` and `Lands.Continent` are still the grid-built macro (bodies with spines, drainage by
+`Erosion.StreamPower`, sea level by quantile; layouts `scattered`, `hotspot`, `arc`, `atoll`, and
+`continent`) until they are rebuilt from shapes; `Lands.Island` no longer takes its keys (`layout`,
+`roughness`, `dissection`, `cells`, `count`, `aspect`, `area`, `areas`) and says what to use instead.
+
+There is **one sign convention: land d < 0, coast d = 0, sea d > 0**. Products, each asked for by name in
+`land:outputs{ ... }` (`height` and `normals` are always there; a script holds at most eight outputs):
 
 | Product | Meaning |
 | --- | --- |
 | `coast_sdf` | signed distance to the coast, metres, land negative |
 | `land_mask` | `1 - Smoothstep(-w, w, d)`: 1 on land, 0 at sea |
-| `land_height` | the eroded ground, shaped as a beach or a cliff at the shore |
-| `bathymetry` | the sea floor, negative: beach face, shelf, break, slope, abyssal |
+| `land_height` | the ground: the profiles (or the eroded grid of the legacy macros), shaped as a beach or a cliff at the shore |
+| `bathymetry` | the sea floor, negative: beach face, shelf, break, slope, abyssal, plus seamounts, guyots and trenches |
 | `surface_height` | the two joined at the coast; it is the script's `height` |
 | `shore_mask` | 1 on the coast, falling to 0 `shore_band` metres either side |
 | `coast_type` | 0 a beach, 1 a cliff (hardness, sediment, exposure and curvature) |
-| `region_id` | which landmass a cell is nearest to; 1 is the largest |
+| `region_id` | the element (or, for the legacy macros, the landmass) a sample belongs to |
 
-```lua
-local land = Lands.Island{ seed = 4, size = 24000, height = 700, coast = "rocky" }
-return land:outputs{ "coast_type", "region_id" }
-```
+The examples in `assets/scripts/lands/` each say in their header how to view and export them, at a
+resolution suited to their size: `island_dome`, `island_rim`, `island_caldera`, `island_plateau`,
+`island_tilt`, `island_low`, `island_volcano`, `atoll`, `all_land` (no ocean, with lakes), `ocean_only`
+(seamounts and a guyot) and `infinite_islands` (anchored 100 km from the origin), plus `island.lua` and its
+variants for the presets. The viewer colours these terrains with `look = { palette = "coast" }`.
 
-Main keys: `size`, `land_fraction`, `height` (the highest point, metres), `roughness` (0 to 1, the coast's
-own warp), `dissection` (0 to 3, the strength of the drainage), `coast` (`mixed`, `rocky`, `sedimentary`,
-`cliff`) with `wave_from`, `hardness`, `sediment`, `margin` (`compressed` for the viewer, or `geologic`
-with a shelf under 1 degree out to 40 km), `aspect` and `count`. `Lands.Archipelago` takes `layout`:
-`"scattered"` (islands of different sizes and orientations, kept apart by straits), `"hotspot"` (elongated
-islands end to end on a bent line, large at one end), `"arc"` (the same on an arc) and `"atoll"` (a ring of
-low islets round a lagoon of a few tens of metres, `lagoon_depth`). `Lands.Continent` is several large
-lobes with ranges along them.
+![Lands.Compose: a dome with a bay and a peninsula, cliffs over a lower interior, an atoll, all land with lakes](images/lands/compose.png)
 
-`land_fraction` is the target and the default is 0.7 for an island or a continent, whose outline is the
-lowest 30 % of a field of bodies plus large-scale noise: gulfs, peninsulas and rias, not an oval. A layout that
-keeps its islands apart cannot fill the map: scattered islands default to 0.4, a chain or an arc to 0.12 (they
-reach 6 %) and an atoll about 12 %. Asking for more merges them into one mass. `area` / `areas` take drawn polygons for when
-a shape must be exactly that; they go through the same rivers and sea level.
+![The legacy macros: an island and a continent](images/lands/island_continent.png)
 
-`terrain_metrics` measures an export (land fraction, masses, lagoons, coast length, box-counting dimension,
-narrowest gap, hypsometry, slope by depth); see `docs/commands.md`. An island at the defaults measures a
-box dimension of about 1.15 to 1.25 over 2^2..2^7 cells, in the range of the dissected coasts in the
-references. The viewer colours these terrains with `look = { palette = "coast" }`.
-
-![An island and a continent](images/lands/island_continent.png)
-
-![Archipelagos: scattered, hotspot, arc, atoll](images/lands/archipelagos.png)
+![The legacy macros: scattered, hotspot, arc, atoll](images/lands/archipelagos.png)
 
 ---
 

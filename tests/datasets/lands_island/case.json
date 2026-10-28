@@ -1,5 +1,5 @@
 {
-  "description": "Lands macro (island): bodies with spines, rivers by stream power, sea level by quantile, the signed coast distance and the margin, end to end. Golden for the height and the landmass ids.",
+  "description": "Lands.Island, preset high_island: a composition of shapes (a lobed main mass, two lobes, a bay) with profiles per element, the signed coast distance and the margin, end to end. Golden for the height and the element ids.",
   "seed": 1,
   "resolution": 96.0,
   "section": 128,

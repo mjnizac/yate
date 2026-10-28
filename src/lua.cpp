@@ -1670,12 +1670,14 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         const std::string    mode     = args.Text("mode", "coast");
         const Value          position = PositionOrCoords(args, graph, location);
         args.Finish();
-        if (mode != "coast" && mode != "relief") {
-            Fail(location, "Geometry.Lands expects mode 'coast' or 'relief', got '{}'", mode);
+        if (mode != "coast" && mode != "relief" && mode != "seabed") {
+            Fail(location, "Geometry.Lands expects mode 'coast', 'relief' or 'seabed', got '{}'", mode);
         }
-        const u32_t at = block < 0.0 ? Graph::kNoBlock : static_cast<u32_t>(block);
-        return Handle{Unwrap(graph.AddLands(position, at, mode == "relief" ? Graph::LandsMode::Relief : Graph::LandsMode::Coast,
-                                            location))};
+        const u32_t at     = block < 0.0 ? Graph::kNoBlock : static_cast<u32_t>(block);
+        const auto  chosen = mode == "relief" ? Graph::LandsMode::Relief
+                           : mode == "seabed" ? Graph::LandsMode::Seabed
+                                              : Graph::LandsMode::Coast;
+        return Handle{Unwrap(graph.AddLands(position, at, chosen, location))};
     });
 
     // --- Vec ------------------------------------------------------------------------------------
@@ -2195,12 +2197,14 @@ constexpr const auto& kPreludeFiles = engine_prelude_files;
 
 /// Runs the prelude in `state`. Each file is called with one argument, a table holding what only the
 /// engine may reach: `fail(message)`, which raises a script error at the line of the script that called
-/// into the prelude. It is passed rather than made global so a script cannot call it.
-[[nodiscard]] Status LoadPrelude(sol::state& state) {
+/// into the prelude, and `set_report(json)`, which hands the export the JSON object the prelude reports
+/// (see `engine.report` in 05_common.lua). It is passed rather than made global so a script cannot call it.
+[[nodiscard]] Status LoadPrelude(sol::state& state, Graph& graph) {
     sol::table engineApi = state.create_table();
     engineApi.set_function("fail", [](sol::this_state lua, const std::string& message) {
         Fail(CallerLocation(lua), "{}", message);
     });
+    engineApi.set_function("set_report", [&graph](const std::string& json) { graph.SetReport(json); });
 
     for (const char* name : kPreludeFiles) {
         Result<std::string> text = ReadPrelude(name);
@@ -2339,7 +2343,7 @@ Status RunScript(Graph& graph, std::string_view path, const ScriptEnvironment& e
     Bind(state, graph, environment.resolution);
 
     // Before the script, after the bindings it composes and the sandbox it runs inside.
-    if (Status prelude = LoadPrelude(state); !prelude) {
+    if (Status prelude = LoadPrelude(state, graph); !prelude) {
         return std::unexpected(prelude.error());
     }
 

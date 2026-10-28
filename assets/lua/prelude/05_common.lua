@@ -25,6 +25,47 @@ function engine.hasher(seed)
     end
 end
 
+-- A value as JSON: tables with only 1..n keys are arrays, others objects with their keys sorted (so the
+-- same report is the same text); a number that is not finite is null.
+local function json(value)
+    local kind = type(value)
+    if kind == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then return "null" end
+        if math.type(value) == "integer" then return tostring(value) end
+        return string.format("%.9g", value)
+    elseif kind == "string" then
+        return '"' .. value:gsub('[%c"\\]', function(c)
+            return ({ ['"'] = '\\"', ['\\'] = '\\\\', ['\n'] = '\\n', ['\t'] = '\\t' })[c]
+                   or string.format("\\u%04x", c:byte())
+        end) .. '"'
+    elseif kind == "boolean" then
+        return tostring(value)
+    elseif kind == "table" then
+        local n = #value
+        local keys = {}
+        for k in pairs(value) do keys[#keys + 1] = k end
+        if #keys == n then
+            local items = {}
+            for i = 1, n do items[i] = json(value[i]) end
+            return "[" .. table.concat(items, ",") .. "]"
+        end
+        table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+        local items = {}
+        for _, k in ipairs(keys) do items[#items + 1] = json(tostring(k)) .. ":" .. json(value[k]) end
+        return "{" .. table.concat(items, ",") .. "}"
+    end
+    return "null"
+end
+engine.json = json
+
+-- What the prelude says about what it built, written to an export's metadata as `script_report`:
+-- `engine.report(key, value)` sets one entry of that object.
+local reported = {}
+function engine.report(key, value)
+    reported[key] = value
+    engine.set_report(json(reported))
+end
+
 -- Smoothstep on [0, 1], clamped.
 function engine.smooth(x)
     if x <= 0.0 then return 0.0 end

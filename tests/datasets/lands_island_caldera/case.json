@@ -1,0 +1,22 @@
+{
+  "description": "Lands.Compose example island_caldera (assets/scripts/lands/island_caldera.lua): shapes with profiles per element, the coast distance and the margin, over its own 12 km map. Golden for the height and the element ids.",
+  "seed": 1,
+  "resolution": 46.875,
+  "section": 128,
+  "bounds": {
+    "min_x": -6000.0,
+    "min_z": -6000.0,
+    "max_x": 6000.0,
+    "max_z": 6000.0
+  },
+  "outputs": [
+    "height.png",
+    "region_id.png"
+  ],
+  "tolerance": 0,
+  "performance": {
+    "passes": 2,
+    "warn_slower": 0.5,
+    "fail_slower": 1.0
+  }
+}

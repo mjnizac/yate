@@ -947,6 +947,7 @@ Result<ExportSummary> RunExport(Application& application, const ExportJob& job) 
     metadata.height             = grid->height;
     metadata.depth              = grid->depth;
     metadata.timings.scriptMs   = scriptMs;
+    metadata.scriptReport       = graph.Report();
     metadata.timings.compileMs  = compiled->stats.milliseconds;
     metadata.timings.pipelineMs = kernels.CreationMilliseconds();
     metadata.timings.gpuMs      = gpuMs;

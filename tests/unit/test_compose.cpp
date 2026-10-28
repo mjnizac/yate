@@ -35,9 +35,9 @@ constexpr const char* kDirectory = "out/test_compose";
 }
 
 /// Runs a script whose `main` returns `land:outputs{ ... }` for the `Lands.Compose` table in `compose`.
-[[nodiscard]] Status Run(Graph& graph, const char* name, std::string_view compose) {
-    const std::string source = "return function(params)\n    local land = Lands.Compose" + std::string(compose)
-                             + "\n    return land:outputs{ 'coast_sdf', 'region_id', 'land_mask', 'land_height' }\nend\n";
+[[nodiscard]] Status Run(Graph& graph, const char* name, std::string_view compose, std::string_view call = "Lands.Compose") {
+    const std::string source = "return function(params)\n    local land = " + std::string(call) + std::string(compose)
+                             + "\n    return land:outputs{ 'coast_sdf', 'region_id', 'land_mask', 'land_height', 'bathymetry' }\nend\n";
     const std::string      path = Write(name, source);
     lua::ScriptEnvironment environment;
     environment.maxX = environment.maxZ = 1000.0;
@@ -219,6 +219,102 @@ void TestProfiles() {
     }
 }
 
+void TestSeabed() {
+    test::Section("the sea floor has its own forms: seamounts, guyots and a trench off an active margin");
+    // The geologic margin: a shelf to 130 m over 40 km, a slope to 3500 m over 60 km. A seamount and a
+    // guyot on the abyssal plain, and an island whose margin is active.
+    Graph graph;
+    REQUIRE_OK_VOID(Run(graph, "seabed", R"({ frame = { size = 400000 }, margin = 'geologic', height = 800, elements = {
+        { id = 'island', shape = 'circle', radius = 20000, at = { -100000, 0 }, profile = 'dome', margin = 'active' },
+        { id = 'seamount', shape = 'circle', radius = 12000, at = { 100000, 60000 }, seabed = true,
+          profile = { 'cone', height = 2500 } },
+        { id = 'guyot', shape = 'circle', radius = 12000, at = { 100000, -60000 }, seabed = true,
+          profile = { 'plateau', height = 2000, edge = 3000 } } } })"));
+    const auto floor = [&](f32_t x, f32_t z) { return At(graph, "bathymetry", x, z); };
+    const f32_t plain = floor(150000.0f, 0.0f);
+    std::printf("     abyssal %.0f m, seamount top %.0f m, guyot top %.0f and %.0f m, trench %.0f m\n",
+                static_cast<double>(plain), static_cast<double>(floor(100000.0f, 60000.0f)),
+                static_cast<double>(floor(100000.0f, -60000.0f)), static_cast<double>(floor(104000.0f, -60000.0f)),
+                static_cast<double>(floor(-100000.0f, 114000.0f)));
+    CHECK(std::fabs(plain + 3500.0f) < 200.0f);
+    // The seamount's summit stands 2500 m over the plain; the guyot is flat on top.
+    CHECK(std::fabs(floor(100000.0f, 60000.0f) - (plain + 2500.0f)) < 250.0f);
+    CHECK(std::fabs(floor(100000.0f, -60000.0f) - floor(104000.0f, -60000.0f)) < 60.0f);
+    CHECK(floor(100000.0f, -60000.0f) > plain + 1800.0f);
+    // The trench lies at the foot of the slope, 94 km off the coast, deeper than the plain.
+    CHECK(floor(-100000.0f, 114000.0f) < plain - 1500.0f);
+    CHECK(floor(-100000.0f, 175000.0f) > floor(-100000.0f, 114000.0f) + 1000.0f);
+}
+
+void TestEditsAndReport() {
+    test::Section("an element is changed by its id, and the export is told what was built");
+    constexpr const char* kBase = R"({ frame = { size = 12000 }, profile = 'dome', elements = {
+        { id = 'big', shape = 'circle', area = 6e6, at = { -2500, 0 } },
+        { id = 'small', shape = 'ellipse', area = 2e6, aspect = 2, at = { 3000, 1000 } },
+        { id = 'gone', shape = 'circle', radius = 400, at = { 3000, -3500 } } })";
+    Graph before;
+    REQUIRE_OK_VOID(Run(before, "edit_before", std::string(kBase) + " }"));
+    // "Make the small one 20 % bigger, move the big one 1 km north, and take the third away."
+    Graph after;
+    REQUIRE_OK_VOID(Run(after, "edit_after", std::string(kBase)
+                                                 + ", edit = { small = { scale = 1.2 }, big = { offset = { 0, 1000 } } }, remove = { 'gone' } }"));
+    const auto areaOf = [](const Graph& graph, f32_t id) {
+        usize_t cells = 0;
+        const std::vector<f32_t> ids  = Grid(graph, "region_id", 600, 20.0f);
+        const std::vector<f32_t> dist = Grid(graph, "coast_sdf", 600, 20.0f);
+        for (usize_t k = 0; k < ids.size(); ++k) {
+            cells += dist[k] < 0.0f && ids[k] == id ? 1 : 0;
+        }
+        return static_cast<double>(cells) * 400.0;
+    };
+    const double grown = areaOf(after, 2.0f) / areaOf(before, 2.0f);
+    std::printf("     the small island grew by %.3f in area (1.44 asked)\n", grown);
+    CHECK(std::fabs(grown - 1.44) < 0.02);
+    CHECK(At(after, "land_mask", -2500.0f, 1000.0f + 1300.0f) > 0.99f);  // The big one, moved north.
+    CHECK(At(after, "land_mask", -2500.0f, -1300.0f + 200.0f) < 0.01f);
+    CHECK(At(after, "land_mask", 3000.0f, -3500.0f) < 0.01f);            // The third, gone.
+    CHECK(At(before, "land_mask", 3000.0f, -3500.0f) > 0.99f);
+
+    // The report names every element with what it is and what it measured.
+    const std::string_view report = after.Report();
+    std::printf("     report: %.160s...\n", std::string(report).c_str());
+    CHECK(report.find(R"("id":"big")") != std::string_view::npos);
+    CHECK(report.find(R"("id":"small")") != std::string_view::npos);
+    CHECK(report.find(R"("id":"gone")") == std::string_view::npos);
+    CHECK(report.find(R"("area_measured":)") != std::string_view::npos);
+    CHECK(report.find(R"("kind":"land")") != std::string_view::npos);
+}
+
+void TestPresets() {
+    test::Section("every island preset builds, at the land fraction asked for, and edits by id");
+    for (const char* preset : {"high_island", "low_island", "volcano", "caldera", "rim_island", "mesa_island", "atoll"}) {
+        Graph        graph;
+        const Status ran = Run(graph, preset, std::string("{ preset = '") + preset + "', seed = 4, size = 12000 }", "Lands.Island");
+        if (!ran) {
+            std::printf("FAIL %s: %s\n", preset, ran.error().Format().data());
+            CHECK(false);
+            continue;
+        }
+        const double fraction = LandArea(graph, 400, 30.0f) / (12000.0 * 12000.0);
+        std::printf("     %-12s land %.3f of the map\n", preset, fraction);
+        CHECK(fraction > 0.02 && fraction < 0.5);
+    }
+    // One element, the asked-for fraction of the map within the fringe; then the main mass grown by an edit.
+    Graph plain, grown;
+    REQUIRE_OK_VOID(Run(plain, "rim_fraction", "{ preset = 'rim_island', seed = 2, size = 12000, land_fraction = 0.2 }", "Lands.Island"));
+    REQUIRE_OK_VOID(Run(grown, "rim_grown", "{ preset = 'rim_island', seed = 2, size = 12000, land_fraction = 0.2, "
+                                            "edit = { main = { scale = 1.1 } } }", "Lands.Island"));
+    const double before = LandArea(plain, 400, 30.0f), after = LandArea(grown, 400, 30.0f);
+    CHECK(std::fabs(before / (12000.0 * 12000.0) - 0.2) < 0.005);
+    CHECK(std::fabs(after / before - 1.21) < 0.02);
+    Graph retired;
+    const Status refused = Run(retired, "retired", "{ preset = 'volcano', roughness = 0.5 }", "Lands.Island");
+    CHECK(!refused && std::string_view{refused.error().Format().data()}.find("no longer takes 'roughness'") != std::string_view::npos);
+    Graph unnamed;
+    const Status needs = Run(unnamed, "unnamed", "{ seed = 1 }", "Lands.Island");
+    CHECK(!needs && std::string_view{needs.error().Format().data()}.find("needs a 'preset'") != std::string_view::npos);
+}
+
 void TestErrors() {
     test::Section("a wrong composition is refused with what was expected");
     struct Case {
@@ -235,6 +331,8 @@ void TestErrors() {
         {"bad_preset", "{ frame = { size = 1000 }, profile = 'volcano', elements = { { shape = 'circle', radius = 50 } } }", "has profile 'volcano'"},
         {"bad_profile_key", "{ frame = { size = 1000 }, profile = { 'rim', crest = 3 }, elements = { { shape = 'circle', radius = 50 } } }", "does not take 'crest'"},
         {"water_profile", "{ frame = { size = 1000 }, profile = 'dome', elements = { { shape = 'fill' }, { shape = 'circle', radius = 50, water = true, profile = 'dome' } } }", "takes no profile"},
+        {"edit_unknown", "{ frame = { size = 1000 }, profile = 'cone', elements = { { id = 'a', shape = 'circle', radius = 5 } }, edit = { b = { scale = 2 } } }", "names 'b', which is no element's id; the ids are a"},
+        {"remove_unknown", "{ frame = { size = 1000 }, profile = 'cone', elements = { { shape = 'circle', radius = 5 } }, remove = { 'x' } }", "names 'x'"},
         {"area_polygon", "{ frame = { size = 1000 }, profile = 'cone', elements = { { shape = 'polygon', area = 5, points = { { 0, 0 }, { 1, 0 }, { 0, 1 } } } } }",
          "cannot be sized by 'area'"},
     };
@@ -261,6 +359,9 @@ int main() {
     TestIdsAndOrder();
     TestAllLandAndAllSea();
     TestProfiles();
+    TestSeabed();
+    TestEditsAndReport();
+    TestPresets();
     TestErrors();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();

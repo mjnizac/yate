@@ -126,6 +126,29 @@ axis/diagonal power over about 1.5 means a grid artefact, and a spectral slope a
 means too little fine relief (below it, too much noise). Compare a reference only on scale-free numbers
 unless its size and height are known, and check it is a heightmap and not shaded relief.
 
+## Islands, coasts and any land and sea: `Lands.Compose`
+
+Shapes first, detail after. Translate the request into elements, never into noise:
+
+| The request | The composition |
+| --- | --- |
+| "N islands of A to B km2" | N elements with `area` in that range (phase 2: `scatter`) |
+| "make island X bigger" | `edit = { X = { scale = 1.15 } }` (area x 1.32), or `{ area = ... }` |
+| "move it", "remove it" | `edit = { X = { offset = { dx, dz } } }`, `remove = { "X" }` |
+| "cliffs higher than the interior" | `profile = { "rim", inner = ... }`; a flat cay `"flat"`, a mesa `"plateau"`, a volcano `"cone"`, a caldera `"caldera"`, a cuesta `{ "tilt", direction = ... }` |
+| "a bay", "a strait", "a lake" | a water element: `sector`/`ellipse`, `capsule`/`band`, `circle` with `role = "lake"` |
+| "all land", "no land" | a `fill` element (cut lakes into it); no land elements |
+| "a lagoon" | a water element with `role = "lagoon"` |
+| "seamount", "guyot", "trench" | `seabed = true` with `cone`/`plateau`; `margin = "active"` on the island |
+| "anywhere in the world" | `frame = { world_cell = 16000, region = ... }` and absolute positions |
+
+Start from `Lands.Preset{ name = ... }` when one fits, change its table, build it. Then check before saying
+it is done: `tools/dev.sh lands-check <script> --bounds ... --expect count=N,area=A..B,land=F..G` exports
+it and compares what each id measured with what was asked; `tools/dev.sh lands` prints the resolved
+elements (`script_report.lands` in `metadata.json`) next to the measurements. Give each new example a
+header with its viewer and export commands at a resolution suited to its size, and a golden in
+`tests/datasets/lands_<name>/`.
+
 ## 5. When an example counts as validated
 
 * It runs from a clean build with the declared seed, bounds and resolution, and section sizes do not

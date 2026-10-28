@@ -337,7 +337,7 @@ local SET_KINDS = {
 local SET_KEYS = {
     "shape", "id", "water", "smooth", "at", "rotation", "scale", "radius", "radii", "size", "rounding",
     "exponent", "harmonics", "from", "to", "length", "width", "aperture", "angle", "reach", "points",
-    "profile",
+    "profile", "seabed", "trench",
 }
 
 local function number_of(where, e, key, default)
@@ -501,7 +501,10 @@ local function encode_element(i, e, points)
     end
 
     local radians = math.rad(rotation)
-    v[1], v[2], v[3] = kind, e.water and 1.0 or 0.0, number_of(where, e, "id", i)
+    if e.water and e.seabed then
+        fail(where .. " cannot be both water and seabed")
+    end
+    v[1], v[2], v[3] = kind, e.water and 1.0 or (e.seabed and 2.0 or 0.0), number_of(where, e, "id", i)
     v[4], v[5], v[6], v[7], v[8] = at[1], at[2], math.cos(radians), math.sin(radians), scale
     for k = 1, 12 do v[8 + k] = shape[k] or 0.0 end
     v[21] = number_of(where, e, "smooth", 0.0)
@@ -509,7 +512,22 @@ local function encode_element(i, e, points)
     if e.profile ~= nil then
         encode_profile(where, e.profile, v)
     end
-    return v, bound and { x = at[1], z = at[2], r = bound * scale + v[21] } or nil
+    -- A trench off a land element's coast (an active margin): its reach grows by where the trench lies.
+    local beyond = 0.0
+    if e.trench ~= nil then
+        local tr = e.trench
+        if e.water or e.seabed or type(tr) ~= "table" then
+            fail(where .. " takes 'trench' only as land, as { depth = m, offset = m, width = m }")
+        end
+        check(where .. " trench", tr, { "depth", "offset", "width" })
+        v[38], v[39] = number_of(where .. " trench", tr, "depth"), number_of(where .. " trench", tr, "offset")
+        v[40] = number_of(where .. " trench", tr, "width")
+        if v[38] <= 0 or v[40] <= 0 then
+            fail(where .. " needs a trench depth and width above zero")
+        end
+        beyond = v[39] + 3.0 * v[40]
+    end
+    return v, bound and { x = at[1], z = at[2], r = bound * scale + v[21] + beyond } or nil
 end
 
 -- The block of `elements` (see lands.comp.glsl): `reach` is the distance past which nothing is measured,
@@ -614,15 +632,15 @@ end
 
 -- The shapes of `elements` in one node: `.value` is the signed distance (land negative) held to
 -- [-reach, reach], `.id` the id of the land element nearest each sample (0 where there is none). With
--- `relief = true` the second value returned is the height of the elements' profiles over the land.
+-- `relief = true` the second value returned is the height of the elements' profiles over the land, and
+-- with `seabed = true` the third is what to add to the sea floor (seabed elements up, trenches down).
 function Shapes.Set(t)
-    check("Shapes.Set", t, { "elements", "reach", "bin", "blend", "position", "relief" })
+    check("Shapes.Set", t, { "elements", "reach", "bin", "blend", "position", "relief", "seabed" })
     local block = Shapes.SetBlock{ elements = t.elements, reach = t.reach, bin = t.bin, blend = t.blend }
     local coast = Geometry.Lands{ block = block, mode = "coast", position = t.position }
-    if t.relief then
-        return coast, Geometry.Lands{ block = block, mode = "relief", position = t.position }
-    end
-    return coast
+    local relief = t.relief and Geometry.Lands{ block = block, mode = "relief", position = t.position } or nil
+    local floor = t.seabed and Geometry.Lands{ block = block, mode = "seabed", position = t.position } or nil
+    return coast, relief, floor
 end
 
 _G.Shapes = Shapes
