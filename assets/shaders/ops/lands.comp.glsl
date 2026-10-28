@@ -241,6 +241,7 @@ void main() {
     float top  = reach + (ParamUint(1) == 3u ? At(data, block + 14u) : 0.0);
     float d    = top;
     float best = 1e30;
+    float hard = 1e30; // The land's hard union, which no water cuts: d falls under it where the smoothing grew the land.
     float id   = 0.0;
     for (uint i = 0u; i < count; ++i) {
         uint  e    = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
@@ -254,7 +255,8 @@ void main() {
             k = max(k, At(data, block + 14u));
         }
         if (op < 0.5) {
-            d = SmoothMin(d, dist, k);
+            d    = SmoothMin(d, dist, k);
+            hard = min(hard, dist);
             if (dist < best) {
                 best = dist;
                 id   = At(data, e + 2u);
@@ -283,6 +285,7 @@ void main() {
         // ones by a smooth minimum `blend` metres of height wide, faded in over `blend` metres from the shore.
         float blend = max(At(data, block + 13u), 1e-3);
         float shore = max(-d, 0.0);
+        float grown = max(hard - d, 0.0);
         bool  any   = false;
         float up    = 0.0;
         float down  = 0.0;
@@ -292,10 +295,10 @@ void main() {
             uint  e  = elements + uint(At(data, first + i)) * LANDS_ELEMENT;
             float op = At(data, e + 1u);
             if (op < 0.5) {
-                // Plus a quarter of its smoothing, as far as the fillet where it joins a neighbour reaches
-                // (smin(a, b, k) >= min(a, b) - k / 4): there its own distance is near 0 though the land goes on, and
-                // the profile would dip along the seam.
-                float s = min(0.25 * At(data, e + 20u) - ElementDistance(data, e, points, p, reach), shore);
+                // Plus what the smoothing grew the land by here (the hard union over the smooth one): in the
+                // fillet where it joins a neighbour its own distance is positive though the land goes on, and
+                // measured from it the profile would dip along the seam, under the shore's cliff.
+                float s = min(grown - ElementDistance(data, e, points, p, reach), shore);
                 if (s > 0.0) {
                     float h = Profile(data, e, s, p);
                     value   = any ? max(value, h) : h;

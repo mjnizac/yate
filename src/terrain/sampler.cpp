@@ -370,7 +370,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         count         = index(offsets + b + 1) - s;
     }
     const f32_t top = reach + (node.params[1] == 3 ? at(block + 14) : 0.0f);
-    f32_t       d = top, best = 1e30f, id = 0.0f;
+    f32_t       d = top, best = 1e30f, hard = 1e30f, id = 0.0f;
     for (u32_t i = 0; i < count; ++i) {
         const u32_t e    = elements + index(first + i) * kElement;
         const f32_t op   = at(e + 1);
@@ -383,7 +383,8 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             k = std::max(k, at(block + 14));
         }
         if (op < 0.5f) {
-            d = smoothMin(d, dist, k);
+            d    = smoothMin(d, dist, k);
+            hard = std::min(hard, dist);
             if (dist < best) {
                 best = dist;
                 id   = at(e + 2);
@@ -424,6 +425,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
     };
     const f32_t blend = std::max(at(block + 13), 1e-3f);
     const f32_t shore = std::max(-d, 0.0f);
+    const f32_t grown = std::max(hard - d, 0.0f);
     if (node.params[1] == 2) {
         f32_t raise = 0.0f, trench = 0.0f;
         b8_t  rose  = false;
@@ -450,7 +452,7 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         const u32_t e  = elements + index(first + i) * kElement;
         const f32_t op = at(e + 1);
         if (op < 0.5f) {
-            const f32_t s = std::min(0.25f * at(e + 20) - distance(e, px, pz), shore);
+            const f32_t s = std::min(grown - distance(e, px, pz), shore);
             if (s > 0.0f) {
                 const f32_t h = profile(e, s);
                 value         = any ? std::max(value, h) : h;
