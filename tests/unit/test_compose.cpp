@@ -1,6 +1,7 @@
 // Lands.Compose on the CPU through the sampler (no GPU): elements sized by their area are that area, ids
 // name the element a sample belongs to, land and water combine in order, and a map may be all land or
 // all sea. What a script author asks for, measured on what the engine builds.
+#include "terrain_metrics.hpp"
 #include "test_support.hpp"
 
 #include <engine/log.hpp>
@@ -604,6 +605,88 @@ void TestRidgeAndLands() {
     }
 }
 
+/// Scale-free shape numbers of a composition, measured on a 256 x 256 grid over its frame: the field is the
+/// land height where the mask says land, and -10 m at sea.
+struct Shape {
+    double land = 0.0, dominant = 0.0, dimension = 0.0, integral = 0.0;
+};
+
+[[nodiscard]] Shape MeasureShape(const Graph& graph, f32_t size) {
+    constexpr usize_t        kCells = 256;
+    const f32_t              cell   = size / static_cast<f32_t>(kCells);
+    const std::vector<f32_t> mask   = Grid(graph, "land_mask", kCells, cell);
+    const std::vector<f32_t> height = Grid(graph, "land_height", kCells, cell);
+    metrics::Field           field;
+    field.width = field.depth = kCells;
+    field.resolution          = cell;
+    field.values.resize(mask.size());
+    double lowest = 1e30, highest = -1e30, sum = 0.0;
+    usize_t land = 0;
+    for (usize_t k = 0; k < mask.size(); ++k) {
+        field.values[k] = mask[k] > 0.5f ? std::max(height[k], 0.01f) : -10.0f;
+        if (mask[k] > 0.5f) {
+            lowest = std::min(lowest, static_cast<double>(height[k]));
+            highest = std::max(highest, static_cast<double>(height[k]));
+            sum += height[k];
+            ++land;
+        }
+    }
+    const metrics::Report r = metrics::Measure(field);
+    Shape s;
+    s.land      = r.landAreaFraction;
+    s.dominant  = r.dominantShare;
+    s.dimension = r.boxDimension;
+    s.integral  = land > 0 && highest > lowest ? (sum / static_cast<double>(land) - lowest) / (highest - lowest) : 0.0;
+    return s;
+}
+
+void TestReferenceBands() {
+    // Bands from the heightmaps in docs/references/ (not versioned), measured with terrain_metrics at their own
+    // pixel size and sea level 2 (world_heightmap.png at 40, its sea is grey): islands from six, continents from
+    // 4123299654, Austria, efcraft and world_heightmap. The archipelago references are painted maps, not heights.
+    // The land share and the largest mass's share are checked; the coast's dimension and the hypsometric
+    // integral are printed against theirs, and fall short until shapes get their detail (phase 4 of the plan).
+    test::Section("land shares of the presets fall in the bands measured on the references of their type");
+    struct Band {
+        double land[2], dominant[2], dimension[2], integral[2];
+    };
+    const Band islands{{0.17, 0.45}, {0.85, 1.0}, {1.02, 1.39}, {0.26, 0.45}};
+    const Band continents{{0.20, 0.89}, {0.42, 1.0}, {1.12, 1.38}, {0.15, 0.62}};
+    // Fractious land is many pieces on purpose; its nearest references are the archipelagos, which have no heights.
+    const Band fragmented{{0.20, 0.89}, {0.0, 1.0}, {1.12, 1.38}, {0.15, 0.62}};
+    struct Case {
+        const char* call;
+        const char* preset;
+        f32_t       size;
+        const Band* band;
+    };
+    const Case cases[] = {
+        {"Lands.Island", "high_island", 12000.0f, &islands},  {"Lands.Island", "low_island", 12000.0f, &islands},
+        {"Lands.Island", "volcano", 12000.0f, &islands},      {"Lands.Island", "rim_island", 12000.0f, &islands},
+        {"Lands.Island", "mesa_island", 12000.0f, &islands},  {"Lands.Continent", "continent", 192000.0f, &continents},
+        {"Lands.Continent", "pangea", 192000.0f, &continents}, {"Lands.Continent", "old_world", 192000.0f, &continents},
+        {"Lands.Continent", "inland_sea", 96000.0f, &continents}, {"Lands.Continent", "peninsula", 48000.0f, &continents},
+        {"Lands.Continent", "isthmus", 48000.0f, &continents}, {"Lands.Continent", "fractious", 96000.0f, &fragmented},
+        {"Lands.Continent", "mediterranean", 96000.0f, &continents},
+    };
+    const auto in = [](double v, const double (&r)[2]) { return v >= r[0] && v <= r[1]; };
+    for (const Case& c : cases) {
+        Graph        graph;
+        const Status ran = Run(graph, c.preset, std::string("{ preset = '") + c.preset + "', seed = 4, size = " + std::to_string(static_cast<int>(c.size)) + " }", c.call);
+        if (!ran) {
+            std::printf("FAIL %s: %s\n", c.preset, ran.error().Format().data());
+            CHECK(false);
+            continue;
+        }
+        const Shape s = MeasureShape(graph, c.size);
+        std::printf("     %-14s land %.2f%s dominant %.2f%s | coast dimension %.3f%s hypsometric integral %.2f%s\n", c.preset,
+                    s.land, in(s.land, c.band->land) ? "" : " (out)", s.dominant, in(s.dominant, c.band->dominant) ? "" : " (out)",
+                    s.dimension, in(s.dimension, c.band->dimension) ? "" : " (out)", s.integral,
+                    in(s.integral, c.band->integral) ? "" : " (out)");
+        CHECK(in(s.land, c.band->land));
+        CHECK(in(s.dominant, c.band->dominant));
+    }
+}
 void TestErrors() {
     test::Section("a wrong composition is refused with what was expected");
     struct Case {
@@ -656,6 +739,7 @@ int main() {
     TestScatter();
     TestArchipelagoPresets();
     TestRidgeAndLands();
+    TestReferenceBands();
     TestErrors();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();
