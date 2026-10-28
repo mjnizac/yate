@@ -1,0 +1,22 @@
+{
+  "description": "Islands at given centres (assets/scripts/lands/archipelago_centers.lua) over a 24 km map. Golden for the height and the element ids.",
+  "seed": 1,
+  "resolution": 93.75,
+  "section": 128,
+  "bounds": {
+    "min_x": -12000.0,
+    "min_z": -12000.0,
+    "max_x": 12000.0,
+    "max_z": 12000.0
+  },
+  "outputs": [
+    "height.png",
+    "region_id.png"
+  ],
+  "tolerance": 0,
+  "performance": {
+    "passes": 2,
+    "warn_slower": 0.5,
+    "fail_slower": 1.0
+  }
+}

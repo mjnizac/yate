@@ -1670,12 +1670,13 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         const std::string    mode     = args.Text("mode", "coast");
         const Value          position = PositionOrCoords(args, graph, location);
         args.Finish();
-        if (mode != "coast" && mode != "relief" && mode != "seabed") {
-            Fail(location, "Geometry.Lands expects mode 'coast', 'relief' or 'seabed', got '{}'", mode);
+        if (mode != "coast" && mode != "relief" && mode != "seabed" && mode != "margin") {
+            Fail(location, "Geometry.Lands expects mode 'coast', 'relief', 'seabed' or 'margin', got '{}'", mode);
         }
         const u32_t at     = block < 0.0 ? Graph::kNoBlock : static_cast<u32_t>(block);
         const auto  chosen = mode == "relief" ? Graph::LandsMode::Relief
                            : mode == "seabed" ? Graph::LandsMode::Seabed
+                           : mode == "margin" ? Graph::LandsMode::Margin
                                               : Graph::LandsMode::Coast;
         return Handle{Unwrap(graph.AddLands(position, at, chosen, location))};
     });

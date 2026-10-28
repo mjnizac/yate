@@ -1,16 +1,15 @@
--- Archipelago, island arc: elongated islands along an arc, each with its own ridge.
+-- Archipelago, arc: an island arc: volcanic islands on a curve, a trench at the foot of the slope on its outer side.
 --
---   terrain_viewer --script assets/scripts/lands/archipelago_arc.lua --water
+--   terrain_viewer --script assets/scripts/lands/archipelago_arc.lua --water --resolution 32
+--   terrain_export --script assets/scripts/lands/archipelago_arc.lua --min -48000,-48000 --max 48000,48000 --resolution 32 --out out/archipelago_arc
 --
--- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
--- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
--- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
+-- A 96 km map centred on the origin. Parameters: seed, count, land_fraction, height. The islands are
+-- elements with ids ("isles/3", ...): `tools/dev.sh lands` lists them and `edit` changes one.
 
 local function main(params)
     local land = Lands.Archipelago{
-        seed = params.seed or 3, resolution = params.resolution,
-        size = params.size, land_fraction = params.land_fraction, height = params.height,
-        roughness = params.roughness, dissection = params.dissection, margin = params.margin, layout = "arc",
+        preset = "arc", seed = params.seed or 6, resolution = params.resolution, size = 96000,
+        count = params.count, land_fraction = params.land_fraction, height = params.height,
     }
     return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end

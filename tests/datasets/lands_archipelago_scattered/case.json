@@ -1,13 +1,13 @@
 {
-  "description": "Lands macro (archipelago_scattered): bodies with spines, rivers by stream power, sea level by quantile, the signed coast distance and the margin, end to end. Golden for the height and the landmass ids.",
+  "description": "Lands.Archipelago preset scattered (assets/scripts/lands/archipelago_scattered.lua): a scatter of shapes over a 48 km map. Golden for the height and the element ids.",
   "seed": 1,
-  "resolution": 96.0,
+  "resolution": 187.5,
   "section": 128,
   "bounds": {
-    "min_x": -12288.0,
-    "min_z": -12288.0,
-    "max_x": 12288.0,
-    "max_z": 12288.0
+    "min_x": -24000.0,
+    "min_z": -24000.0,
+    "max_x": 24000.0,
+    "max_z": 24000.0
   },
   "outputs": [
     "height.png",

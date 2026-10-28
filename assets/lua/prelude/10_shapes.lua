@@ -532,9 +532,10 @@ end
 
 -- The block of `elements` (see lands.comp.glsl): `reach` is the distance past which nothing is measured,
 -- `bin` the side of the bins (chosen from the elements when not given), `blend` the width in metres of the
--- smooth maximum two overlapping elements' profiles join with (the relief mode).
+-- smooth maximum two overlapping elements' profiles join with (the relief mode), `margin` the smallest
+-- smoothing in metres between land elements in the margin mode.
 function Shapes.SetBlock(t)
-    check("Shapes.SetBlock", t, { "elements", "reach", "bin", "blend" })
+    check("Shapes.SetBlock", t, { "elements", "reach", "bin", "blend", "margin" })
     local list = t.elements
     if type(list) ~= "table" then
         fail("Shapes.SetBlock needs 'elements' as a list of shapes")
@@ -551,7 +552,8 @@ function Shapes.SetBlock(t)
         local v, circle = encode_element(i, e, points)
         for k = 1, SET_ELEMENT do numbers[#numbers + 1] = v[k] end
         if circle then
-            circle.r = circle.r + reach
+            -- Land reaches further when the margin mode joins it more smoothly than its own `smooth`.
+            circle.r = circle.r + reach + ((v[2] == 0.0 and t.margin) and math.max(t.margin - v[21], 0.0) or 0.0)
             circles[i] = circle
         else
             global[#global + 1] = i - 1
@@ -618,6 +620,7 @@ function Shapes.SetBlock(t)
     header[8], header[9], header[10], header[11] = elements_at, offsets_at, lists_at, points_at
     header[12], header[13] = #global, global_at
     header[14] = t.blend or 100.0
+    header[15] = t.margin or 0.0
 
     local values = header
     local function append(t_) for _, x in ipairs(t_) do values[#values + 1] = x end end
@@ -632,15 +635,19 @@ end
 
 -- The shapes of `elements` in one node: `.value` is the signed distance (land negative) held to
 -- [-reach, reach], `.id` the id of the land element nearest each sample (0 where there is none). With
--- `relief = true` the second value returned is the height of the elements' profiles over the land, and
--- with `seabed = true` the third is what to add to the sea floor (seabed elements up, trenches down).
+-- `relief = true` the second value returned is the height of the elements' profiles over the land, with
+-- `seabed = true` the third is what to add to the sea floor (seabed elements up, trenches down), and with
+-- `margin = k` the fourth is the distance with the land joined by a smooth minimum at least `k` metres wide:
+-- a sea floor built on it has no crease on the line between two coasts.
 function Shapes.Set(t)
-    check("Shapes.Set", t, { "elements", "reach", "bin", "blend", "position", "relief", "seabed" })
-    local block = Shapes.SetBlock{ elements = t.elements, reach = t.reach, bin = t.bin, blend = t.blend }
+    check("Shapes.Set", t, { "elements", "reach", "bin", "blend", "position", "relief", "seabed", "margin" })
+    local block = Shapes.SetBlock{ elements = t.elements, reach = t.reach, bin = t.bin, blend = t.blend,
+                                   margin = t.margin }
     local coast = Geometry.Lands{ block = block, mode = "coast", position = t.position }
     local relief = t.relief and Geometry.Lands{ block = block, mode = "relief", position = t.position } or nil
     local floor = t.seabed and Geometry.Lands{ block = block, mode = "seabed", position = t.position } or nil
-    return coast, relief, floor
+    local margin = t.margin and Geometry.Lands{ block = block, mode = "margin", position = t.position } or nil
+    return coast, relief, floor, margin
 end
 
 _G.Shapes = Shapes

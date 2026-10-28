@@ -1,16 +1,15 @@
--- Archipelago, scattered: islands of very different sizes and orientations, separated by straits.
+-- Archipelago, scattered: islands of many sizes anywhere on the map, apart by straits.
 --
---   terrain_viewer --script assets/scripts/lands/archipelago_scattered.lua --water
+--   terrain_viewer --script assets/scripts/lands/archipelago_scattered.lua --water --resolution 16
+--   terrain_export --script assets/scripts/lands/archipelago_scattered.lua --min -24000,-24000 --max 24000,24000 --resolution 16 --out out/archipelago_scattered
 --
--- The map is `size` metres across (24 km by default): export or view it over that window, centred on the
--- origin. `land_fraction` of it is land (0.7 by default). Parameters: seed, size, land_fraction, height,
--- roughness, dissection, margin ("compressed" or "geologic") and, for islands, coast.
+-- A 48 km map centred on the origin. Parameters: seed, count, land_fraction, height. The islands are
+-- elements with ids ("isles/3", ...): `tools/dev.sh lands` lists them and `edit` changes one.
 
 local function main(params)
     local land = Lands.Archipelago{
-        seed = params.seed or 1, resolution = params.resolution,
-        size = params.size, land_fraction = params.land_fraction, height = params.height,
-        roughness = params.roughness, dissection = params.dissection, margin = params.margin, layout = "scattered",
+        preset = "scattered", seed = params.seed or 3, resolution = params.resolution, size = 48000,
+        count = params.count, land_fraction = params.land_fraction, height = params.height,
     }
     return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 end

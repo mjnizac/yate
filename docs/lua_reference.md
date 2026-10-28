@@ -1259,6 +1259,7 @@ return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 | `profile` | the default profile of land elements: `dome`, `cone`, `plateau`, `rim` (a crest near the coast over a lower interior), `caldera` (the crest round a floor below the sea), `tilt` (a plane rising towards `direction`) or `flat`, or `{ "rim", inner = 140, ... }` to set its numbers. Widths default to fractions of the element's inscribed radius and heights to `height`. A land element with no profile is an error |
 | `height` | the profiles' height in metres; a seabed element's is half the abyssal depth |
 | `hypsometry` | `low`, `balanced` (default) or `high`: a fixed monotone curve of the height, so drainage order is kept |
+| `land_fraction`, `classes` | a bounded map's land share, reached by rescaling the scatters; the report's classes by area (below) |
 | `edit`, `remove` | `{ [id] = { key = value } }` replaces keys of an element; `scale` multiplies (an element sized by `area` grows by its square) and `offset = { dx, dz }` moves it. `remove = { id, ... }` drops elements |
 | `margin`, `coast`, `shelf_*`, `slope_width`, `abyssal_depth`, `beach_*`, `cliff_*`, `lagoon_depth`, `wave_from`, `hardness`, `sediment`, `shore_band` | the sea floor and the shore, as before |
 
@@ -1283,10 +1284,49 @@ which `Lands.Preset{ name = ... }` returns as the `Lands.Compose` table to chang
 | `mesa_island` | `main`, `butte` (plateaus) | 25 %, 320 m |
 | `atoll` | `reef` (ring), `lagoon`, `pass1`..`pass3`, `motu` | 8 %, 5 m |
 
-`Lands.Archipelago` and `Lands.Continent` are still the grid-built macro (bodies with spines, drainage by
-`Erosion.StreamPower`, sea level by quantile; layouts `scattered`, `hotspot`, `arc`, `atoll`, and
-`continent`) until they are rebuilt from shapes; `Lands.Island` no longer takes its keys (`layout`,
-`roughness`, `dissection`, `cells`, `count`, `aspect`, `area`, `areas`) and says what to use instead.
+**Scatter: many islands from one element.** An element with `scatter = { ... }` stands for many: its other
+keys are the template (shape, profile, `aspect = { min, max }`; a radial outline and the turn are drawn per
+island when not given), and each island gets the id `"<id>/<slot>"`, which `edit` and `remove` reach.
+
+| `scatter` key | Meaning |
+| --- | --- |
+| `count`, `area = { min, max }` | how many, and their areas in square metres; `distribution = "log"` (default: small ones outnumber large ones) or `"uniform"` |
+| `spacing`, `margin` | metres kept between bounding circles (and from the land declared around it); metres kept from the map's edge |
+| `pattern` | `uniform` (dart throwing, Bridson's 30 tries a slot), `cluster` (`clusters`, `spread`: a Neyman-Scott process), `line` (`path`, `decay`: sizes falling along it, `wander`), `arc` (`center`, `radius`, `from_angle`, `to_angle`), `ring` (`center`, `radius`), `grid`, `centers` (`centers = { { x, z, area }, ... }`) |
+| `region` | a `Shapes.Set` element the centres must fall in |
+
+Each slot draws from a hash of (seed, id, slot) and is placed against the slots before it, so asking for one
+more keeps the others where they were; a slot without room shrinks (on a curve further) and is otherwise
+skipped, and `land.info.scatters` / the report say how many were placed. Water can be scattered too (channels
+over land, lakes). `land_fraction` on a bounded map rescales the scatters until land covers that share. In
+the unbounded world (`frame.world_cell`) `uniform` and `cluster` give `count` per world cell: each cell
+proposes candidates from its own hash and one stays when no conflicting candidate outranks it (Wei's
+parallel Poisson rule in one pass), so two windows over the same cells keep the same islands. The other
+patterns are explicit geometry and work anywhere. Islands are classed by measured area in the report:
+`continent` (a tenth of a bounded map, 10 000 km2 in the world), `island` (a thousandth, 1 km2) or `isle`;
+`classes = { continent = m2, island = m2 }` overrides them.
+
+The sea floor is built on the coast distance with the land joined by a smooth minimum half the shelf and
+slope wide, so it has no crease midway between two coasts and a strait between near islands is shallow.
+
+**`Lands.Archipelago{ preset = ..., seed, size, count, area, land_fraction, height }`** (48 km by
+default; `area` in square metres overrides the preset's, which are fractions of the map):
+
+| Preset | What | Ids |
+| --- | --- | --- |
+| `scattered` | islands of many sizes anywhere, apart by straits | `isles/N` |
+| `cluster` | islands round three centres | `isles/N` |
+| `hotspot` | a chain shrinking along a bent line | `chain/N` |
+| `arc` | an island arc, and one trench along its convex side (a seabed `arc` with a negative cone profile) | `arc/N`, `trench` |
+| `atolls` | rings of reef round lagoons | `atolls/N`, `atolls/N/lagoon` |
+| `shattered` | a land block cut by scattered channels | `land`, `channels/N` |
+| `chain` | islands side by side along a band | `chain/N` |
+
+`Lands.Continent` is still the grid-built macro (bodies with spines, drainage by `Erosion.StreamPower`, sea
+level by quantile) until it is rebuilt from shapes. `Lands.Island` and `Lands.Archipelago` no longer take
+the old keys (`layout`, `roughness`, `dissection`, `cells`, `aspect`; for an island also `count`, `area`,
+`areas`) and
+say what to use instead.
 
 There is **one sign convention: land d < 0, coast d = 0, sea d > 0**. Products, each asked for by name in
 `land:outputs{ ... }` (`height` and `normals` are always there; a script holds at most eight outputs):
@@ -1305,14 +1345,16 @@ There is **one sign convention: land d < 0, coast d = 0, sea d > 0**. Products, 
 The examples in `assets/scripts/lands/` each say in their header how to view and export them, at a
 resolution suited to their size: `island_dome`, `island_rim`, `island_caldera`, `island_plateau`,
 `island_tilt`, `island_low`, `island_volcano`, `atoll`, `all_land` (no ocean, with lakes), `ocean_only`
-(seamounts and a guyot) and `infinite_islands` (anchored 100 km from the origin), plus `island.lua` and its
+(seamounts and a guyot), `infinite_islands` (anchored 100 km from the origin), `archipelago_*` (one per
+preset, and `archipelago_centers` for islands at given places), `infinite_archipelago` and `infinite_cluster`
+(world cells), plus `island.lua` and its
 variants for the presets. The viewer colours these terrains with `look = { palette = "coast" }`.
 
 ![Lands.Compose: a dome with a bay and a peninsula, cliffs over a lower interior, an atoll, all land with lakes](images/lands/compose.png)
 
 ![The legacy macros: an island and a continent](images/lands/island_continent.png)
 
-![The legacy macros: scattered, hotspot, arc, atoll](images/lands/archipelagos.png)
+![Lands.Archipelago: scattered, cluster, hotspot, arc, atolls, shattered, chain](images/lands/archipelagos.png)
 
 ---
 

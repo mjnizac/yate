@@ -169,21 +169,24 @@ The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail af
       bins), `Lands.Compose` (areas, profiles per element with no assumed shape, lagoons, seamounts, guyots,
       active margins, edits by id, the report in metadata, bounded maps and `frame.world_cell`), island
       presets in `Lands.Island`, `terrain_metrics --by-id`, `dev.sh lands` and `lands-check`, 9 new goldens.
-- [ ] **Phase 2, archipelagos**: `scatter` (Poisson in a bounded map, hash-priority Poisson per world cell),
-      patterns (cluster, line, arc, ring, centers), `land_fraction` by bisection, classification by area;
-      `Lands.Archipelago` rebuilt on `Lands.Compose`.
+- [x] **Phase 2, archipelagos**: `scatter` elements (dart throwing in a bounded map, stable as the count
+      grows; hash-priority Poisson per world cell in the unbounded one), patterns (uniform, cluster, line,
+      arc, ring, grid, centers), `land_fraction` by rescaling the scatters, classes by area in the report,
+      water scatters, atolls with their lagoons; the presets of `Lands.Archipelago`; 10 new goldens.
+- [x] **The margin creased on the medial axis** between two coasts: the sea floor is now built on the
+      distance with the land joined by a smooth minimum (the `margin` mode), and trenches join as a 4-norm.
 - [ ] **Phase 3, continents and other lands**: ridges with spurs and saddles, Azgaar-style presets as
       compositions (mediterranean, pangea, peninsula, isthmus, inland sea...), `edge_margin`;
       `Lands.Continent` rebuilt; the references measured.
-- [ ] **The margin creases on the medial axis** between two coasts (a straight ridge in the bathymetry
-      where the nearest coast changes): the distance is a hard minimum there. Smooth it in the detail phase.
+- [ ] **Bounding circles are crude for long shapes** (capsules, bands): a scatter of channels keeps them
+      further apart than their outlines need, and fewer fit.
+- [ ] **Uniform and cluster in the world keep fewer than `count`**: Wei's rule in one pass drops every
+      candidate outranked by a conflicting one, even when that one is dropped too.
 - [ ] **A rim island's interior is a closed basin**: what the profile says, but nothing drains it yet.
 - [ ] **The report samples 3 x 65 k points on the CPU** (60 to 130 ms of script time); fine for exports, it
       is paid again at every level change in the viewer.
 - [ ] **No real references measured yet**: the heightmaps in `docs/references/{islands,archipelagos,
       continents}` have not been run through `terrain_metrics`; per-type acceptance numbers wait for it.
-- [ ] **A chain, an arc and an atoll reach 6 to 12 % of the map** (the legacy archipelago layouts), not
-      70 %: phase 2 replaces them.
 - [ ] **Coast type has no fetch**: exposure is the normal against one wave direction.
 - [ ] **No lakes or rivers as water in the Lands macros**: see "The macros do not drain yet".
 

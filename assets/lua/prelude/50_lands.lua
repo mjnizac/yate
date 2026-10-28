@@ -619,9 +619,16 @@ local function finish(o)
     -- The sea floor: a shallow beach face, a shelf, a break, a slope and an abyssal plain. Steeper offshore
     -- of a cliff.
     local shelf_width, shelf_depth, slope_width, abyssal_depth = o.shelf_width, o.shelf_depth, o.slope_width, o.abyssal_depth
-    local off = Curves.Clamp{ input = coast_sdf, min = 0.0, max = 1.0e7 }
+    -- The distance offshore: the margin's own when the caller has one (smooth between coasts).
+    local off = Curves.Clamp{ input = o.margin_sdf or coast_sdf, min = 0.0, max = 1.0e7 }
     local sf = Curves.Clamp{ input = off / 160.0, min = 0.0, max = 1.0 }
-    local face = (3.0 + 22.0 * coast_type) * (1.0 - (1.0 - sf) * (1.0 - sf))
+    local steep = coast_type
+    if o.margin_sdf then
+        -- A cliff's steeper face is the coast's, not the open sea's: it fades within a few hundred metres, so the
+        -- coast type's seam between two coasts does not run out across the sea floor.
+        steep = coast_type * (1.0 - Curves.Smoothstep{ input = off, min = 160.0, max = 800.0 })
+    end
+    local face = (3.0 + 22.0 * steep) * (1.0 - (1.0 - sf) * (1.0 - sf))
     local on_shelf = shelf_depth * Curves.Clamp{ input = off / shelf_width, min = 0.0, max = 1.0 }
     local sl = Curves.Clamp{ input = (off - shelf_width) / slope_width, min = 0.0, max = 1.0 }
     local on_slope = (abyssal_depth - shelf_depth) * (sl * sl * (3.0 - 2.0 * sl))
@@ -690,7 +697,7 @@ end
 
 local COMPOSE_KEYS = {
     seed = true, resolution = true, frame = true, elements = true, height = true, profile = true, hypsometry = true,
-    edit = true, remove = true,
+    edit = true, remove = true, land_fraction = true, classes = true,
     margin = true, shelf_width = true, shelf_depth = true, slope_width = true, abyssal_depth = true,
     coast = true, wave_from = true, hardness = true, sediment = true, shore_band = true, lagoon_depth = true,
     beach_width = true, beach_height = true, cliff_width = true, cliff_height = true,
@@ -808,10 +815,10 @@ local function with_profile(where, e, out, relief, default_profile)
     return out
 end
 
--- An element of `Lands.Compose` as a `Shapes.Set` element: `area` (square metres) sets its size from the
--- shape's closed-form area, `aspect` (x over z) its proportions where the shape has two radii.
-local function set_element(i, e, number, relief, default_profile)
-    local where = "Lands.Compose element " .. i
+-- A `Lands.Compose` element as a sized `Shapes.Set` element, without its profile: `area` (square metres)
+-- sets its size from the shape's closed-form area, `aspect` (x over z) its proportions where the shape has
+-- two radii.
+local function sized(where, e)
     if type(e) ~= "table" then
         fail(where .. " must be a table")
     end
@@ -819,9 +826,8 @@ local function set_element(i, e, number, relief, default_profile)
     for key, value in pairs(e) do
         if not ELEMENT_OWN[key] then out[key] = value end
     end
-    out.id = number
     if e.area == nil then
-        return with_profile(where, e, out, relief, default_profile)
+        return out
     end
     if type(e.area) ~= "number" or e.area <= 0 then
         fail(where .. " needs 'area' as square metres above zero")
@@ -853,6 +859,13 @@ local function set_element(i, e, number, relief, default_profile)
         fail(where .. " cannot be sized by 'area' as a " .. tostring(shape)
              .. "; give its dimensions (area works for circle, ellipse, superellipse, box, radial, ring and a capsule with a length)")
     end
+    return out
+end
+
+local function set_element(i, e, number, relief, default_profile)
+    local where = "Lands.Compose element " .. i
+    local out = sized(where, e)
+    out.id = number
     return with_profile(where, e, out, relief, default_profile)
 end
 
@@ -892,6 +905,320 @@ local function geometric_area(e)
     return area and area * (e.scale or 1.0) ^ 2
 end
 
+-- --- Scatter: many elements from one ---------------------------------------------------------------
+
+-- The bounding radius of a sized element around its placement, in metres (its scale included).
+local function bound_of(e)
+    local s, r = e.shape, 0.0
+    if s == "circle" then
+        r = e.radius
+    elseif s == "ellipse" then
+        r = math.max(e.radii[1], e.radii[2])
+    elseif s == "superellipse" then
+        local n = e.exponent or 4.0
+        r = math.max(e.radii[1], e.radii[2]) * (n > 2.0 and 2.0 ^ (0.5 - 1.0 / n) or 1.0)
+    elseif s == "box" then
+        r = 0.5 * math.sqrt(e.size[1] ^ 2 + e.size[2] ^ 2)
+    elseif s == "radial" then
+        local spread = 0.0
+        for _, h in ipairs(e.harmonics or {}) do spread = spread + math.abs(h[2]) end
+        r = e.radius * (1.0 + spread)
+    elseif s == "capsule" then
+        local length = e.length or (e.from and math.sqrt((e.to[1] - e.from[1]) ^ 2 + (e.to[2] - e.from[2]) ^ 2)) or 0.0
+        r = length * 0.5 + e.width * 0.5
+    elseif s == "ring" or s == "arc" then
+        r = e.radius + e.width * 0.5
+    elseif s == "sector" then
+        r = e.reach
+    elseif s == "polygon" or s == "band" then
+        for _, p in ipairs(e.points) do r = math.max(r, math.sqrt(p[1] ^ 2 + p[2] ^ 2) + (p[3] or e.width or 0.0) * 0.5) end
+    end
+    return r * (e.scale or 1.0)
+end
+
+-- A number from a string, for salting a hash with an id.
+local function salt_of(text)
+    local v = 0
+    for k = 1, #text do v = (v * 31 + text:byte(k)) & 0x7fffffff end
+    return v
+end
+
+local SCATTER_KEYS = {
+    count = true, area = true, distribution = true, spacing = true, pattern = true, region = true, margin = true,
+    clusters = true, spread = true, path = true, center = true, radius = true, from_angle = true, to_angle = true,
+    decay = true, wander = true, centers = true, cell = true,
+}
+local PATTERNS = { uniform = true, cluster = true, line = true, arc = true, ring = true, grid = true, centers = true }
+
+-- The elements one `scatter` element stands for, as { e, id } in slot order. `ctx` is the composition: its
+-- seed, its frame (`size` and `window`, or `world_cell`), and `obstacles`, the circles of the land declared
+-- around it ({ x, z, r }), which nothing generated may come near.
+--
+-- In a bounded map every slot draws its size and its candidate positions from a hash of (seed, id, slot)
+-- and is placed by dart throwing (Bridson's rule of 30 tries, against the slots before it), so asking for
+-- one more keeps the others where they were. In the unbounded world (uniform and cluster patterns) `count`
+-- is per world cell: each cell proposes candidates from its own hash, and a candidate stays when no
+-- conflicting candidate has a higher priority (Wei's parallel Poisson rule, in one pass), which looks only
+-- at neighbouring cells, so any two windows over the same cells keep the same elements.
+local function scatter(e, id, ctx)
+    local where = "Lands.Compose scatter '" .. tostring(id) .. "'"
+    local spec = e.scatter
+    if type(spec) ~= "table" then
+        fail(where .. " expects 'scatter' as a table { count = ..., area = { min, max }, ... }")
+    end
+    for key in pairs(spec) do
+        if not SCATTER_KEYS[key] then
+            fail(where .. " does not take '" .. tostring(key) .. "'; it takes count, area, distribution, spacing, "
+                 .. "pattern, region, margin, clusters, spread, path, center, radius, from_angle, to_angle, decay, "
+                 .. "wander, centers and cell")
+        end
+    end
+    local pattern = spec.pattern or "uniform"
+    if not PATTERNS[pattern] then
+        fail(where .. " has pattern '" .. tostring(pattern) .. "'; expected uniform, cluster, line, arc, ring, grid or centers")
+    end
+    local range = spec.area
+    if pattern ~= "centers" and (type(range) ~= "table" or type(range[1]) ~= "number" or type(range[2]) ~= "number"
+                                 or range[1] <= 0 or range[2] < range[1]) then
+        fail(where .. " needs 'area' as { min, max } in square metres, min above zero")
+    end
+    local count   = spec.count or 1
+    local spacing = spec.spacing or 0.0
+    local log     = (spec.distribution or "log") == "log"
+    local h       = engine.hasher((ctx.seed or 0) * 7919 + salt_of(tostring(id)))
+    local k_area  = ctx.area_factor or 1.0
+    local world   = ctx.world_cell ~= nil and (pattern == "uniform" or pattern == "cluster")
+    -- `region`, a `Shapes.Set` element: centres must fall inside it (read on the CPU sampler).
+    local region = nil
+    if spec.region ~= nil then
+        local node = Shapes.Set{ elements = { spec.region }, reach = 1.0 }
+        region = function(x, z) return Terrain.Sample{ value = node, xs = { x }, zs = { z } }[1] <= 0.0 end
+    end
+
+    -- An element for a slot: the template (every key of `e` but `scatter` and `id`), its area drawn from the
+    -- range (log-uniform by default: small islands outnumber large ones), its outline and turn drawn when the
+    -- template leaves them open.
+    local function make(key, x, z, area)
+        local out = {}
+        for k, v in pairs(e) do
+            if k ~= "scatter" and k ~= "id" and k ~= "lagoon" then out[k] = v end
+        end
+        local hk = engine.hasher(salt_of(key) + (ctx.seed or 0) * 7919)
+        out.at, out.area = { x, z }, area
+        if out.rotation == nil then out.rotation = hk(1, 1) * 360.0 end
+        if type(out.aspect) == "table" then out.aspect = out.aspect[1] + (out.aspect[2] - out.aspect[1]) * hk(2, 1) end
+        if out.shape == "radial" and out.harmonics == nil then
+            out.harmonics = {
+                { 2 + math.floor(hk(3, 1) * 2), 0.08 + 0.12 * hk(3, 2), hk(3, 3) * 2.0 * math.pi },
+                { 5 + math.floor(hk(4, 1) * 2), 0.02 + 0.05 * hk(4, 2), hk(4, 3) * 2.0 * math.pi },
+            }
+        end
+        return out
+    end
+    local function draw(u)
+        local a = log and range[1] * (range[2] / range[1]) ^ u or range[1] + (range[2] - range[1]) * u
+        return a * k_area
+    end
+    local function radius_of(out)
+        return bound_of(sized(where, out))
+    end
+
+    local placed, entries = {}, {}
+    local function clear(x, z, r)
+        -- Water (channels, lakes) is cut into land, so only land keeps away from the land declared.
+        for _, o in ipairs(e.water and {} or ctx.obstacles) do
+            if (x - o.x) ^ 2 + (z - o.z) ^ 2 < (r + o.r + spacing) ^ 2 then return false end
+        end
+        for _, o in ipairs(placed) do
+            if (x - o.x) ^ 2 + (z - o.z) ^ 2 < (r + o.r + spacing) ^ 2 then return false end
+        end
+        return true
+    end
+    -- An element, and with `lagoon = true` on a ring the shallow water inside it (an atoll's lagoon).
+    local function emit(key, out)
+        entries[#entries + 1] = { e = out, id = id .. "/" .. key, scatter = id }
+        if e.lagoon and out.shape == "ring" then
+            local ring = sized(where, out)
+            entries[#entries + 1] = {
+                e = { shape = "circle", water = true, role = "lagoon", at = out.at, radius = ring.radius - ring.width * 0.5 },
+                id = id .. "/" .. key .. "/lagoon", scatter = id,
+            }
+        end
+    end
+    local function keep(key, out, r)
+        placed[#placed + 1] = { x = out.at[1], z = out.at[2], r = r }
+        emit(key, out)
+    end
+
+    if world then
+        -- Candidates per world cell, a priority each; a candidate stays if no conflicting one outranks it.
+        local cellw = ctx.world_cell
+        local window = ctx.window
+        local function cell_candidates(cx, cz)
+            local hc = engine.hasher((((cx * 73856093) ~ (cz * 19349663) ~ salt_of(tostring(id))) & 0x7fffffff)
+                                     + (ctx.seed or 0) * 7919)
+            local list = {}
+            local x0, z0 = cx * cellw, cz * cellw
+            if pattern == "uniform" then
+                local m = math.max(1, math.ceil(math.sqrt(count * 2.0)))
+                for s = 1, m * m do
+                    if hc(s, 1) < count / (m * m) then
+                        local sx, sz = (s - 1) % m, (s - 1) // m
+                        list[#list + 1] = { key = cx .. "," .. cz .. "," .. s,
+                                            x = x0 + (sx + hc(s, 2)) * cellw / m, z = z0 + (sz + hc(s, 3)) * cellw / m,
+                                            u = hc(s, 4), p = hc(s, 5) }
+                    end
+                end
+            else
+                local children = math.max(1, math.floor(count / (spec.clusters or 1) + 0.5))
+                local spread = spec.spread or cellw * 0.08
+                for c = 1, spec.clusters or 1 do
+                    local px, pz = x0 + hc(100 + c, 1) * cellw, z0 + hc(100 + c, 2) * cellw
+                    for s = 1, children do
+                        local a, r = hc(200 + c * 64 + s, 1) * 2.0 * math.pi, spread * math.sqrt(-2.0 * math.log(1.0 - 0.999 * hc(200 + c * 64 + s, 2)))
+                        list[#list + 1] = { key = cx .. "," .. cz .. "," .. c .. "." .. s,
+                                            x = px + math.cos(a) * r, z = pz + math.sin(a) * r,
+                                            u = hc(200 + c * 64 + s, 3), p = hc(200 + c * 64 + s, 4) }
+                    end
+                end
+            end
+            return list
+        end
+        local reach = pattern == "cluster" and math.ceil(3.0 * (spec.spread or cellw * 0.08) / cellw) + 1 or 1
+        local cx0, cz0 = math.floor(window[1] / cellw) - 1, math.floor(window[2] / cellw) - 1
+        local cx1, cz1 = math.floor(window[3] / cellw) + 1, math.floor(window[4] / cellw) + 1
+        local all = {}
+        for cz = cz0 - reach, cz1 + reach do
+            for cx = cx0 - reach, cx1 + reach do
+                for _, c in ipairs(cell_candidates(cx, cz)) do
+                    c.out = make(c.key, c.x, c.z, draw(c.u))
+                    c.r = radius_of(c.out)
+                    if c.r * 2.0 + spacing > cellw then
+                        fail(where .. " needs world_cell (" .. cellw .. " m) at least twice the largest element's "
+                             .. "radius plus the spacing (" .. math.ceil(c.r * 2.0 + spacing) .. " m)")
+                    end
+                    all[#all + 1] = c
+                end
+            end
+        end
+        for _, c in ipairs(all) do
+            if c.x >= cx0 * cellw and c.x < (cx1 + 1) * cellw and c.z >= cz0 * cellw and c.z < (cz1 + 1) * cellw then
+                local wins = clear(c.x, c.z, c.r) and (region == nil or region(c.x, c.z))
+                for _, o in ipairs(all) do
+                    if o ~= c and o.p > c.p and (c.x - o.x) ^ 2 + (c.z - o.z) ^ 2 < (c.r + o.r + spacing) ^ 2 then
+                        wins = false
+                        break
+                    end
+                end
+                if wins then emit(c.key, c.out) end
+            end
+        end
+        return entries, #entries, nil
+    end
+
+    -- Bounded, or a pattern with its own geometry: slots in order.
+    local half = ctx.size * 0.5 - (spec.margin or 0.0)
+    local function inside(x, z, r)
+        if ctx.world_cell ~= nil then return true end
+        return math.abs(x) + r <= half and math.abs(z) + r <= half
+    end
+    -- Where a pattern puts slot `s` at try `t` (t = 1 is the pattern's own place), and the area it draws.
+    local parents = {}
+    if pattern == "cluster" then
+        for c = 1, spec.clusters or 1 do
+            parents[c] = { (h(900 + c, 1) * 2.0 - 1.0) * half * 0.7, (h(900 + c, 2) * 2.0 - 1.0) * half * 0.7 }
+        end
+    end
+    local along = {}
+    if pattern == "line" then
+        local path = spec.path
+        if type(path) ~= "table" or #path < 2 then fail(where .. " needs 'path', at least two { x, z } points") end
+        local total = 0.0
+        along[1] = 0.0
+        for k = 2, #path do
+            total = total + math.sqrt((path[k][1] - path[k - 1][1]) ^ 2 + (path[k][2] - path[k - 1][2]) ^ 2)
+            along[k] = total
+        end
+        along.total = total
+    end
+    local function point_on(f)
+        if pattern == "line" then
+            local d, path = f * along.total, spec.path
+            for k = 2, #path do
+                if d <= along[k] or k == #path then
+                    local u = (d - along[k - 1]) / math.max(along[k] - along[k - 1], 1e-9)
+                    local dx, dz = path[k][1] - path[k - 1][1], path[k][2] - path[k - 1][2]
+                    local l = math.max(math.sqrt(dx * dx + dz * dz), 1e-9)
+                    return path[k - 1][1] + dx * u, path[k - 1][2] + dz * u, -dz / l, dx / l
+                end
+            end
+        end
+        local c, r = spec.center or { 0.0, 0.0 }, spec.radius or ctx.size * 0.3
+        local a0 = math.rad(pattern == "ring" and 0.0 or (spec.from_angle or 0.0))
+        local a1 = math.rad(pattern == "ring" and 360.0 or (spec.to_angle or 180.0))
+        local a = a0 + (a1 - a0) * f
+        return c[1] + math.cos(a) * r, c[2] + math.sin(a) * r, math.cos(a), math.sin(a)
+    end
+    local function candidate(s, t)
+        if pattern == "uniform" then
+            return (h(s * 100 + t, 1) * 2.0 - 1.0) * half, (h(s * 100 + t, 2) * 2.0 - 1.0) * half
+        elseif pattern == "cluster" then
+            local p = parents[(s - 1) % #parents + 1]
+            local spread = spec.spread or ctx.size * 0.06
+            local a, r = h(s * 100 + t, 1) * 2.0 * math.pi, spread * math.sqrt(-2.0 * math.log(1.0 - 0.999 * h(s * 100 + t, 2)))
+            return p[1] + math.cos(a) * r, p[2] + math.sin(a) * r
+        elseif pattern == "grid" then
+            local m = math.ceil(math.sqrt(count))
+            local w = 2.0 * half / m
+            local gx, gz = (s - 1) % m, (s - 1) // m
+            local j = t == 1 and 0.35 or 0.5
+            return -half + (gx + 0.5 + (h(s * 100 + t, 1) - 0.5) * 2.0 * j) * w, -half + (gz + 0.5 + (h(s * 100 + t, 2) - 0.5) * 2.0 * j) * w
+        end
+        -- line, arc, ring: the slot's place along the curve, wandering across it on later tries.
+        local f = pattern == "ring" and (s - 1 + 0.3 * (h(s, 7) - 0.5)) / count or (s - 0.5 + 0.3 * (h(s, 7) - 0.5)) / count
+        local x, z, nx, nz = point_on(math.min(math.max(f, 0.0), 1.0))
+        local wander = (spec.wander or 0.0) * (h(s * 100 + t, 3) * 2.0 - 1.0) * (t == 1 and 0.5 or 1.0)
+        return x + nx * wander, z + nz * wander
+    end
+
+    local list = pattern == "centers" and spec.centers or nil
+    if pattern == "centers" and (type(list) ~= "table" or #list == 0) then
+        fail(where .. " needs 'centers' as a list of { x, z, area }")
+    end
+    local slots = list and #list or count
+    local skipped = 0
+    for s = 1, slots do
+        local key = tostring(s)
+        local area = list and (list[s][3] or (range and draw(0.5))) or draw(h(s, 5))
+        if pattern == "line" or pattern == "arc" then
+            area = area * (1.0 - (spec.decay or 0.0) * (s - 0.5) / slots)
+        end
+        local done = false
+        -- On a curve the place is fixed, so an island may shrink further to fit between its neighbours.
+        for shrink = 0, (pattern == "line" or pattern == "arc" or pattern == "ring") and 8 or 3 do
+            local out = make(key, 0.0, 0.0, area * 0.85 ^ shrink)
+            local r = radius_of(out)
+            for t = 1, (list and 1 or 30) do
+                local x, z
+                if list then
+                    x, z = list[s][1], list[s][2]
+                else
+                    x, z = candidate(s, t)
+                end
+                if inside(x, z, r) and clear(x, z, r) and (region == nil or region(x, z)) then
+                    out.at = { x, z }
+                    keep(key, out, r)
+                    done = true
+                    break
+                end
+            end
+            if done then break end
+        end
+        if not done then skipped = skipped + 1 end
+    end
+    return entries, slots - skipped, skipped
+end
+
 -- Moves an element by (dx, dz): its ends if it has them, its placement otherwise (points are in the
 -- element's own space, so moving `at` moves them).
 local function moved(e, dx, dz)
@@ -906,8 +1233,26 @@ end
 -- The elements as given, less `remove`, with `edit` applied: { e, id } in order, the id being the
 -- element's `id` or its place in the given list. An edit replaces the keys it names, except `scale`, which
 -- multiplies, and `offset = { dx, dz }`, which moves the element.
-local function edited(t)
+local function edited(t, ctx)
     local list, at = {}, {}
+    -- The declared land, which what a scatter generates keeps away from.
+    ctx.obstacles = {}
+    for i, e in ipairs(t.elements) do
+        if type(e) == "table" and e.scatter == nil and not e.water and not e.seabed and e.shape ~= "fill" then
+            local out = sized("Lands.Compose element " .. i, e)
+            local at_ = out.at or (out.from and { (out.from[1] + out.to[1]) * 0.5, (out.from[2] + out.to[2]) * 0.5 }) or { 0.0, 0.0 }
+            if out.from then out.length = math.sqrt((out.to[1] - out.from[1]) ^ 2 + (out.to[2] - out.from[2]) ^ 2) end
+            ctx.obstacles[#ctx.obstacles + 1] = { x = at_[1], z = at_[2], r = bound_of(out) }
+        end
+    end
+    ctx.scatters = {}
+    local function add(entry)
+        if at[entry.id] then
+            fail("Lands.Compose repeats the id '" .. tostring(entry.id) .. "'")
+        end
+        list[#list + 1] = entry
+        at[entry.id] = #list
+    end
     for i, e in ipairs(t.elements) do
         if type(e) ~= "table" then
             fail("Lands.Compose element " .. i .. " must be a table")
@@ -918,8 +1263,18 @@ local function edited(t)
         end
         local copy = {}
         for key, value in pairs(e) do copy[key] = value end
-        list[#list + 1] = { e = copy, id = id }
-        at[id] = #list
+        if copy.scatter ~= nil then
+            local entries, placed, skipped = scatter(copy, tostring(id), ctx)
+            ctx.scatters[tostring(id)] = { placed = placed, skipped = skipped }
+            for _, entry in ipairs(entries) do
+                add(entry)
+                -- A later scatter keeps away from this land too.
+                local out = (not entry.e.water and not entry.e.seabed) and sized("Lands.Compose element", entry.e) or nil
+                if out then ctx.obstacles[#ctx.obstacles + 1] = { x = out.at[1], z = out.at[2], r = bound_of(out) } end
+            end
+        else
+            add({ e = copy, id = id })
+        end
     end
     local function find(id, what)
         if at[id] == nil then
@@ -1028,7 +1383,50 @@ function Lands.Compose(t)
 
     -- Ids: a script names an element with any string or number; the node carries numbers from 1.
     local elements, ids, names = {}, {}, {}
-    local source = edited(t)
+    -- `land_fraction` (a bounded map) rescales what the scatters generate until the land they and the declared
+    -- elements cover, by closed-form areas, is that share of the frame: a few passes, since a larger size can
+    -- leave a slot without room.
+    local ctx = { seed = seed, size = size, window = window, world_cell = frame.world_cell, area_factor = 1.0 }
+    local source = edited(t, ctx)
+    if t.land_fraction ~= nil then
+        local f = t.land_fraction
+        if type(f) ~= "number" or f <= 0.0 or f >= 1.0 then
+            fail("Lands.Compose needs land_fraction between 0 and 1")
+        end
+        if frame.world_cell ~= nil then
+            fail("Lands.Compose takes land_fraction only on a bounded map; in the unbounded world set a scatter's "
+                 .. "count per world cell (its expected land is count times the mean area)")
+        end
+        local function areas()
+            local generated, declared = 0.0, 0.0
+            for _, entry in ipairs(source) do
+                local e = entry.e
+                if not e.water and not e.seabed and e.shape ~= "fill" then
+                    local a = geometric_area(sized("Lands.Compose element", e)) or 0.0
+                    if entry.scatter then generated = generated + a else declared = declared + a end
+                end
+            end
+            return generated, declared
+        end
+        -- The pass nearest the target is kept: past what the map can hold, a larger size only leaves more
+        -- slots without room (the report says how many).
+        local best, error_ = source, math.huge
+        local saved = ctx.scatters
+        for _ = 1, 10 do
+            local generated, declared = areas()
+            if generated <= 0.0 then
+                fail("Lands.Compose land_fraction needs a scatter element to size")
+            end
+            local want = f * size * size - declared
+            if want <= 0.0 then break end
+            local miss = math.abs(generated / want - 1.0)
+            if miss < error_ then best, error_, saved = source, miss, ctx.scatters end
+            if miss < 0.01 then break end
+            ctx.area_factor = ctx.area_factor * want / generated
+            source = edited(t, ctx)
+        end
+        source, ctx.scatters = best, saved
+    end
     for i, entry in ipairs(source) do
         local e = entry.e
         local id = entry.id
@@ -1065,8 +1463,11 @@ function Lands.Compose(t)
         reach = math.max(reach, (e.inland or 0.0) * 1.05)
         e.inland = nil
     end
-    local set, raised, floor = Shapes.Set{ elements = elements, reach = reach, relief = true, seabed = true,
-                                    blend = math.max(size * 0.01, 4.0 * resolution) }
+    -- The sea floor is built on the coast distance with the land joined over half the shelf and slope, so it
+    -- has no crease where two coasts are equally near; the coast itself is the hard union.
+    local set, raised, floor, joined = Shapes.Set{ elements = elements, reach = reach, relief = true, seabed = true,
+                                                   margin = 0.5 * (shelf_width + slope_width),
+                                                   blend = math.max(size * 0.01, 4.0 * resolution) }
     local coast_sdf  = set.value
     local transition = math.max(resolution * 1.5, 12.0)
     local land_mask  = 1.0 - Curves.Smoothstep{ input = coast_sdf, min = -transition, max = transition }
@@ -1104,6 +1505,12 @@ function Lands.Compose(t)
         fail("Lands.Compose hypsometry must be 'low', 'balanced' or 'high', got '" .. tostring(hypsometry) .. "'")
     end
 
+    -- Classes by measured area: in a bounded map a tenth and a thousandth of it (as Azgaar's generator
+    -- does with its cells), in the unbounded world 10 000 km2 and 1 km2; `classes` overrides either.
+    local classes = {
+        continent = (t.classes and t.classes.continent) or (frame.world_cell and 1e10 or size * size * 0.1),
+        island = (t.classes and t.classes.island) or (frame.world_cell and 1e6 or size * size * 0.001),
+    }
     -- The elements as resolved, reported to the export's metadata: what was asked for (the shape's
     -- closed-form area) and what came out of the composition (area, centroid and highest profile by id,
     -- measured on the CPU over the frame).
@@ -1135,26 +1542,30 @@ function Lands.Compose(t)
             id = names[i], shape = e.shape, role = entry.e.role,
             kind = e.water and "water" or (e.seabed and "seabed" or "land"),
             at = e.at or (e.from and { (e.from[1] + e.to[1]) * 0.5, (e.from[2] + e.to[2]) * 0.5 }) or { 0.0, 0.0 },
-            area = geometric_area(e),
+            area = geometric_area(e), radius = bound_of(e),
         }
         if m then
             row.area_measured = m.cells * cell * cell
             row.centroid = { m.x / m.cells, m.z / m.cells }
             row.highest = m.top
             land_cells = land_cells + m.cells
+            row.class = row.kind == "land" and (row.area_measured >= classes.continent and "continent"
+                        or row.area_measured >= classes.island and "island" or "isle") or nil
         end
         listed[i] = row
     end
     engine.report("lands", {
         frame = frame, window = window, land_fraction = land_cells / (nx * nz), cell = cell, elements = listed,
+        scatters = ctx.scatters, classes = classes,
     })
 
     return finish{
         t = t, seed = seed, size = size, resolution = resolution, relief = relief, coast = coast,
         coast_sdf = coast_sdf, land_mask = land_mask, region_id = set.id,
-        ground = ground, gullies = false, additive = true, lagoon = lagoon, seabed = floor.value,
+        ground = ground, gullies = false, additive = true, lagoon = lagoon, seabed = floor.value, margin_sdf = joined.value,
         shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
-        info = { size = size, extent = size * 0.5, regions = #elements, ids = names },
+        info = { size = size, extent = size * 0.5, regions = #elements, ids = names, elements = listed,
+                 scatters = ctx.scatters, land_fraction = land_cells / (nx * nz) },
     }
 end
 
@@ -1306,10 +1717,10 @@ local ISLAND_PRESETS = {
     mesa_island = { fraction = 0.25, height = 320, coast = "cliff" },
     atoll       = { fraction = 0.08, height = 5, coast = "sedimentary" },
 }
-local PRESET_KEYS = { name = true, seed = true, size = true, land_fraction = true, height = true }
+local PRESET_KEYS = { name = true, seed = true, size = true, land_fraction = true, height = true, count = true, area = true }
 -- Keys the grid-built island took that a composition of shapes has no use for.
 local RETIRED = {
-    layout = "an archipelago is Lands.Archipelago; a single island takes a 'preset'",
+    layout = "take a 'preset' (Lands.Island and Lands.Archipelago list theirs)",
     roughness = "the coast's detail comes after the shapes (phase 4 of the lands plan); edit the shapes",
     dissection = "drainage comes after the shapes; edit the shapes",
     cells = "nothing is simulated on a grid", count = "an island is one composition; see Lands.Archipelago",
@@ -1325,22 +1736,110 @@ local function lobed(h, salt, broad, fine)
     }
 end
 
+-- Archipelagos: scatters of islands, the patterns of Azgaar's templates and of nature. Sizes are fractions of
+-- the map's area (`size`^2), so the same preset reads the same at any scale; `count`, `area` (a { min, max }
+-- range in square metres) and `land_fraction` override them.
+local ARCHIPELAGO_PRESETS = {
+    -- islands of many sizes anywhere, apart by straits
+    scattered = { count = 12, area = { 0.0015, 0.02 }, height = 600, coast = "mixed" },
+    -- racimos: islands round a few centres (Neyman-Scott)
+    cluster = { count = 16, area = { 0.0005, 0.006 }, height = 450, coast = "mixed" },
+    -- a hotspot chain: large and high at one end, smaller and lower along it
+    hotspot = { count = 7, area = { 0.007, 0.007 }, height = 1300, coast = "rocky" },
+    -- an island arc over a subduction trench
+    arc = { count = 9, area = { 0.0015, 0.005 }, height = 1100, coast = "rocky" },
+    -- atolls: rings of reef round lagoons
+    atolls = { count = 6, area = { 0.0008, 0.002 }, height = 5, coast = "sedimentary" },
+    -- one land cut into pieces by channels (Azgaar's shattered)
+    shattered = { count = 8, area = { 0.0005, 0.0012 }, height = 500, coast = "rocky" },
+    -- a broad chain of islands side by side, filling a band of the map
+    chain = { count = 8, area = { 0.005, 0.008 }, height = 700, coast = "mixed" },
+}
+
+local function archipelago_preset(t)
+    local p = ARCHIPELAGO_PRESETS[t.name]
+    local seed, size = t.seed or 0, t.size or 48000.0
+    local h = engine.hasher(seed + 9000)
+    local turn = h(1, 1) * 360.0
+    local s2 = size * size
+    local range = t.area or { p.area[1] * s2, p.area[2] * s2 }
+    local count = t.count or p.count
+    local height = t.height or p.height
+    local margin = size * 0.04
+    local a = math.rad(turn)
+    local c, s = math.cos(a), math.sin(a)
+    local elements
+    if t.name == "scattered" then
+        elements = { { id = "isles", shape = "radial", profile = "dome",
+                       scatter = { count = count, area = range, spacing = size * 0.015, margin = margin } } }
+    elseif t.name == "cluster" then
+        elements = { { id = "isles", shape = "radial", profile = "cone",
+                       scatter = { pattern = "cluster", count = count, clusters = 3, spread = size * 0.07,
+                                   area = range, spacing = size * 0.004, margin = margin } } }
+    elseif t.name == "hotspot" then
+        local l = size * 0.4
+        elements = { { id = "chain", shape = "ellipse", aspect = { 1.2, 1.8 }, profile = "cone",
+                       scatter = { pattern = "line", count = count, area = range, decay = 0.85, spacing = size * 0.01,
+                                   wander = size * 0.02, margin = margin,
+                                   path = { { -c * l, -s * l }, { -s * l * 0.15, c * l * 0.15 }, { c * l, s * l } } } } }
+    elseif t.name == "arc" then
+        -- The trench is one form of the sea floor along the convex side, a V of the abyssal depth under it.
+        local radius = size * 0.75
+        local centre = { -c * size * 0.55, -s * size * 0.55 }
+        elements = {
+            { id = "arc", shape = "radial", profile = "cone",
+              scatter = { pattern = "arc", count = count, area = range, spacing = size * 0.01, wander = size * 0.015,
+                          center = centre, radius = radius, from_angle = turn - 32, to_angle = turn + 32, margin = margin } },
+            { id = "trench", shape = "arc", seabed = true, at = centre, rotation = turn, radius = radius + size * 0.16,
+              aperture = 76, width = size * 0.08, profile = { "cone", height = -2500, width = size * 0.04 } },
+        }
+    elseif t.name == "atolls" then
+        elements = { { id = "atolls", shape = "ring", width = size * 0.004, lagoon = true, profile = "flat",
+                       scatter = { count = count, area = range, spacing = size * 0.02, margin = margin } } }
+    elseif t.name == "shattered" then
+        -- A land broken by channels: a large block, then water capsules scattered over it.
+        local block = s2 * 0.3
+        elements = {
+            { id = "land", shape = "superellipse", area = block, aspect = 1.3, exponent = 3, rotation = turn, profile = "dome" },
+            { id = "channels", shape = "capsule", water = true, length = size * 0.1, smooth = size * 0.003,
+              scatter = { count = count, area = range, spacing = size * 0.005,
+                          region = { shape = "superellipse", radii = { size * 0.25, size * 0.19 }, exponent = 3, rotation = turn } } },
+        }
+    else -- chain: islands side by side along a band across the map
+        local l = size * 0.42
+        elements = { { id = "chain", shape = "radial", profile = "dome",
+                       scatter = { pattern = "line", count = count, area = range, spacing = size * 0.006, margin = margin,
+                                   wander = size * 0.03, path = { { -c * l, -s * l }, { c * l, s * l } } } } }
+    end
+    return {
+        seed = seed, frame = { size = size }, height = height, coast = p.coast,
+        land_fraction = t.land_fraction, lagoon_depth = t.name == "atolls" and 25 or nil, elements = elements,
+    }
+end
+
 function Lands.Preset(t)
     if type(t) ~= "table" then
         fail("Lands.Preset expects a table of named arguments, as in Lands.Preset{ name = 'high_island' }")
     end
     for key in pairs(t) do
         if not PRESET_KEYS[key] then
-            fail("Lands.Preset does not take '" .. tostring(key) .. "'; it takes name, seed, size, land_fraction "
-                 .. "and height, and returns the Lands.Compose table to change")
+            fail("Lands.Preset does not take '" .. tostring(key) .. "'; it takes name, seed, size, land_fraction, "
+                 .. "height and, for an archipelago, count and area, and returns the Lands.Compose table to change")
         end
+    end
+    if ARCHIPELAGO_PRESETS[t.name] then
+        return archipelago_preset(t)
     end
     local p = ISLAND_PRESETS[t.name]
     if p == nil then
         local names = {}
         for k in pairs(ISLAND_PRESETS) do names[#names + 1] = k end
+        for k in pairs(ARCHIPELAGO_PRESETS) do names[#names + 1] = k end
         table.sort(names)
         fail("Lands.Preset has no preset '" .. tostring(t.name) .. "'; the presets are " .. table.concat(names, ", "))
+    end
+    if t.count ~= nil or t.area ~= nil then
+        fail("Lands.Preset takes 'count' and 'area' only for an archipelago preset; an island's elements are edited by id")
     end
     local seed = t.seed or 0
     local size = t.size or 24000.0
@@ -1451,30 +1950,31 @@ function Lands.Island(t)
     return Lands.Compose(compose)
 end
 
--- An archipelago: the grid-built macro with a `layout` of scattered, hotspot, arc or atoll (to be rebuilt
--- from shapes in phase 2 of the lands plan).
+-- An archipelago from a preset (see `Lands.Preset`), built: `count`, `area` and `land_fraction` size it,
+-- and any `Lands.Compose` key passes through (`edit` reaches its islands by id, as "isles/3").
 function Lands.Archipelago(t)
-    t = t or {}
     if type(t) ~= "table" then
-        fail("Lands.Archipelago expects a table of named arguments, as in Lands.Archipelago{ ... }")
+        fail("Lands.Archipelago expects a table of named arguments, as in Lands.Archipelago{ preset = 'scattered' }")
     end
-    local copy = {}
-    for key, value in pairs(t) do copy[key] = value end
-    copy.layout = copy.layout or "scattered"
-    if copy.layout == "single" or copy.layout == "continent" then
-        fail("Lands.Archipelago layout must be 'scattered', 'hotspot', 'arc' or 'atoll'")
+    for key in pairs(t) do
+        if RETIRED[key] and key ~= "count" and key ~= "area" then
+            fail("Lands.Archipelago no longer takes '" .. key .. "': " .. RETIRED[key])
+        end
     end
-    if copy.layout == "atoll" then
-        -- Low ground, a lagoon of a few tens of metres and a steep outer wall.
-        local size = copy.size or 24000.0
-        copy.height       = copy.height or 25.0
-        copy.shelf_width  = copy.shelf_width or size * 0.05
-        copy.slope_width  = copy.slope_width or size * 0.08
-        copy.dissection   = copy.dissection or 0.2
-        copy.beach_width  = copy.beach_width or 60.0
-        copy.cliff_height = copy.cliff_height or 6.0
+    if not ARCHIPELAGO_PRESETS[t.preset] then
+        local names = {}
+        for k in pairs(ARCHIPELAGO_PRESETS) do names[#names + 1] = k end
+        table.sort(names)
+        fail("Lands.Archipelago needs a 'preset': " .. table.concat(names, ", ") .. "; got '" .. tostring(t.preset) .. "'")
     end
-    return legacy_island(copy)
+    local compose = Lands.Preset{ name = t.preset, seed = t.seed, size = t.size, land_fraction = t.land_fraction,
+                                  height = t.height, count = t.count, area = t.area }
+    for key, value in pairs(t) do
+        if not (PRESET_KEYS[key] or key == "preset") then
+            compose[key] = value
+        end
+    end
+    return Lands.Compose(compose)
 end
 
 -- A continent, as a region and not as a planet: several large lobes with ranges along them, drained by

@@ -132,7 +132,9 @@ Shapes first, detail after. Translate the request into elements, never into nois
 
 | The request | The composition |
 | --- | --- |
-| "N islands of A to B km2" | N elements with `area` in that range (phase 2: `scatter`) |
+| "N islands of A to B km2" | `{ id = "isles", shape = "radial", profile = ..., scatter = { count = N, area = { A, B }, spacing = ... } }`, or `Lands.Archipelago{ preset = ..., count = N, area = { A, B } }`; they are `isles/1`..`isles/N` |
+| "grouped", "in a chain", "on an arc", "here and here" | `pattern = "cluster"`, `"line"` (with `decay` for a hotspot), `"arc"`, `"centers"` |
+| "a third of the map is land" | `land_fraction = 0.33` (bounded) or a scatter's `count` per world cell (unbounded) |
 | "make island X bigger" | `edit = { X = { scale = 1.15 } }` (area x 1.32), or `{ area = ... }` |
 | "move it", "remove it" | `edit = { X = { offset = { dx, dz } } }`, `remove = { "X" }` |
 | "cliffs higher than the interior" | `profile = { "rim", inner = ... }`; a flat cay `"flat"`, a mesa `"plateau"`, a volcano `"cone"`, a caldera `"caldera"`, a cuesta `{ "tilt", direction = ... }` |

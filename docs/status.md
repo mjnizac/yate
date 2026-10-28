@@ -50,10 +50,14 @@ flat: nothing assumed), the coast, shore and margin from the one signed distance
 trenches, lagoons, edits by id, and the resolved elements reported to the export's metadata
 (`tools/dev.sh lands`, `lands-check`). Bounded maps or the unbounded world (`frame.world_cell`). Island
 presets in `Lands.Island` (`high_island`, `low_island`, `volcano`, `caldera`, `rim_island`, `mesa_island`,
-`atoll`); scripts run in about 0.1 s against 6 s for the grid-built island. `Lands.Archipelago` and
-`Lands.Continent` are still the grid-built macro (bodies with spines, drainage by `Erosion.StreamPower`, sea
-level by quantile). Golden datasets `lands_*` (13); previews in `docs/images/lands/`. The plan is in
-`docs/lands_plan.md` (local): phase 1 (islands) is done, phases 2 (archipelagos) and 3 (continents) are next.
+`atoll`); scripts run in about 0.1 s against 6 s for the grid-built island. Archipelagos from `scatter`
+elements (Poisson in a bounded map, hash-priority Poisson per world cell in the unbounded one; patterns
+uniform, cluster, line, arc, ring, grid, centers; `land_fraction`; classes by area) and the presets of
+`Lands.Archipelago` (`scattered`, `cluster`, `hotspot`, `arc`, `atolls`, `shattered`, `chain`).
+`Lands.Continent` is
+still the grid-built macro (bodies with spines, drainage by `Erosion.StreamPower`, sea
+level by quantile). Golden datasets `lands_*` (21); previews in `docs/images/lands/`. The plan is in
+`docs/lands_plan.md` (local): phases 1 (islands) and 2 (archipelagos) are done, 3 (continents) is next.
 
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.

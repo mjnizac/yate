@@ -367,7 +367,8 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
         first         = lists + s;
         count         = index(offsets + b + 1) - s;
     }
-    f32_t d = reach, best = 1e30f, id = 0.0f;
+    const f32_t top = reach + (node.params[1] == 3 ? at(block + 14) : 0.0f);
+    f32_t       d = top, best = 1e30f, id = 0.0f;
     for (u32_t i = 0; i < count; ++i) {
         const u32_t e    = elements + index(first + i) * kElement;
         const f32_t op   = at(e + 1);
@@ -375,7 +376,10 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
             continue;
         }
         const f32_t dist = distance(e, px, pz);
-        const f32_t k    = at(e + 20);
+        f32_t       k    = at(e + 20);
+        if (node.params[1] == 3 && op < 0.5f) {
+            k = std::max(k, at(block + 14));
+        }
         if (op < 0.5f) {
             d = smoothMin(d, dist, k);
             if (dist < best) {
@@ -388,10 +392,10 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
                 best = 1e30f;
             }
         }
-        d = std::clamp(d, -reach, reach);
+        d = std::clamp(d, -reach, top);
     }
-    if (node.params[1] == 0) {
-        return {d, id};
+    if (node.params[1] == 0 || node.params[1] == 3) {
+        return {std::min(d, reach), id};
     }
     const auto profile = [&](u32_t e, f32_t s) -> f32_t {
         const u32_t kind = index(e + 24);
@@ -433,10 +437,10 @@ constexpr u32_t kHashPhi = 0x9E3779B9u;
                 }
             } else if (op < 0.5f && at(e + 37) > 0.0f) {
                 const f32_t t = (distance(e, px, pz) - at(e + 38)) / at(e + 39);
-                trench        = std::max(trench, at(e + 37) * std::exp(-0.5f * t * t));
+                trench += std::pow(at(e + 37) * std::exp(-0.5f * t * t), 4.0f);
             }
         }
-        return {raise - trench, id};
+        return {raise - std::pow(trench, 0.25f), id};
     }
     f32_t       value = 0.0f;
     b8_t        any   = false;

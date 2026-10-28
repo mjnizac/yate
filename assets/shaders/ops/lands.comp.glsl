@@ -17,7 +17,7 @@
 // Block, offsets relative to its start:
 //   header, 24 values:  0 element count  1 bin size  2..3 bin origin x, z  4..5 bins in x, z  6 reach
 //                       7 elements  8 bin offsets (bins + 1 of them, into the lists)  9 lists
-//                       10 points  11 global count  12 global list  13..23 unused
+//                       10 points  11 global count  12 global list  13 blend  14 margin smooth  15..23 unused
 //   elements, 48 values each:
 //       0 kind  1 operation (0 land, 1 water, 2 seabed)  2 id  3..4 centre x, z  5..6 cos, sin of the rotation
 //       7 scale  8..19 the shape's numbers  20 smoothing k (m)  21 bounding radius (m)
@@ -43,7 +43,11 @@
 // In seabed mode channel 0 is what to add to the sea floor: seabed elements (operation 2, which the coast
 // ignores) raise their profiles over their own distance inland, and land elements with a trench sink it.
 //
-// Parameters: 0 block offset, 1 mode (0 coast, 1 relief, 2 seabed).
+// In margin mode channel 0 is the coast distance with the land elements joined by a smooth minimum at least
+// `margin smooth` metres wide (header 14): the distance a sea floor is built on, without the crease a hard
+// minimum leaves on the line between two coasts. Only the sea floor reads it; the coast is the coast mode's.
+//
+// Parameters: 0 block offset, 1 mode (0 coast, 1 relief, 2 seabed, 3 margin).
 
 #version 460
 
@@ -228,7 +232,10 @@ void main() {
         count  = uint(At(data, offsets + b + 1u)) - s;
     }
 
-    float d    = reach;
+    // The open sea's value: past `reach`, and in the margin mode past its smoothing too, so the smooth
+    // minimum never blends with it.
+    float top  = reach + (ParamUint(1) == 3u ? At(data, block + 14u) : 0.0);
+    float d    = top;
     float best = 1e30;
     float id   = 0.0;
     for (uint i = 0u; i < count; ++i) {
@@ -239,6 +246,9 @@ void main() {
         }
         float dist = ElementDistance(data, e, points, p, reach);
         float k    = At(data, e + 20u);
+        if (ParamUint(1) == 3u && op < 0.5) {
+            k = max(k, At(data, block + 14u));
+        }
         if (op < 0.5) {
             d = SmoothMin(d, dist, k);
             if (dist < best) {
@@ -255,9 +265,9 @@ void main() {
         }
         // Held at every step, so an element whose bounding circle is `reach + k` away from a sample
         // changes nothing there and the bins may leave it out.
-        d = clamp(d, -reach, reach);
+        d = clamp(d, -reach, top);
     }
-    float value = d;
+    float value = min(d, reach);
     if (ParamUint(1) == 1u) {
         // Each land element containing the sample raises its profile over its own distance inland, held
         // to the set's (so a bay or a lake cut later brings it down to the shore); the profiles join by a
@@ -299,10 +309,12 @@ void main() {
                 }
             } else if (op < 0.5 && At(data, e + 37u) > 0.0) {
                 float t = (ElementDistance(data, e, points, p, reach) - At(data, e + 38u)) / At(data, e + 39u);
-                trench  = max(trench, At(data, e + 37u) * exp(-0.5 * t * t));
+                // Joined as a 4-norm, a smooth maximum with no bias where the others are nothing, so neighbouring
+                // islands' trenches meet without a facet between them.
+                trench += pow(At(data, e + 37u) * exp(-0.5 * t * t), 4.0);
             }
         }
-        value = raise - trench;
+        value = raise - pow(trench, 0.25);
     }
     if (WantsChannel(0u)) {
         StoreScalar(0u, index, value);

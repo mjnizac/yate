@@ -385,7 +385,7 @@ public:
     [[nodiscard]] Result<Value> AddWater(Value position, Value aux, u32_t block, u32_t receiver, WaterMode mode,
                                          SourceLocation location);
     /// What a `Lands` node computes from its block.
-    enum class LandsMode : u32_t { Coast = 0, Relief, Seabed };
+    enum class LandsMode : u32_t { Coast = 0, Relief, Seabed, Margin };
     /// The shapes of the block at `block` (see `AddGridBlock` and `lands.comp.glsl`) at `position`.
     [[nodiscard]] Result<Value> AddLands(Value position, u32_t block, LandsMode mode, SourceLocation location);
     [[nodiscard]] Result<Value> AddGrid(Value position, std::span<const f32_t> values,

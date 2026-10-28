@@ -25,6 +25,30 @@ namespace {
 
 constexpr const char* kDirectory = "out/test_compose";
 
+// Lua the scatter cases check with: `expect`, the elements a scatter generated, and that land elements keep
+// `spacing` between their bounding circles.
+constexpr const char* kScatterChecks = R"(
+local function expect(ok, what) if not ok then error(what, 2) end end
+local function generated(land, id)
+    local out = {}
+    for _, e in ipairs(land.info.elements) do
+        if type(e.id) == "string" and e.id:sub(1, #id + 1) == id .. "/" then out[#out + 1] = e end
+    end
+    return out
+end
+local function apart(elements, spacing)
+    for i = 1, #elements do
+        for j = i + 1, #elements do
+            local a, b = elements[i], elements[j]
+            if a.kind == "land" and b.kind == "land" then
+                local d = math.sqrt((a.at[1] - b.at[1]) ^ 2 + (a.at[2] - b.at[2]) ^ 2)
+                expect(d >= a.radius + b.radius + spacing - 1e-6, tostring(a.id) .. " and " .. tostring(b.id) .. " are " .. d .. " m apart")
+            end
+        end
+    end
+end
+)";
+
 [[nodiscard]] std::string Write(const char* name, std::string_view source) {
     const std::string path = std::string(kDirectory) + "/" + name + ".lua";
     if (std::FILE* file = std::fopen(path.c_str(), "wb"); file != nullptr) {
@@ -315,6 +339,147 @@ void TestPresets() {
     CHECK(!needs && std::string_view{needs.error().Format().data()}.find("needs a 'preset'") != std::string_view::npos);
 }
 
+/// Runs `body`, Lua that builds `land` and may `error()` on what it checks, and returns its outputs.
+[[nodiscard]] Status RunBody(Graph& graph, const char* name, std::string_view body) {
+    const std::string source = std::string(kScatterChecks) + "return function(params)\n" + std::string(body)
+                             + "\n    return land:outputs{ 'coast_sdf', 'region_id', 'land_mask', 'land_height' }\nend\n";
+    const std::string      path = Write(name, source);
+    lua::ScriptEnvironment environment;
+    environment.maxX = environment.maxZ = 1000.0;
+    return lua::RunScript(graph, path, environment);
+}
+
+void TestScatter() {
+    test::Section("a scatter makes the islands asked for, apart, stable as the count grows, and the same in any window");
+    struct Case {
+        const char* name;
+        const char* body;
+    };
+    const Case cases[] = {
+        // N islands of a range of areas, the spacing kept between every pair and from the declared land.
+        {"scatter_count", R"(
+    local land = Lands.Compose{ seed = 3, frame = { size = 48000 }, profile = 'dome', elements = {
+        { id = 'main', shape = 'circle', radius = 5000 },
+        { id = 'isles', shape = 'radial', scatter = { count = 9, area = { 2e6, 20e6 }, spacing = 1200, margin = 1500 } } } }
+    local isles = generated(land, 'isles')
+    expect(#isles == 9, 'placed ' .. #isles .. ' of 9')
+    for _, e in ipairs(isles) do expect(e.area >= 2e6 * 0.999 and e.area <= 20e6 * 1.001, e.id .. ' area ' .. e.area) end
+    apart(land.info.elements, 1200)
+    expect(land.info.scatters.isles.skipped == 0, 'skipped some'))"},
+        // One more asked for leaves the first nine where they were.
+        {"scatter_stable", R"(
+    local function build(n)
+        return Lands.Compose{ seed = 3, frame = { size = 48000 }, profile = 'dome', elements = {
+            { id = 'isles', shape = 'radial', scatter = { count = n, area = { 2e6, 20e6 }, spacing = 1200 } } } }
+    end
+    local a, land = generated(build(9), 'isles'), build(10)
+    local b = generated(land, 'isles')
+    expect(#b == 10, 'placed ' .. #b .. ' of 10')
+    for k = 1, 9 do
+        expect(a[k].id == b[k].id and a[k].at[1] == b[k].at[1] and a[k].at[2] == b[k].at[2] and a[k].area == b[k].area,
+               a[k].id .. ' moved when one more was asked for')
+    end)"},
+        // A share of the map: the scatter's sizes are scaled until the land is 30 %.
+        {"scatter_fraction", R"(
+    local land = Lands.Compose{ seed = 5, frame = { size = 48000 }, profile = 'dome', land_fraction = 0.3, elements = {
+        { id = 'isles', shape = 'radial', scatter = { count = 30, area = { 2e6, 20e6 }, spacing = 800 } } } }
+    expect(math.abs(land.info.land_fraction - 0.3) < 0.02, 'land fraction ' .. land.info.land_fraction))"},
+        // Patterns: a chain shrinking along its path, a ring, islands at given places, clusters, a grid.
+        {"scatter_patterns", R"(
+    local land = Lands.Compose{ seed = 7, frame = { size = 96000 }, profile = 'cone', elements = {
+        { id = 'chain', shape = 'ellipse', aspect = 1.6, scatter = { pattern = 'line', count = 6, area = { 8e6, 8e6 },
+          decay = 0.8, spacing = 600, path = { { -40000, -30000 }, { 0, -25000 }, { 40000, -35000 } } } },
+        { id = 'ring', shape = 'circle', scatter = { pattern = 'ring', count = 8, area = { 1e6, 1e6 }, center = { 25000, 20000 },
+          radius = 9000 } },
+        { id = 'given', shape = 'circle', scatter = { pattern = 'centers', centers = { { -30000, 25000, 4e6 }, { -20000, 30000, 2e6 } } } },
+        { id = 'clusters', shape = 'radial', scatter = { pattern = 'cluster', count = 10, clusters = 2, spread = 3000,
+          area = { 0.5e6, 3e6 }, spacing = 300 } } } }
+    local chain = generated(land, 'chain')
+    expect(#chain == 6, 'chain placed ' .. #chain)
+    for k = 2, #chain do expect(chain[k].area < chain[k - 1].area, 'the chain does not shrink along its path') end
+    expect(#generated(land, 'ring') == 8, 'ring placed ' .. #generated(land, 'ring'))
+    local given = generated(land, 'given')
+    expect(#given == 2 and given[1].at[1] == -30000 and math.abs(given[1].area - 4e6) < 1, 'centers not where given')
+    expect(#generated(land, 'clusters') >= 8, 'clusters placed ' .. #generated(land, 'clusters'))
+    apart(land.info.elements, 0))"},
+        // The unbounded world: two windows sharing world cells keep the same islands in them.
+        {"scatter_world", R"(
+    local function build(region)
+        return Lands.Compose{ seed = 9, frame = { world_cell = 16000, region = region }, profile = 'dome', elements = {
+            { id = 'isles', shape = 'radial', scatter = { count = 3, area = { 2e6, 12e6 }, spacing = 1000 } } } }
+    end
+    local a = generated(build({ 0, 0, 64000, 64000 }), 'isles')
+    local b = generated(build({ 32000, 0, 96000, 64000 }), 'isles')
+    local seen, shared = {}, 0
+    for _, e in ipairs(a) do seen[e.id] = e end
+    for _, e in ipairs(b) do
+        local o = seen[e.id]
+        if o then
+            shared = shared + 1
+            expect(o.at[1] == e.at[1] and o.at[2] == e.at[2] and o.area == e.area, e.id .. ' differs between windows')
+        elseif e.at[1] >= 32000 and e.at[1] < 64000 then
+            error(e.id .. ' is in both windows but only one has it')
+        end
+    end
+    expect(shared >= 6, 'only ' .. shared .. ' islands shared')
+    local land = build({ 0, 0, 64000, 64000 }))"},
+    };
+    for (const Case& c : cases) {
+        Graph        graph;
+        const Status ran = RunBody(graph, c.name, c.body);
+        ++test::g_checks;
+        if (!ran) {
+            ++test::g_failures;
+            std::printf("FAIL %s: %s\n", c.name, ran.error().Format().data());
+        } else {
+            std::printf("     %s\n", c.name);
+        }
+    }
+}
+
+void TestArchipelagoPresets() {
+    test::Section("every archipelago preset places nearly all its islands, and takes count, area and edits");
+    struct Case {
+        const char* name;
+        const char* body;
+    };
+    const Case cases[] = {
+        {"arch_presets", R"(
+    for _, name in ipairs({ 'scattered', 'cluster', 'hotspot', 'arc', 'atolls', 'shattered', 'chain' }) do
+        local land = Lands.Archipelago{ preset = name, seed = 2, size = 48000 }
+        for id, s in pairs(land.info.scatters) do
+            expect(s.placed >= 0.75 * (s.placed + s.skipped), name .. ': ' .. id .. ' placed ' .. s.placed .. ' of ' .. (s.placed + s.skipped))
+        end
+    end
+    local land = Lands.Archipelago{ preset = 'scattered', seed = 2, size = 48000 })"},
+        {"arch_request", R"(
+    -- "Six islands of 3 to 5 km2, and make the third one larger."
+    local land = Lands.Archipelago{ preset = 'scattered', seed = 2, size = 48000, count = 6, area = { 3e6, 5e6 },
+                                    edit = { ['isles/3'] = { scale = 1.3 } } }
+    local isles = generated(land, 'isles')
+    expect(#isles == 6, 'placed ' .. #isles)
+    for _, e in ipairs(isles) do
+        local hi = e.id == 'isles/3' and 5e6 * 1.69 or 5e6
+        expect(e.area >= 3e6 * 0.999 and e.area <= hi * 1.001, e.id .. ' area ' .. e.area)
+    end
+    expect(generated(land, 'isles')[3].area > 3e6 * 1.69 * 0.999, 'isles/3 did not grow'))"},
+    };
+    for (const Case& c : cases) {
+        Graph        graph;
+        const Status ran = RunBody(graph, c.name, c.body);
+        ++test::g_checks;
+        if (!ran) {
+            ++test::g_failures;
+            std::printf("FAIL %s: %s\n", c.name, ran.error().Format().data());
+        } else {
+            std::printf("     %s\n", c.name);
+        }
+    }
+    Graph        retired;
+    const Status refused = Run(retired, "arch_retired", "{ layout = 'arc' }", "Lands.Archipelago");
+    CHECK(!refused && std::string_view{refused.error().Format().data()}.find("no longer takes 'layout'") != std::string_view::npos);
+}
+
 void TestErrors() {
     test::Section("a wrong composition is refused with what was expected");
     struct Case {
@@ -362,6 +527,8 @@ int main() {
     TestSeabed();
     TestEditsAndReport();
     TestPresets();
+    TestScatter();
+    TestArchipelagoPresets();
     TestErrors();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();
