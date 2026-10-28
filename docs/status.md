@@ -54,10 +54,13 @@ presets in `Lands.Island` (`high_island`, `low_island`, `volcano`, `caldera`, `r
 elements (Poisson in a bounded map, hash-priority Poisson per world cell in the unbounded one; patterns
 uniform, cluster, line, arc, ring, grid, centers; `land_fraction`; classes by area) and the presets of
 `Lands.Archipelago` (`scattered`, `cluster`, `hotspot`, `arc`, `atolls`, `shattered`, `chain`).
-`Lands.Continent` is
-still the grid-built macro (bodies with spines, drainage by `Erosion.StreamPower`, sea
-level by quantile). Golden datasets `lands_*` (21); previews in `docs/images/lands/`. The plan is in
-`docs/lands_plan.md` (local): phases 1 (islands) and 2 (archipelagos) are done, 3 (continents) is next.
+Ranges from one `ridge` element (crest pieces meeting in saddles, spurs on alternate sides) and other relief
+elements that change no coast; water bodies classed in the report (`sea`, `lake`, `ocean` or the role);
+`frame.edge_margin` and positions as percentages. `Lands.Continent` builds the land presets as compositions
+(`continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`, `peninsula`, `isthmus`, `fractious`,
+`taklamakan`, `all_land`, `lakeland`, `ocean_only`); the grid-built macro is retired. Golden datasets `lands_*`
+(32); previews in `docs/images/lands/`. The plan is in `docs/lands_plan.md` (local): phases 1 (islands),
+2 (archipelagos) and 3 (continents and other lands) are done, 4 (detail on the shapes) is next.
 
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.
@@ -76,8 +79,8 @@ Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has
 `test_output_files`, `test_lands`, `test_relief`, `test_hydrology`, `test_water`, `test_compose`,
 `test_cli`, `test_geometry`, `test_library`, `test_compute_roundtrip`, `test_noise`, `test_kernels`,
 `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. On the last run Release passed all but the
-intermittent `volume_r3` timing in `test_datasets` and Debug all but `test_viewer`'s "distance picks the
-level" (see known defects). Run one
+`volume_r3` timing in `test_datasets` and, in most runs, `test_viewer`'s "distance picks the level", and Debug
+all but that `test_viewer` check (see known defects). Run one
 suite at a time: two runs share `out/` and fail each other.
 
 Four of those look at something the engine did not itself produce, which is the property the earlier
@@ -134,8 +137,8 @@ Open, with the measurements, in `docs/todo.md`:
   it. Adding diagonal neighbours was tried and measured worse.
 * **`volume_r3` timing in `test_datasets`** runs 21 to 80 % over its 20 ms baseline in Release, against a
   25 % failure threshold; the baseline or the tolerance needs a decision.
-* **`test_viewer` fails in Debug** on "distance picks the level" (`MissingTiles() == 0`), before and after
-  the lands work, on this machine; Release passes. Not investigated (todo).
+* **`test_viewer` fails** on "distance picks the level" (`MissingTiles() == 0`): in every Debug run and, from
+  2026-10-28, in most Release runs too (its own noise script, nothing of the lands). Not investigated (todo).
 * **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not
   reproduce locally; Linux has never built. Both need the log of the failing step.
 * **Water at the ring's edge** shows a plate where the surface stands above a lower floor (todo).

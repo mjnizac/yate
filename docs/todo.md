@@ -114,9 +114,9 @@ viewer screenshot. Each item is done when it is in `ctest`.
 
 ## Viewer and performance
 
-- [ ] **`test_viewer` fails in Debug** on "distance picks the level" (`MissingTiles() == 0`), also without
-      the lands work; Release passes. Find whether the Debug build is too slow for the frame budget the
-      test allows or tiles are really missing.
+- [ ] **`test_viewer` fails** on "distance picks the level" (`MissingTiles() == 0`) in every Debug run and,
+      from 2026-10-28, in most Release runs, with its own noise script. Find whether the build is too slow
+      for the frame budget the test allows or tiles are really missing.
 
 - [ ] **Tiles are evaluated one submit and wait at a time** (`EvaluateTile`): batch several tiles per
       submission and add them to the cache when their timeline value is reached.
@@ -175,9 +175,18 @@ The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail af
       water scatters, atolls with their lagoons; the presets of `Lands.Archipelago`; 10 new goldens.
 - [x] **The margin creased on the medial axis** between two coasts: the sea floor is now built on the
       distance with the land joined by a smooth minimum (the `margin` mode), and trenches join as a 4-norm.
-- [ ] **Phase 3, continents and other lands**: ridges with spurs and saddles, Azgaar-style presets as
-      compositions (mediterranean, pangea, peninsula, isthmus, inland sea...), `edge_margin`;
-      `Lands.Continent` rebuilt; the references measured.
+- [x] **Phase 3, continents and other lands**: `ridge` elements (crest pieces meeting in saddles, spurs every
+      `spacing`) and relief elements, land profiles joined by their maximum, water bodies classed in the
+      report, `frame.edge_margin` and percentages, the land presets of `Lands.Continent` (the grid-built
+      macro retired), the references measured into bands in `test_compose`; 11 new goldens.
+- [ ] **Phase 4, detail on the shapes** (`docs/lands_plan.md`): the presets' coast dimension (1.0 to 1.2
+      against 1.02 to 1.39 on the references) and hypsometric integral (0.10 on the continents against 0.15
+      to 0.62) are short of the references' bands, as forms without detail are; `test_compose` prints both.
+- [ ] **The archipelago references are painted maps**, not heightmaps: no band for that type.
+- [ ] **A lake's shore cliff stands above a low plain round it** (`all_land.lua`, `lake_b`: a ring 17 m deep):
+      the cliff height is not held under the land behind it, as the land presets do with `cliff_height`.
+- [ ] **Debug shaders are built unoptimized** (`-g` against `-O`), so a golden sample on a discontinuity can
+      differ between the two by one step; `lands_mediterranean` is sampled on a shifted grid for it.
 - [ ] **Bounding circles are crude for long shapes** (capsules, bands): a scatter of channels keeps them
       further apart than their outlines need, and fewer fit.
 - [ ] **Uniform and cluster in the world keep fewer than `count`**: Wei's rule in one pass drops every
@@ -185,8 +194,6 @@ The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail af
 - [ ] **A rim island's interior is a closed basin**: what the profile says, but nothing drains it yet.
 - [ ] **The report samples 3 x 65 k points on the CPU** (60 to 130 ms of script time); fine for exports, it
       is paid again at every level change in the viewer.
-- [ ] **No real references measured yet**: the heightmaps in `docs/references/{islands,archipelagos,
-      continents}` have not been run through `terrain_metrics`; per-type acceptance numbers wait for it.
 - [ ] **Coast type has no fetch**: exposure is the normal against one wave direction.
 - [ ] **No lakes or rivers as water in the Lands macros**: see "The macros do not drain yet".
 

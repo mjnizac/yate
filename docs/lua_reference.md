@@ -35,6 +35,7 @@ Then copy the closest example, run it in the viewer, change one thing at a time.
 | Tall sea cliffs, an escarpment | `terrains/cliffs.lua` | `top`, `columns`, `bays` |
 | A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
 | A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
+| Islands, archipelagos, continents, inland seas, all land with lakes | `lands/*.lua` (`Lands.Island`, `Lands.Archipelago`, `Lands.Continent`, `Lands.Compose`) | the preset, then `edit` by id (§10) |
 
 **Macros.** Two terrains are packaged as one call each, in the prelude: `Ranges.Carve` and
 `Ranges.Finish` for mountain ranges (the alpine macro, §10) and `Dunes.Field` for sand seas (the dune
@@ -1255,7 +1256,7 @@ return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 | Key | Meaning |
 | --- | --- |
 | `frame` | `{ size = m }`, a map centred on the origin, or `{ world_cell = m, region = { x0, z0, x1, z1 } }` for the unbounded world: the coast's and the shore's scales follow the world cell, never the window, so exports of any window agree, and `region` is only where the report measures. `edge_margin = m` keeps every scatter that metres from a bounded map's edge. In a bounded map any position (`at`, `from`, `to`, `points`, a scatter's `center`, `path` and `centers`, a ridge's `points`) may be a percentage of the map from its corner: `at = { "30%", "75%" }` |
-| `elements` | `Shapes.Set` elements, plus `area` (square metres, sizes the shape from its closed-form area), `aspect` (x over z), `role` (`"lagoon"` makes a water element shallow; any other text is a label), `margin` (`"active"` adds a trench at the foot of the slope, or `{ depth, offset, width }`) and `profile` as a preset |
+| `elements` | `Shapes.Set` elements, plus `area` (square metres, sizes the shape from its closed-form area), `aspect` (x over z), `role` (`"lagoon"` makes a water element shallow; any other text is a label), `margin` (`"active"` adds a trench at the foot of the slope, or `{ depth, offset, width }`), `profile` as a preset, `relief = true` (an element that changes no coast and adds its profile to the land under it: a massif, a negative dome for a basin) and `ridge` (below) |
 | `profile` | the default profile of land elements: `dome`, `cone`, `plateau`, `rim` (a crest near the coast over a lower interior), `caldera` (the crest round a floor below the sea), `tilt` (a plane rising towards `direction`) or `flat`, or `{ "rim", inner = 140, ... }` to set its numbers. Widths default to fractions of the element's inscribed radius and heights to `height`. A land element with no profile is an error |
 | `height` | the profiles' height in metres; a seabed element's is half the abyssal depth |
 | `hypsometry` | `low`, `balanced` (default) or `high`: a fixed monotone curve of the height, so drainage order is kept |
@@ -1304,7 +1305,7 @@ proposes candidates from its own hash and one stays when no conflicting candidat
 parallel Poisson rule in one pass), so two windows over the same cells keep the same islands. The other
 patterns are explicit geometry and work anywhere. Islands are classed by measured area in the report:
 `continent` (a tenth of a bounded map, 10 000 km2 in the world), `island` (a thousandth, 1 km2) or `isle`;
-`classes = { continent = m2, island = m2 }` overrides them.
+`classes = { continent = m2, island = m2, sea = m2 }` overrides them. Water bodies are reported too (`land.info.waters`, `script_report.lands.waters`): each connected body with its area, whether it touches the frame, the water elements whose centre falls in it, and its class: the `role` of the first of those, else `ocean` if it touches the frame, `sea` over a hundredth of a bounded map (1000 km2 in the world), else `lake`.
 
 The sea floor is built on the coast distance with the land joined by a smooth minimum half the shelf and
 slope wide, so it has no crease midway between two coasts and a strait between near islands is shallow.
@@ -1321,6 +1322,39 @@ default; `area` in square metres overrides the preset's, which are fractions of 
 | `atolls` | rings of reef round lagoons | `atolls/N`, `atolls/N/lagoon` |
 | `shattered` | a land block cut by scattered channels | `land`, `channels/N` |
 | `chain` | islands side by side along a band | `chain/N` |
+
+**Ridge: a range from one element.** `{ id = "range", ridge = { points = { { x, z }, ... }, width = m, height = m,
+saddles = 3, spurs = true, spacing = m } }` stands for the relief elements of a mountain range along `points`:
+the crest in `saddles + 1` pieces (`"range/crest/N"`), each a band tapering to 0.4 of `width` at its ends so the
+pieces meet in saddles, the highest exactly `height` over the land and the others 0.8 to 1 of it, and spurs
+(`"range/spur/N"`) every `spacing` metres along it (1.2 widths by default), on alternate sides and turned 20 to
+40 degrees from the crest's normal, 0.55 of its height. Relief changes no coast: where a range runs out to sea
+it stops at the shore.
+
+**`Lands.Continent{ preset = ..., seed, size, land_fraction, height }`** builds a continent or any other land,
+and `Lands.Preset{ name = ... }` returns its composition to change before building. Sizes are fractions of
+the map; the whole composition turns by an angle drawn from the seed (not `taklamakan`, whose ranges follow
+the map's edges). The land is a low plateau (0.08 of `height`) and the ranges carry the relief.
+
+| Preset | What | Ids | Map, height |
+| --- | --- | --- | --- |
+| `continent` | a superellipse block with three lobes, two gulfs on its shore, a main range and lower hills | `main`, `lobe1`..`3`, `gulf1`, `gulf2`, `range/...`, `hills/...` | 192 km, 2200 m |
+| `pangea` | four blocks round a central band, two inland seas, two ranges | `block1`..`4`, `band`, `sea1`, `sea2`, `range1/...`, `range2/...` | 192 km, 2000 m |
+| `old_world` | three landmasses apart by a winding strait | `block1`..`3`, `strait`, `range1/...`, `range2/...` | 192 km, 2000 m |
+| `mediterranean` | land all round a long sea with islands in it, ranges along both shores | `land`, `sea`, `isles/N`, `north/...`, `south/...` | 96 km, 1600 m |
+| `inland_sea` | a continent with a closed sea inside | `land`, `sea`, `range/...` | 96 km, 1400 m |
+| `peninsula` | a mainland along one side, a peninsula with a spine, islands off its tip | `mainland`, `peninsula`, `isles/N`, `spine/...` | 48 km, 900 m |
+| `isthmus` | two landmasses joined by a narrow, low isthmus | `west`, `east`, `isthmus`, `west_range/...`, `east_range/...` | 48 km, 700 m |
+| `fractious` | many pieces merging into each other, cut by channels | `pieces/N`, `channels/N` | 96 km, 900 m |
+| `taklamakan` | all land: a closed basin ringed by ranges on four sides | `land`, `north/...`, `south/...`, `west/...`, `east/...`, `basin` | 96 km, 2400 m |
+| `all_land` | all land: a plain, an upland and hills (`land_mask` is 1 everywhere) | `land`, `upland`, `hills/...` | 24 km, 500 m |
+| `lakeland` | all land with twelve lakes | `land`, `lakes/N` | 24 km, 120 m |
+| `ocean_only` | no land: seamounts and a guyot | `seamounts/N`, `guyot` | 48 km |
+
+`test_compose` holds them to what they promise: a ridge's crest within 2 % of `height` and its spurs within
+10 % of `spacing`, the peninsula within 5 % of its drawn width, the lakes' areas, one inland `sea` that
+touches no frame, and the land shares against bands measured on reference heightmaps (the coast's dimension
+and the hypsometric integral are below the references until the shapes get their detail).
 
 `Lands.Island`, `Lands.Archipelago` and `Lands.Continent` no longer take the old keys of the grid-built macro
 (`layout`, `roughness`, `dissection`, `cells`, `aspect`; for an island also `count`, `area`, `areas`) and say
@@ -1345,12 +1379,16 @@ resolution suited to their size: `island_dome`, `island_rim`, `island_caldera`, 
 `island_tilt`, `island_low`, `island_volcano`, `atoll`, `all_land` (no ocean, with lakes), `ocean_only`
 (seamounts and a guyot), `infinite_islands` (anchored 100 km from the origin), `archipelago_*` (one per
 preset, and `archipelago_centers` for islands at given places), `infinite_archipelago` and `infinite_cluster`
+(world cells), one per land preset (`continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`,
+`peninsula`, `isthmus`, `fractious`, `taklamakan`, `lakeland`), `infinite_continents` and `infinite_lakeland`
 (world cells), plus `island.lua` and its
 variants for the presets. The viewer colours these terrains with `look = { palette = "coast" }`.
 
 ![Lands.Compose: a dome with a bay and a peninsula, cliffs over a lower interior, an atoll, all land with lakes](images/lands/compose.png)
 
 ![Lands.Archipelago: scattered, cluster, hotspot, arc, atolls, shattered, chain](images/lands/archipelagos.png)
+
+![Lands.Continent and the unbounded world: continent, pangea, old_world, mediterranean; inland_sea, peninsula, isthmus, fractious; taklamakan, lakeland, infinite_continents, infinite_lakeland](images/lands/continents.png)
 
 ---
 
