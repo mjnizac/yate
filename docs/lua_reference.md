@@ -1254,7 +1254,7 @@ return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 
 | Key | Meaning |
 | --- | --- |
-| `frame` | `{ size = m }`, a map centred on the origin, or `{ world_cell = m, region = { x0, z0, x1, z1 } }` for the unbounded world: the coast's and the shore's scales follow the world cell, never the window, so exports of any window agree, and `region` is only where the report measures |
+| `frame` | `{ size = m }`, a map centred on the origin, or `{ world_cell = m, region = { x0, z0, x1, z1 } }` for the unbounded world: the coast's and the shore's scales follow the world cell, never the window, so exports of any window agree, and `region` is only where the report measures. `edge_margin = m` keeps every scatter that metres from a bounded map's edge. In a bounded map any position (`at`, `from`, `to`, `points`, a scatter's `center`, `path` and `centers`, a ridge's `points`) may be a percentage of the map from its corner: `at = { "30%", "75%" }` |
 | `elements` | `Shapes.Set` elements, plus `area` (square metres, sizes the shape from its closed-form area), `aspect` (x over z), `role` (`"lagoon"` makes a water element shallow; any other text is a label), `margin` (`"active"` adds a trench at the foot of the slope, or `{ depth, offset, width }`) and `profile` as a preset |
 | `profile` | the default profile of land elements: `dome`, `cone`, `plateau`, `rim` (a crest near the coast over a lower interior), `caldera` (the crest round a floor below the sea), `tilt` (a plane rising towards `direction`) or `flat`, or `{ "rim", inner = 140, ... }` to set its numbers. Widths default to fractions of the element's inscribed radius and heights to `height`. A land element with no profile is an error |
 | `height` | the profiles' height in metres; a seabed element's is half the abyssal depth |
@@ -1291,7 +1291,7 @@ island when not given), and each island gets the id `"<id>/<slot>"`, which `edit
 | `scatter` key | Meaning |
 | --- | --- |
 | `count`, `area = { min, max }` | how many, and their areas in square metres; `distribution = "log"` (default: small ones outnumber large ones) or `"uniform"` |
-| `spacing`, `margin` | metres kept between bounding circles (and from the land declared around it); metres kept from the map's edge |
+| `spacing`, `margin` | metres kept between bounding circles (and from the land declared around it; negative lets them overlap and merge); metres kept from the map's edge (`frame.edge_margin` by default) |
 | `pattern` | `uniform` (dart throwing, Bridson's 30 tries a slot), `cluster` (`clusters`, `spread`: a Neyman-Scott process), `line` (`path`, `decay`: sizes falling along it, `wander`), `arc` (`center`, `radius`, `from_angle`, `to_angle`), `ring` (`center`, `radius`), `grid`, `centers` (`centers = { { x, z, area }, ... }`) |
 | `region` | a `Shapes.Set` element the centres must fall in |
 

@@ -1117,7 +1117,7 @@ local function scatter(e, id, ctx)
     end
 
     -- Bounded, or a pattern with its own geometry: slots in order.
-    local half = ctx.size * 0.5 - (spec.margin or 0.0)
+    local half = ctx.size * 0.5 - (spec.margin or ctx.edge_margin or 0.0)
     local function inside(x, z, r)
         if ctx.world_cell ~= nil then return true end
         return math.abs(x) + r <= half and math.abs(z) + r <= half
@@ -1302,6 +1302,39 @@ local function ridge(e, id, ctx)
     return entries
 end
 
+-- Positions given as fractions of a bounded map: `at = { "30%", "75%" }` is 30 % of the way across in x and
+-- 75 % in z from the map's corner (-size / 2). Resolved in place in a copy of the element: its placement,
+-- ends, points, and its scatter's and ridge's.
+local function percent(e, size)
+    local function value(v)
+        if type(v) == "string" and v:match("^%-?[%d%.]+%%$") then
+            return -0.5 * size + tonumber(v:sub(1, -2)) * 0.01 * size
+        end
+        return v
+    end
+    local function pair(p)
+        if type(p) ~= "table" then return p end
+        local out = {}
+        for k, v in pairs(p) do out[k] = (k <= 2) and value(v) or v end
+        return out
+    end
+    local function list(l)
+        if type(l) ~= "table" then return l end
+        local out = {}
+        for k, p in ipairs(l) do out[k] = pair(p) end
+        return out
+    end
+    e.at, e.from, e.to, e.points = pair(e.at), pair(e.from), pair(e.to), list(e.points)
+    for _, key in ipairs({ "scatter", "ridge" }) do
+        if type(e[key]) == "table" then
+            local copy = {}
+            for k, v in pairs(e[key]) do copy[k] = v end
+            copy.center, copy.path, copy.points, copy.centers = pair(copy.center), list(copy.path), list(copy.points), list(copy.centers)
+            e[key] = copy
+        end
+    end
+end
+
 -- Moves an element by (dx, dz): its ends if it has them, its placement otherwise (points are in the
 -- element's own space, so moving `at` moves them).
 local function moved(e, dx, dz)
@@ -1323,7 +1356,10 @@ local function edited(t, ctx)
     for i, e in ipairs(t.elements) do
         if type(e) == "table" and e.scatter == nil and e.ridge == nil and not e.water and not e.seabed and not e.relief
            and e.shape ~= "fill" then
-            local out = sized("Lands.Compose element " .. i, e)
+            local placed_ = {}
+            for key, value in pairs(e) do placed_[key] = value end
+            if ctx.world_cell == nil then percent(placed_, ctx.size) end
+            local out = sized("Lands.Compose element " .. i, placed_)
             local at_ = out.at or (out.from and { (out.from[1] + out.to[1]) * 0.5, (out.from[2] + out.to[2]) * 0.5 }) or { 0.0, 0.0 }
             if out.from then out.length = math.sqrt((out.to[1] - out.from[1]) ^ 2 + (out.to[2] - out.from[2]) ^ 2) end
             ctx.obstacles[#ctx.obstacles + 1] = { x = at_[1], z = at_[2], r = bound_of(out) }
@@ -1347,6 +1383,7 @@ local function edited(t, ctx)
         end
         local copy = {}
         for key, value in pairs(e) do copy[key] = value end
+        if ctx.world_cell == nil then percent(copy, ctx.size) end
         if copy.scatter ~= nil then
             local entries, placed, skipped = scatter(copy, tostring(id), ctx)
             ctx.scatters[tostring(id)] = { placed = placed, skipped = skipped }
@@ -1472,7 +1509,8 @@ function Lands.Compose(t)
     -- `land_fraction` (a bounded map) rescales what the scatters generate until the land they and the declared
     -- elements cover, by closed-form areas, is that share of the frame: a few passes, since a larger size can
     -- leave a slot without room.
-    local ctx = { seed = seed, size = size, window = window, world_cell = frame.world_cell, area_factor = 1.0 }
+    local ctx = { seed = seed, size = size, window = window, world_cell = frame.world_cell, area_factor = 1.0,
+                  edge_margin = frame.edge_margin }
     local source = edited(t, ctx)
     if t.land_fraction ~= nil then
         local f = t.land_fraction

@@ -520,6 +520,19 @@ void TestRidgeAndLands() {
     for k, v in ipairs(Terrain.Sample{ value = land.land_height, xs = mids.xs, zs = mids.zs, cell = 4 }) do
         expect(v > 100 + 400, spurs[k].id .. ' does not stand out: ' .. v)
     end)"},
+        {"percent_and_edge_margin", R"(
+    -- "An island at 25 % across and 75 % up, and the others 3 km from the edge."
+    local land = Lands.Compose{ seed = 4, frame = { size = 40000, edge_margin = 3000 }, profile = 'dome', elements = {
+        { id = 'here', shape = 'circle', radius = 2000, at = { '25%', '75%' } },
+        { id = 'isles', shape = 'circle', scatter = { count = 12, area = { 1e6, 4e6 }, spacing = 500 } } } }
+    local isles = generated(land, 'isles')
+    expect(#isles == 12, 'placed ' .. #isles)
+    for _, e in ipairs(isles) do
+        expect(math.max(math.abs(e.at[1]), math.abs(e.at[2])) + e.radius <= 17000 + 1e-6, e.id .. ' is within 3 km of the edge')
+    end
+    for _, e in ipairs(land.info.elements) do
+        if e.id == 'here' then expect(e.at[1] == -10000 and e.at[2] == 10000, 'here is at ' .. e.at[1] .. ', ' .. e.at[2]) end
+    end)"},
         {"lands_all_land", R"(
     -- All land: the mask is 1 everywhere.
     local land = Lands.Compose(Lands.Preset{ name = 'all_land', seed = 2 })
