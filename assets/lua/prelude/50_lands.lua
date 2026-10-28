@@ -1596,6 +1596,7 @@ function Lands.Compose(t)
     local classes = {
         continent = (t.classes and t.classes.continent) or (frame.world_cell and 1e10 or size * size * 0.1),
         island = (t.classes and t.classes.island) or (frame.world_cell and 1e6 or size * size * 0.001),
+        sea = (t.classes and t.classes.sea) or (frame.world_cell and 1e9 or size * size * 0.01),
     }
     -- The elements as resolved, reported to the export's metadata: what was asked for (the shape's
     -- closed-form area) and what came out of the composition (area, centroid and highest profile by id,
@@ -1640,9 +1641,51 @@ function Lands.Compose(t)
         end
         listed[i] = row
     end
+    -- Water bodies: connected components of the water on the same grid, each with the water elements whose
+    -- centre falls in it. The role of the first of those names it; otherwise `ocean` if it touches the frame
+    -- (in the unbounded world, the window), `sea` over `classes.sea`, else `lake`.
+    local waters, label = {}, {}
+    for k = 1, nx * nz do
+        if sampled.d[k] >= 0.0 and not label[k] then
+            local body = { cells = 0, touches_edge = false, ids = {} }
+            waters[#waters + 1] = body
+            local stack = { k }
+            label[k] = body
+            while #stack > 0 do
+                local q = table.remove(stack)
+                local x, z = (q - 1) % nx, (q - 1) // nx
+                body.cells = body.cells + 1
+                body.touches_edge = body.touches_edge or x == 0 or z == 0 or x == nx - 1 or z == nz - 1
+                for _, n in ipairs({ x > 0 and q - 1, x < nx - 1 and q + 1, z > 0 and q - nx, z < nz - 1 and q + nx }) do
+                    if n and not label[n] and sampled.d[n] >= 0.0 then
+                        label[n] = body
+                        stack[#stack + 1] = n
+                    end
+                end
+            end
+        end
+    end
+    for i, entry in ipairs(source) do
+        if elements[i].water then
+            local x = math.floor((listed[i].at[1] - window[1]) / cell)
+            local z = math.floor((listed[i].at[2] - window[2]) / cell)
+            local body = x >= 0 and z >= 0 and x < nx and z < nz and label[z * nx + x + 1]
+            if body then
+                body.ids[#body.ids + 1] = names[i]
+                body.role = body.role or entry.e.role
+            end
+        end
+    end
+    for _, body in ipairs(waters) do
+        body.area = body.cells * cell * cell
+        body.class = body.role or (body.touches_edge and "ocean") or (body.area >= classes.sea and "sea") or "lake"
+        body.cells, body.role = nil, nil
+        if #body.ids == 0 then body.ids = nil end
+    end
+    table.sort(waters, function(a, b) return a.area > b.area end)
     engine.report("lands", {
         frame = frame, window = window, land_fraction = land_cells / (nx * nz), cell = cell, elements = listed,
-        scatters = ctx.scatters, classes = classes,
+        waters = waters, scatters = ctx.scatters, classes = classes,
     })
 
     return finish{
@@ -1651,7 +1694,7 @@ function Lands.Compose(t)
         ground = ground, gullies = false, additive = true, lagoon = lagoon, seabed = floor.value, margin_sdf = joined.value,
         shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
         info = { size = size, extent = size * 0.5, regions = #elements, ids = names, elements = listed,
-                 scatters = ctx.scatters, land_fraction = land_cells / (nx * nz) },
+                 scatters = ctx.scatters, waters = waters, land_fraction = land_cells / (nx * nz) },
     }
 end
 
@@ -1903,6 +1946,181 @@ local function archipelago_preset(t)
     }
 end
 
+-- Continents and other lands: Azgaar's heightmap templates rebuilt from shapes (blocks, lobes, ranges with
+-- spurs, gulfs, inland seas, straits), plus land with no sea and sea with no land. The land rises little on
+-- its own (a low plateau) and the ranges carry the relief; sizes are fractions of the map.
+local LAND_PRESETS = {
+    continent     = { size = 192000, height = 2200, coast = "mixed" },
+    pangea        = { size = 192000, height = 2000, coast = "mixed" },
+    old_world     = { size = 192000, height = 2000, coast = "mixed" },
+    mediterranean = { size = 96000, height = 1600, coast = "rocky" },
+    inland_sea    = { size = 96000, height = 1400, coast = "mixed" },
+    peninsula     = { size = 48000, height = 900, coast = "rocky" },
+    isthmus       = { size = 48000, height = 700, coast = "mixed" },
+    fractious     = { size = 96000, height = 900, coast = "rocky" },
+    taklamakan    = { size = 96000, height = 2400, coast = "mixed" },
+    all_land      = { size = 24000, height = 500, coast = "mixed" },
+    lakeland      = { size = 24000, height = 120, coast = "sedimentary" },
+    ocean_only    = { size = 48000, height = 100, coast = "mixed" },
+}
+
+local function land_preset(t)
+    local p = LAND_PRESETS[t.name]
+    local seed, size = t.seed or 0, t.size or p.size
+    local height = t.height or p.height
+    local h = engine.hasher(seed + 11000)
+    -- The ranges of the closed basin follow the map's edges; the other lands turn freely.
+    local turn = t.name == "taklamakan" and 0.0 or h(1, 1) * 360.0
+    local a = math.rad(turn)
+    local c, s = math.cos(a), math.sin(a)
+    local s2 = size * size
+    -- A point `u` along and `v` across the main axis, in fractions of the map.
+    local function axis(u, v) return { (c * u - s * v) * size, (s * u + c * v) * size } end
+    local function range(id, u0, v0, u1, v1, width, high, saddles)
+        local m = { (u0 + u1) * 0.5 + 0.03 * (h(salt_of(id), 1) - 0.5), (v0 + v1) * 0.5 + 0.04 * (h(salt_of(id), 2) - 0.5) }
+        return { id = id, ridge = { points = { axis(u0, v0), axis(m[1], m[2]), axis(u1, v1) }, width = width * size,
+                                   height = high * height, saddles = saddles or 3 } }
+    end
+    -- The lowland rises over the distance the shore's cliff fades in (Compose's size * 0.01), and stands above
+    -- that cliff, so no trough runs behind the coast.
+    local low = { "plateau", height = height * 0.08, edge = size * 0.01 }
+    local elements, fraction = {}, t.land_fraction
+    if t.name == "continent" then
+        -- A block with lobes, gulfs and two ranges, the main one along its long axis.
+        elements = { { id = "main", shape = "superellipse", area = s2 * 0.26, aspect = 1.5, exponent = 3, rotation = turn } }
+        -- Lobes and gulfs at directions 70 degrees apart from the main axis, so no lobe covers a gulf.
+        for i, angle in ipairs({ 20.0, 160.0, 300.0 }) do
+            local b = math.rad(turn + angle + 20.0 * (h(10 + i, 1) - 0.5))
+            local r = size * (0.27 + 0.05 * h(10 + i, 2))
+            elements[#elements + 1] = { id = "lobe" .. i, shape = "radial", area = s2 * (0.03 + 0.04 * h(10 + i, 3)),
+                                        at = { math.cos(b) * r, math.sin(b) * r }, smooth = size * 0.05 }
+        end
+        -- The main block's radii (x over z 1.5, closed-form area 3.533 ab at exponent 3).
+        local ra = math.sqrt(0.26 / 3.533 * 1.5) * size
+        local rb = ra / 1.5
+        for i, angle in ipairs({ 90.0, 230.0 }) do
+            local phi = math.rad(angle + 20.0 * (h(20 + i, 1) - 0.5))
+            local b = math.rad(turn) + phi
+            -- Centred on the main block's shore, so the gulf opens to the sea.
+            local r = (math.abs(math.cos(phi) / ra) ^ 3 + math.abs(math.sin(phi) / rb) ^ 3) ^ (-1.0 / 3.0)
+            elements[#elements + 1] = { id = "gulf" .. i, shape = "ellipse", water = true, radii = { size * 0.06, size * 0.035 },
+                                        at = { math.cos(b) * r, math.sin(b) * r }, rotation = math.deg(b), smooth = size * 0.01 }
+        end
+        elements[#elements + 1] = range("range", -0.25, -0.04, 0.25, 0.03, 0.05, 1.0, 4)
+        elements[#elements + 1] = range("hills", -0.12, 0.13, 0.1, 0.17, 0.035, 0.45, 2)
+    elseif t.name == "pangea" then
+        -- Four blocks round a central band, joined; two inland seas; ranges where blocks meet.
+        for i, q in ipairs({ { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } }) do
+            elements[#elements + 1] = { id = "block" .. i, shape = "superellipse", area = s2 * 0.07, aspect = 1.3, exponent = 2.6,
+                                        at = axis(q[1] * 0.19, q[2] * 0.16), rotation = turn + 30.0 * (h(i, 1) - 0.5),
+                                        smooth = size * 0.06 }
+        end
+        elements[#elements + 1] = { id = "band", shape = "capsule", from = axis(-0.3, 0.0), to = axis(0.3, 0.0),
+                                    width = size * 0.16, smooth = size * 0.06 }
+        elements[#elements + 1] = { id = "sea1", shape = "ellipse", water = true, role = "sea", radii = { size * 0.06, size * 0.04 },
+                                    at = axis(-0.12, 0.09), rotation = turn }
+        elements[#elements + 1] = { id = "sea2", shape = "ellipse", water = true, role = "sea", radii = { size * 0.05, size * 0.035 },
+                                    at = axis(0.14, -0.1), rotation = turn + 40 }
+        elements[#elements + 1] = range("range1", -0.3, -0.02, 0.0, 0.03, 0.04, 1.0)
+        elements[#elements + 1] = range("range2", 0.05, 0.12, 0.3, 0.02, 0.035, 0.8)
+    elseif t.name == "old_world" then
+        -- Three blocks apart by straits, a range across the largest.
+        local blocks = { { -0.2, 0.08, 0.12 }, { 0.17, 0.1, 0.08 }, { 0.02, -0.2, 0.07 } }
+        for i, b in ipairs(blocks) do
+            elements[#elements + 1] = { id = "block" .. i, shape = "radial", area = s2 * b[3], at = axis(b[1], b[2]),
+                                        rotation = turn + 90 * i, smooth = size * 0.02 }
+        end
+        elements[#elements + 1] = { id = "strait", shape = "band", water = true, width = size * 0.03,
+                                    points = { axis(-0.05, 0.3), axis(-0.02, 0.0), axis(0.15, -0.08), axis(0.4, -0.1) } }
+        elements[#elements + 1] = range("range1", -0.32, 0.05, -0.08, 0.12, 0.04, 1.0)
+        elements[#elements + 1] = range("range2", 0.08, 0.15, 0.26, 0.05, 0.035, 0.7)
+    elseif t.name == "mediterranean" then
+        -- Land all round a long sea with islands in it, ranges along both shores.
+        elements = {
+            { id = "land", shape = "fill" },
+            { id = "sea", shape = "superellipse", water = true, role = "sea", radii = { size * 0.38, size * 0.15 }, exponent = 2.4,
+              rotation = turn },
+            { id = "isles", shape = "radial", profile = { "dome", height = height * 0.4 },
+              scatter = { count = 6, area = { s2 * 0.002, s2 * 0.008 }, spacing = size * 0.03,
+                          region = { shape = "ellipse", radii = { size * 0.3, size * 0.09 }, rotation = turn } } },
+            range("north", -0.33, 0.25, 0.33, 0.24, 0.05, 1.0),
+            range("south", -0.3, -0.26, 0.3, -0.25, 0.045, 0.75),
+        }
+    elseif t.name == "inland_sea" then
+        elements = {
+            { id = "land", shape = "superellipse", area = s2 * 0.45, aspect = 1.3, exponent = 3, rotation = turn },
+            { id = "sea", shape = "superellipse", water = true, role = "sea", area = s2 * 0.06, aspect = 1.6, exponent = 2.5,
+              rotation = turn + 20, at = axis(0.03, 0.02) },
+            range("range", -0.25, -0.2, 0.25, -0.17, 0.05, 1.0),
+        }
+    elseif t.name == "peninsula" then
+        -- A mainland along one side of the map, a peninsula from it, islands off its tip.
+        elements = {
+            { id = "mainland", shape = "box", size = { size * 1.2, size * 0.5 }, at = axis(0.0, -0.45), rotation = turn },
+            { id = "peninsula", shape = "band", smooth = size * 0.03,
+              points = { { axis(0.0, -0.22)[1], axis(0.0, -0.22)[2], size * 0.16 }, { axis(0.05, 0.05)[1], axis(0.05, 0.05)[2], size * 0.11 },
+                         { axis(-0.02, 0.26)[1], axis(-0.02, 0.26)[2], size * 0.07 } } },
+            { id = "isles", shape = "radial", profile = { "dome", height = height * 0.5 },
+              scatter = { pattern = "centers", centers = { { axis(0.02, 0.36)[1], axis(0.02, 0.36)[2], s2 * 0.004 },
+                                                           { axis(-0.09, 0.39)[1], axis(-0.09, 0.39)[2], s2 * 0.002 },
+                                                           { axis(0.1, 0.41)[1], axis(0.1, 0.41)[2], s2 * 0.0015 } } } },
+            range("spine", 0.0, -0.25, 0.0, 0.2, 0.05, 0.9, 2),
+        }
+    elseif t.name == "isthmus" then
+        elements = {
+            { id = "west", shape = "radial", area = s2 * 0.13, at = axis(-0.26, 0.04) },
+            { id = "east", shape = "radial", area = s2 * 0.13, at = axis(0.26, -0.04) },
+            { id = "isthmus", shape = "capsule", from = axis(-0.15, 0.02), to = axis(0.15, -0.02), width = size * 0.035,
+              smooth = size * 0.02 },
+            range("west_range", -0.36, -0.06, -0.18, 0.15, 0.04, 1.0, 2),
+            range("east_range", 0.17, -0.15, 0.36, 0.05, 0.04, 0.85, 2),
+        }
+    elseif t.name == "fractious" then
+        -- Many pieces of land merging into each other, cut by long channels.
+        elements = {
+            { id = "pieces", shape = "radial", smooth = size * 0.03, profile = { "dome", height = height * 0.6 },
+              scatter = { count = 14, area = { s2 * 0.008, s2 * 0.025 }, spacing = -size * 0.04, margin = size * 0.05 } },
+            { id = "channels", shape = "capsule", water = true, length = size * 0.25, smooth = size * 0.005,
+              scatter = { count = 5, area = { s2 * 0.002, s2 * 0.004 }, spacing = size * 0.05 } },
+        }
+    elseif t.name == "taklamakan" then
+        -- A closed basin: mountains on four sides, a desert floor sunk in the middle.
+        elements = {
+            { id = "land", shape = "fill", profile = { "flat", height = height * 0.25, edge = size * 0.02 } },
+            range("north", -0.42, 0.4, 0.42, 0.38, 0.08, 1.0),
+            range("south", -0.42, -0.4, 0.42, -0.38, 0.07, 0.8),
+            range("west", -0.42, -0.36, -0.4, 0.36, 0.07, 0.85),
+            range("east", 0.41, -0.36, 0.42, 0.36, 0.07, 0.7),
+            { id = "basin", shape = "superellipse", relief = true, radii = { size * 0.28, size * 0.22 }, exponent = 2.5,
+              rotation = turn, profile = { "dome", height = -height * 0.12, width = size * 0.1 } },
+        }
+    elseif t.name == "all_land" then
+        elements = {
+            { id = "land", shape = "fill", profile = { "flat", height = height * 0.08, edge = size * 0.02 } },
+            { id = "upland", shape = "superellipse", relief = true, radii = { size * 0.25, size * 0.16 }, exponent = 3,
+              at = axis(-0.15, 0.12), rotation = turn, profile = { "plateau", height = height * 0.55, edge = size * 0.06 } },
+            range("hills", 0.05, -0.38, 0.35, 0.1, 0.1, 0.8, 2),
+        }
+    elseif t.name == "lakeland" then
+        elements = {
+            { id = "land", shape = "fill", profile = { "flat", height = height * 0.5, edge = size * 0.01 } },
+            { id = "lakes", shape = "radial", water = true, role = "lake",
+              scatter = { count = 12, area = { s2 * 0.001, s2 * 0.006 }, spacing = size * 0.02, margin = size * 0.03 } },
+        }
+    else -- ocean_only
+        elements = {
+            { id = "seamounts", shape = "radial", seabed = true, profile = { "cone", height = 520 },
+              scatter = { count = 5, area = { s2 * 0.006, s2 * 0.02 }, spacing = size * 0.03, margin = size * 0.05 } },
+            { id = "guyot", shape = "circle", seabed = true, radius = size * 0.08, at = axis(0.25, -0.2),
+              profile = { "plateau", height = 480, edge = size * 0.04 } },
+        }
+    end
+    return {
+        seed = seed, frame = { size = size }, height = height, coast = p.coast, profile = low, cliff_height = height * 0.05,
+        land_fraction = fraction, elements = elements,
+    }
+end
+
 function Lands.Preset(t)
     if type(t) ~= "table" then
         fail("Lands.Preset expects a table of named arguments, as in Lands.Preset{ name = 'high_island' }")
@@ -1913,6 +2131,12 @@ function Lands.Preset(t)
                  .. "height and, for an archipelago, count and area, and returns the Lands.Compose table to change")
         end
     end
+    if LAND_PRESETS[t.name] then
+        if t.count ~= nil or t.area ~= nil then
+            fail("Lands.Preset takes 'count' and 'area' only for an archipelago preset; edit a land's elements by id")
+        end
+        return land_preset(t)
+    end
     if ARCHIPELAGO_PRESETS[t.name] then
         return archipelago_preset(t)
     end
@@ -1921,6 +2145,7 @@ function Lands.Preset(t)
         local names = {}
         for k in pairs(ISLAND_PRESETS) do names[#names + 1] = k end
         for k in pairs(ARCHIPELAGO_PRESETS) do names[#names + 1] = k end
+        for k in pairs(LAND_PRESETS) do names[#names + 1] = k end
         table.sort(names)
         fail("Lands.Preset has no preset '" .. tostring(t.name) .. "'; the presets are " .. table.concat(names, ", "))
     end

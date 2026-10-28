@@ -481,7 +481,7 @@ void TestArchipelagoPresets() {
 }
 
 void TestRidgeAndLands() {
-    test::Section("a ridge is as high as asked, with its saddles and its spurs");
+    test::Section("a ridge is as high as asked with its saddles and spurs, and every land preset meets its terms");
     struct Case {
         const char* name;
         const char* body;
@@ -520,6 +520,50 @@ void TestRidgeAndLands() {
     for k, v in ipairs(Terrain.Sample{ value = land.land_height, xs = mids.xs, zs = mids.zs, cell = 4 }) do
         expect(v > 100 + 400, spurs[k].id .. ' does not stand out: ' .. v)
     end)"},
+        {"lands_all_land", R"(
+    -- All land: the mask is 1 everywhere.
+    local land = Lands.Compose(Lands.Preset{ name = 'all_land', seed = 2 })
+    for _, m in ipairs(Terrain.Sample{ value = land.land_mask, origin = { -11900, -11900 }, size = { 120, 120 }, cell = 200 }) do
+        expect(m > 0.999, 'all_land has water: land_mask ' .. m)
+    end)"},
+        {"lands_mediterranean", R"(
+    -- One inland sea, called a sea, away from the frame.
+    local land = Lands.Compose(Lands.Preset{ name = 'mediterranean', seed = 2 })
+    local w = land.info.waters
+    expect(#w == 1 and w[1].class == 'sea' and not w[1].touches_edge and w[1].ids[1] == 'sea', 'mediterranean waters: ' .. #w))"},
+        {"lands_lakeland", R"(
+    -- Lakes of the areas asked for, and that much water.
+    local land = Lands.Compose(Lands.Preset{ name = 'lakeland', seed = 2 })
+    local asked, n = 0.0, 0
+    for _, e in ipairs(land.info.elements) do
+        if tostring(e.id):find('^lakes/') then
+            n, asked = n + 1, asked + e.area
+            expect(e.area >= 24000 ^ 2 * 0.001 * 0.999 and e.area <= 24000 ^ 2 * 0.006 * 1.001, e.id .. ' area ' .. e.area)
+        end
+    end
+    expect(n == 12 and #land.info.waters == 12, n .. ' lakes asked, ' .. #land.info.waters .. ' bodies')
+    for _, w in ipairs(land.info.waters) do expect(w.class == 'lake', 'a lakeland body is ' .. w.class) end
+    local wet = 0
+    for _, d in ipairs(Terrain.Sample{ value = land.coast_sdf, origin = { -11975, -11975 }, size = { 480, 480 }, cell = 50 }) do
+        wet = wet + (d >= 0 and 1 or 0)
+    end
+    expect(math.abs(wet * 2500 / asked - 1) < 0.03, 'lakes cover ' .. (wet * 2500) .. ' m2 of ' .. asked))"},
+        {"lands_peninsula", R"(
+    -- A peninsula as wide as drawn: across the middle of its first segment, W = the mean of its ends' widths.
+    local p = Lands.Preset{ name = 'peninsula', seed = 2 }
+    local pts
+    for _, e in ipairs(p.elements) do if e.id == 'peninsula' then pts = e.points end end
+    local a, b = pts[1], pts[2]
+    local cx, cz, w = (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5, (a[3] + b[3]) * 0.5
+    local l = math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2)
+    local nx, nz = -(b[2] - a[2]) / l, (b[1] - a[1]) / l
+    local xs, zs = {}, {}
+    for k = -2000, 2000 do xs[#xs + 1], zs[#zs + 1] = cx + nx * 5 * k, cz + nz * 5 * k end
+    local land, dry = Lands.Compose(p), 0
+    for _, d in ipairs(Terrain.Sample{ value = land.coast_sdf, xs = xs, zs = zs, cell = 4 }) do
+        dry = dry + (d < 0 and 1 or 0)
+    end
+    expect(math.abs(dry * 5 / w - 1) < 0.05, 'the peninsula is ' .. (dry * 5) .. ' m wide, ' .. w .. ' drawn'))"},
     };
     const auto check = [](const char* name, const std::string& body) {
         Graph        graph;
@@ -534,6 +578,13 @@ void TestRidgeAndLands() {
     };
     for (const Case& c : cases) {
         check(c.name, c.body);
+    }
+    // Every other preset builds with some land and some sea; taklamakan is all land, ocean_only none.
+    for (const char* preset : {"continent", "pangea", "old_world", "inland_sea", "isthmus", "fractious", "taklamakan", "ocean_only"}) {
+        check(preset, std::string("    local land = Lands.Compose(Lands.Preset{ name = '") + preset + "', seed = 2 })\n"
+                          "    local f, name = land.info.land_fraction, '" + preset + "'\n"
+                          "    expect(name == 'ocean_only' and f == 0 or name == 'taklamakan' and f == 1 or f > 0.15 and f < 0.75,\n"
+                          "           name .. ' land fraction ' .. f)");
     }
 }
 
