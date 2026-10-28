@@ -213,6 +213,17 @@ constexpr OpInfo kOps[] = {
      .resolutionWord = kMaxNodeParams,
      .hasReference   = false, // Reads the grid buffer, as Grid does.
      .specFieldCount = 0},
+    {.kind           = OpKind::Lands,
+     .name           = "Lands",
+     .shader         = "ops/lands.comp.spv",
+     .nodeClass      = NodeClass::Pointwise,
+     // The position; the block arrives in input slot 3, bound by the evaluator, as for Water.
+     .maxInputs      = 1,
+     .maxChannels    = 2,
+     .channelNames   = {"value", "id"},
+     .resolutionWord = kMaxNodeParams,
+     .hasReference   = false, // Reads the grid buffer, as Grid does.
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -851,6 +862,7 @@ b8_t EvalPointwise(const Graph::Node& node,
         case OpKind::Gullies:
         case OpKind::Grid:
         case OpKind::Water:
+        case OpKind::Lands:
         case OpKind::Blur:
         case OpKind::Count:
             // Both depend on world position, which a pointwise reference does not receive.

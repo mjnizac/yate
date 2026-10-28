@@ -93,6 +93,10 @@ enum class OpKind : u16_t {
     /// buffer as a block (see `water.comp.glsl`); channel 0 is what the ground may stand at (or must
     /// stand over, in the fill modes) and channel 1 the water surface. Pointwise.
     Water,
+    /// A list of shapes combined in order in one node, the list a block of the grid buffer (see
+    /// `lands.comp.glsl`): channel 0 is the signed distance to the coast, channel 1 the nearest land
+    /// element's id. Pointwise.
+    Lands,
     Count,
 };
 
@@ -379,6 +383,10 @@ public:
     static constexpr u32_t kNoBlock = ~0u;
     [[nodiscard]] Result<Value> AddWater(Value position, Value aux, u32_t block, u32_t receiver, WaterMode mode,
                                          SourceLocation location);
+    /// What a `Lands` node computes from its block.
+    enum class LandsMode : u32_t { Coast = 0, Relief };
+    /// The shapes of the block at `block` (see `AddGridBlock` and `lands.comp.glsl`) at `position`.
+    [[nodiscard]] Result<Value> AddLands(Value position, u32_t block, LandsMode mode, SourceLocation location);
     [[nodiscard]] Result<Value> AddGrid(Value position, std::span<const f32_t> values,
                                         const GridParams& params, SourceLocation location);
     /// How the viewer should colour the terrain, from the script's `look = { ... }`. Not part of the

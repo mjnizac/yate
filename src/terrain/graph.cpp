@@ -31,6 +31,7 @@ const char* ToString(OpKind kind) noexcept {
         case OpKind::Gullies: return "Gullies";
         case OpKind::Grid: return "Grid";
         case OpKind::Water: return "Water";
+        case OpKind::Lands: return "Lands";
         case OpKind::Count: break;
     }
     return "<unknown op>";
@@ -520,6 +521,31 @@ Result<Value> Graph::AddWater(Value position, Value aux, u32_t block, u32_t rece
     node.params[0]    = block;
     node.params[1]    = receiver;
     node.params[2]    = static_cast<u32_t>(mode);
+    return Append(node, location);
+}
+
+Result<Value> Graph::AddLands(Value position, u32_t block, LandsMode mode, SourceLocation location) {
+    const Mapping scalar{Domain::R2, 1};
+    const Mapping planar{Domain::R2, 2};
+    if (Status checked = CheckValue(position, "Lands position", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    // A block is a 24-value header, then the elements, the bins and the points (see `lands.comp.glsl`).
+    if (!(position.mapping == planar) || block == kNoBlock || static_cast<u64_t>(block) + 24 > m_gridData.size()) {
+        return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation, location.file,
+                                              location.line, "Lands needs an {} position and a block the graph holds",
+                                              ToString(planar)));
+    }
+    Node node;
+    node.kind         = OpKind::Lands;
+    node.nodeClass    = NodeClass::Pointwise;
+    node.inputCount   = 1;
+    node.inputs[0]    = position;
+    node.channelCount = 2;
+    node.channels[0]  = scalar;
+    node.channels[1]  = scalar;
+    node.params[0]    = block;
+    node.params[1]    = static_cast<u32_t>(mode);
     return Append(node, location);
 }
 

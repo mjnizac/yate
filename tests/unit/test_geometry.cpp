@@ -15,6 +15,7 @@
 #include <engine/terrain/sha256.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -24,6 +25,7 @@
 #include <functional>
 #include <iterator>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #ifndef TERRAIN_EXPORT_EXE
@@ -1518,6 +1520,259 @@ void TestErrors() {
     }
 }
 
+[[nodiscard]] double SegmentDistance(double x, double z, double ax, double az, double bx, double bz) {
+    const double abx = bx - ax, abz = bz - az;
+    const double h   = std::clamp(((x - ax) * abx + (z - az) * abz) / (abx * abx + abz * abz), 0.0, 1.0);
+    return std::hypot(x - ax - abx * h, z - az - abz * h);
+}
+
+/// `Shapes.Set`, the list of shapes in one `Lands` node, against the same closed forms: placed,
+/// rotated, scaled, combined, cut by water, found through its bins, and its id channel.
+void TestShapeSets() {
+    test::Section("a set of shapes in one node is the distances it says");
+    constexpr double kPi = 3.14159265358979323846;
+
+    Compare("set: a circle placed and scaled",
+            Export("set_circle", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                 "        { shape = 'circle', radius = 50, at = { 40, -24 }, scale = 2 } } }"),
+            [](double x, double z) { return std::hypot(x - 40.0, z + 24.0) - 100.0; }, 2e-3);
+
+    Compare("set: a box turned 30 degrees",
+            Export("set_box", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                              "        { shape = 'box', size = { 240, 80 }, rotation = 30 } } }"),
+            [kPi](double x, double z) {
+                const double c = std::cos(kPi / 6.0), s = std::sin(kPi / 6.0);
+                return BoxDistance(c * x + s * z, -s * x + c * z, 120.0, 40.0);
+            },
+            2e-3);
+
+    Compare("set: a capsule between two points",
+            Export("set_capsule", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                  "        { shape = 'capsule', from = { -160, -40 }, to = { 120, 80 }, width = 60 } } }"),
+            [](double x, double z) { return SegmentDistance(x, z, -160.0, -40.0, 120.0, 80.0) - 30.0; }, 2e-3);
+
+    Compare("set: a band of one width is a capsule",
+            Export("set_band", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                               "        { shape = 'band', width = 40, points = { { -160, 0 }, { 0, 96 }, { 160, 0 } } } } }"),
+            [](double x, double z) {
+                return std::min(SegmentDistance(x, z, -160.0, 0.0, 0.0, 96.0), SegmentDistance(x, z, 0.0, 96.0, 160.0, 0.0)) - 20.0;
+            },
+            2e-3);
+
+    Compare("set: a ring",
+            Export("set_ring", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                               "        { shape = 'ring', radius = 150, width = 40 } } }"),
+            [](double x, double z) { return std::fabs(std::hypot(x, z) - 150.0) - 20.0; }, 2e-3);
+
+    Compare("set: a square polygon",
+            Export("set_square", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                 "        { shape = 'polygon', points = { { -104, -104 }, { 104, -104 }, { 104, 104 }, { -104, 104 } } } } }"),
+            [](double x, double z) { return BoxDistance(x, z, 104.0, 104.0); }, 2e-3);
+
+    // Union, then water cut out of it: max(min(a, b), -c), with no smoothing.
+    Compare("set: land joined, water cut, in order",
+            Export("set_csg", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                              "        { shape = 'circle', radius = 120, at = { -64, 0 } },\n"
+                              "        { shape = 'circle', radius = 120, at = { 64, 0 } },\n"
+                              "        { shape = 'circle', radius = 48, water = true } } }"),
+            [](double x, double z) {
+                const double land = std::min(std::hypot(x + 64.0, z) - 120.0, std::hypot(x - 64.0, z) - 120.0);
+                return std::max(land, -(std::hypot(x, z) - 48.0));
+            },
+            2e-3);
+
+    // The smooth minimum is under the minimum and within k / 4 of it.
+    const Field smooth = Export("set_smooth", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                              "        { shape = 'circle', radius = 64, at = { -96, 0 } },\n"
+                                              "        { shape = 'circle', radius = 64, at = { 96, 0 }, smooth = 80 } } }");
+    ++test::g_checks;
+    if (!smooth.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL set smooth: no field (%.200s)\n", smooth.error.c_str());
+    } else {
+        double worst = 0.0;
+        for (std::size_t row = 0; row < smooth.grid.side; ++row) {
+            for (std::size_t column = 0; column < smooth.grid.side; ++column) {
+                const double x = WorldX(smooth, column), z = WorldZ(smooth, row);
+                const double m = std::min(std::hypot(x + 96.0, z) - 64.0, std::hypot(x - 96.0, z) - 64.0);
+                const double v = smooth.values[row * smooth.grid.side + column];
+                worst          = std::max({worst, v - m, m - v - 20.0});
+            }
+        }
+        CHECK(worst < 2e-3);
+        // Between the two circles, where the minimum is 32 m, the smooth one bridges below it.
+        CHECK(At(smooth, 0.0, 0.0) < 32.0 - 5.0);
+    }
+
+    // Radial: R 160, one harmonic of order 3 and amplitude 0.2. The edge is at 160 on +x and -x
+    // (sin 0, sin 3 pi) and at 128 on +z (sin 3 pi / 2 = -1).
+    const Field radial = Export("set_radial", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                              "        { shape = 'radial', radius = 160, harmonics = { { 3, 0.2, 0 } } } } }");
+    ++test::g_checks;
+    if (!radial.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL set radial: no field (%.200s)\n", radial.error.c_str());
+    } else {
+        CHECK(std::fabs(At(radial, 160.0, 0.0)) < 2e-3);
+        CHECK(std::fabs(At(radial, -160.0, 0.0)) < 2e-3);
+        CHECK(std::fabs(At(radial, 0.0, 128.0)) < 2e-3);
+        CHECK(At(radial, 0.0, 0.0) < 0.0);
+        CHECK(At(radial, 0.0, 144.0) > 0.0);
+    }
+
+    // Superellipse of exponent 4: a square-ish oval. (128, 80) is inside it and outside the ellipse of the
+    // same radii, so the exponent is used; the axes are exact.
+    const Field super = Export("set_super", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                            "        { shape = 'superellipse', radii = { 160, 96 }, exponent = 4 } } }");
+    ++test::g_checks;
+    if (!super.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL set superellipse: no field (%.200s)\n", super.error.c_str());
+    } else {
+        CHECK(std::fabs(At(super, 160.0, 0.0)) < 2e-3);
+        CHECK(std::fabs(At(super, 0.0, -96.0)) < 2e-3);
+        CHECK(At(super, 128.0, 80.0) < 0.0);
+        CHECK(At(super, 176.0, 0.0) > 0.0);
+    }
+
+    // A sector of reach 200 opening 90 degrees about +x, and an arc of the same radius: points on and
+    // off them.
+    const Field sector = Export("set_sector", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                              "        { shape = 'sector', reach = 200, angle = 90 } } }");
+    const Field arc = Export("set_arc", "    local result = Shapes.Set{ reach = 1000, elements = {\n"
+                                        "        { shape = 'arc', radius = 160, aperture = 90, width = 32 } } }");
+    ++test::g_checks;
+    if (!sector.Ok() || !arc.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL set sector or arc: no field (%.200s)\n", (sector.Ok() ? arc : sector).error.c_str());
+    } else {
+        CHECK(std::fabs(At(sector, 200.0, 0.0)) < 2e-3);
+        CHECK(std::fabs(At(sector, 96.0, 96.0)) < 2e-3);   // On the edge at 45 degrees.
+        CHECK(std::fabs(At(sector, 96.0, -96.0)) < 2e-3);
+        CHECK(At(sector, 80.0, 0.0) < 0.0);
+        CHECK(At(sector, -80.0, 0.0) > 0.0);               // Behind the apex.
+        CHECK(std::fabs(At(arc, 176.0, 0.0)) < 2e-3);       // The outer edge of the band on +x.
+        CHECK(std::fabs(At(arc, 144.0, 0.0)) < 2e-3);       // The inner edge.
+        CHECK(At(arc, 160.0, 0.0) < 0.0);
+        CHECK(At(arc, -160.0, 0.0) > 0.0);                  // The arc does not go round.
+    }
+
+    // Forty circles, so the set is found through bins, and a reach shorter than their spacing so most of
+    // them are left out of most bins: the result must still be the clamped minimum over all of them.
+    std::string circles;
+    std::vector<std::array<double, 3>> discs;
+    for (int i = 0; i < 40; ++i) {
+        const double x = -232.0 + 64.0 * (i % 8) + 3.0 * (i % 3), z = -200.0 + 96.0 * (i / 8);
+        const double r = 12.0 + 2.0 * (i % 5);
+        discs.push_back({x, z, r});
+        char entry[128];
+        std::snprintf(entry, sizeof(entry), "        { shape = 'circle', radius = %.1f, at = { %.1f, %.1f }, id = %d },\n", r, x, z, i + 1);
+        circles += entry;
+    }
+    Compare("set: forty circles through bins",
+            Export("set_bins", "    local result = Shapes.Set{ reach = 24, elements = {\n" + circles + "    } }"),
+            [&discs](double x, double z) {
+                double best = 1e30;
+                for (const auto& d : discs) {
+                    best = std::min(best, std::hypot(x - d[0], z - d[1]) - d[2]);
+                }
+                return std::clamp(best, -24.0, 24.0);
+            },
+            2e-3);
+    // The id of the nearest circle, wherever that circle is within reach; a sample at a near tie between
+    // two circles may go either way in floats and is not counted.
+    const Field ids = Export("set_ids", "    local result = Shapes.Set{ reach = 24, elements = {\n" + circles + "    } }.id");
+    ++test::g_checks;
+    if (!ids.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL set ids: no field (%.200s)\n", ids.error.c_str());
+    } else {
+        std::size_t wrong = 0, counted = 0;
+        for (std::size_t row = 0; row < ids.grid.side; ++row) {
+            for (std::size_t column = 0; column < ids.grid.side; ++column) {
+                const double x = WorldX(ids, column), z = WorldZ(ids, row);
+                double best = 1e30, second = 1e30, id = 0.0;
+                for (std::size_t i = 0; i < discs.size(); ++i) {
+                    const double d = std::hypot(x - discs[i][0], z - discs[i][1]) - discs[i][2];
+                    if (d < best) {
+                        second = best;
+                        best   = d;
+                        id     = static_cast<double>(i + 1);
+                    } else {
+                        second = std::min(second, d);
+                    }
+                }
+                if (best < 24.0 && second - best > 1e-3) {
+                    ++counted;
+                    wrong += ids.values[row * ids.grid.side + column] != static_cast<float>(id) ? 1 : 0;
+                }
+            }
+        }
+        std::printf("     set: ids, %zu of %zu samples wrong\n", wrong, counted);
+        CHECK(counted > 500 && wrong == 0);
+    }
+
+    // Everything is land under a fill, and the water cut from it is the circle's complement.
+    Compare("set: fill with a lake",
+            Export("set_fill", "    local result = Shapes.Set{ reach = 100, elements = {\n"
+                               "        { shape = 'fill' }, { shape = 'circle', radius = 80, water = true } } }"),
+            [](double x, double z) { return std::clamp(80.0 - std::hypot(x, z), -100.0, 100.0); }, 2e-3);
+
+    // The relief mode: a dome over a circle, H sqrt(1 - (1 - s / W)^2) with s the distance inland; and a
+    // rim whose crest, 40 m inland, stands over an interior of 30 m.
+    Compare("set: a dome profile over a circle",
+            Export("set_dome", "    local _, result = Shapes.Set{ reach = 1000, relief = true, elements = {\n"
+                               "        { shape = 'circle', radius = 200, profile = { kind = 'dome', height = 100, width = 160 } } } }"),
+            [](double x, double z) {
+                const double w = 1.0 - std::clamp((200.0 - std::hypot(x, z)) / 160.0, 0.0, 1.0);
+                return 100.0 * std::sqrt(std::max(1.0 - w * w, 0.0));
+            },
+            2e-3);
+    const Field rim = Export("set_rim", "    local _, result = Shapes.Set{ reach = 1000, relief = true, elements = {\n"
+                                        "        { shape = 'circle', radius = 200, profile = { kind = 'rim', height = 120, at = 40, sigma = 16,\n"
+                                        "          inner = 30, width = 60 } } } }");
+    ++test::g_checks;
+    if (!rim.Ok()) {
+        ++test::g_failures;
+        std::printf("FAIL set rim: no field (%.200s)\n", rim.error.c_str());
+    } else {
+        CHECK(At(rim, 160.0, 0.0) > 120.0);                    // On the crest, 40 m inland.
+        CHECK(std::fabs(At(rim, 0.0, 0.0) - 30.0) < 1e-2);      // The interior, far from the crest.
+        CHECK(At(rim, 0.0, 0.0) < At(rim, 160.0, 0.0) - 80.0);  // The crest stands over the interior.
+        CHECK(std::fabs(At(rim, 240.0, 0.0)) < 1e-6);           // Nothing at sea.
+    }
+
+    // The GPU against the CPU sampler, which is what a script measures areas and places elements with.
+    const Field agree = Export("set_agree", "    local set = Shapes.Set{ reach = 400, elements = {\n"
+                                            "        { shape = 'radial', radius = 150, harmonics = { { 4, 0.15, 1 }, { 7, 0.05, 2 } }, rotation = 17 },\n"
+                                            "        { shape = 'superellipse', radii = { 60, 120 }, exponent = 3, at = { 150, 100 }, smooth = 40 },\n"
+                                            "        { shape = 'sector', reach = 120, angle = 50, rotation = 200, water = true, smooth = 10 },\n"
+                                            "        { shape = 'arc', radius = 200, aperture = 120, width = 30, rotation = 250 } } }\n"
+                                            "    local s = Terrain.Sample{ value = set, origin = { -256, -256 }, size = { 64, 64 }, cell = 8 }\n"
+                                            "    local result = set - Terrain.Grid{ values = s, size = { 64, 64 }, origin = { -256, -256 }, cell = 8 }");
+    CHECK(agree.Ok());
+    float worst = 0.0f;
+    for (const float v : agree.values) {
+        worst = std::max(worst, std::fabs(v));
+    }
+    std::printf("     set: GPU against CPU, worst %.5f m\n", static_cast<double>(worst));
+    CHECK(worst < 0.01f);
+
+    for (const auto& [name, body, fragment] : {
+             std::tuple{"set_bad_shape", "    local result = Shapes.Set{ elements = { { shape = 'blob' } } }", "has shape 'blob'"},
+             std::tuple{"set_bad_key", "    local result = Shapes.Set{ elements = { { shape = 'circle', radius = 5, colour = 1 } } }", "does not take 'colour'"},
+             std::tuple{"set_harmonics", "    local result = Shapes.Set{ elements = { { shape = 'radial', radius = 5, harmonics = { { 2, 0.7 }, { 3, 0.4 } } } } }", "less than 1"},
+         }) {
+        const Field field = Export(name, body);
+        ++test::g_checks;
+        if (field.Ok() || field.error.find(fragment) == std::string::npos || field.error.find(".lua:") == std::string::npos) {
+            ++test::g_failures;
+            std::printf("FAIL %s: expected an error naming '%s' with a line, got: %.240s\n", name, fragment,
+                        field.Ok() ? "success" : field.error.c_str());
+        }
+    }
+}
+
 } // namespace
 
 /// The Water op on the GPU against its CPU version in the sampler, at the export's own samples: the CPU one
@@ -1565,6 +1820,7 @@ int main() {
     TestOriginAndResolution();
     TestContinuity();
     TestWaterAgreesWithSampler();
+    TestShapeSets();
     TestSectionsAndInteraction();
     TestTerrainIndicators();
     TestStatistics();

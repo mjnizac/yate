@@ -323,4 +323,301 @@ function Shapes.Warp(t)
     }
 end
 
+-- --- Sets: many shapes in one node ----------------------------------------------------------------
+
+-- A list of shapes combined in order in one `Geometry.Lands` node, however long the list: land shapes
+-- join what came before them (with a smooth minimum `smooth` metres wide), water shapes cut it. The
+-- block's layout is in lands.comp.glsl; this writes it and the bins the shader finds elements through.
+
+local SET_ELEMENT = 48
+local SET_KINDS = {
+    circle = 0, ellipse = 1, box = 2, superellipse = 3, radial = 4, capsule = 5, ring = 6, arc = 7,
+    sector = 8, polygon = 9, band = 10, fill = 11,
+}
+local SET_KEYS = {
+    "shape", "id", "water", "smooth", "at", "rotation", "scale", "radius", "radii", "size", "rounding",
+    "exponent", "harmonics", "from", "to", "length", "width", "aperture", "angle", "reach", "points",
+    "profile",
+}
+
+local function number_of(where, e, key, default)
+    local v = e[key]
+    if v == nil then v = default end
+    if type(v) ~= "number" then
+        fail(where .. " needs '" .. key .. "' as a number of metres")
+    end
+    return v
+end
+
+local function pair_of(where, e, key)
+    local v = e[key]
+    if type(v) ~= "table" or type(v[1]) ~= "number" or type(v[2]) ~= "number" then
+        fail(where .. " needs '" .. key .. "' as a pair { x, z } of metres")
+    end
+    return v
+end
+
+local PROFILE_KINDS = { dome = 1, cone = 2, plateau = 3, rim = 4, tilt = 5 }
+local PROFILE_KEYS = { "kind", "height", "width", "edge", "at", "sigma", "inner", "start", "gradient", "direction" }
+
+-- A profile's numbers (element values 25..36): what the relief mode raises over the distance inland.
+local function encode_profile(where, p, v)
+    if type(p) ~= "table" then
+        fail(where .. " expects 'profile' as a table { kind = ..., ... }")
+    end
+    check(where .. " profile", p, PROFILE_KEYS)
+    local kind = PROFILE_KINDS[p.kind]
+    if kind == nil then
+        fail(where .. " has profile kind '" .. tostring(p.kind) .. "'; expected dome, cone, plateau, rim or tilt")
+    end
+    local function positive(key, default)
+        local value = number_of(where .. " profile", p, key, default)
+        if value <= 0 then
+            fail(where .. " profile needs '" .. key .. "' above zero")
+        end
+        return value
+    end
+    v[25], v[26] = kind, number_of(where .. " profile", p, "height")
+    if p.kind == "dome" or p.kind == "cone" then
+        v[27] = positive("width")
+    elseif p.kind == "plateau" then
+        v[27] = positive("edge")
+    elseif p.kind == "rim" then
+        v[27], v[28] = positive("at"), positive("sigma")
+        v[29], v[30] = number_of(where .. " profile", p, "inner", 0.0), positive("width")
+        v[31] = number_of(where .. " profile", p, "start", 0.0)
+    else
+        local direction = math.rad(number_of(where .. " profile", p, "direction", 0.0))
+        v[27], v[28] = positive("edge"), number_of(where .. " profile", p, "gradient")
+        v[29], v[30] = math.cos(direction), math.sin(direction)
+    end
+end
+
+-- One element: its 48 numbers, its points (x, z, width each, in its own space) and its bounding radius
+-- in its own space, before `scale`; `nil` radius for a shape that covers everything.
+local function encode_element(i, e, points)
+    local where = "Shapes.Set element " .. i
+    check(where, e, SET_KEYS)
+    local kind = SET_KINDS[e.shape]
+    if kind == nil then
+        fail(where .. " has shape '" .. tostring(e.shape) .. "'; expected circle, ellipse, box, superellipse, "
+             .. "radial, capsule, ring, arc, sector, polygon, band or fill")
+    end
+    local at       = e.at and pair_of(where, e, "at") or { 0.0, 0.0 }
+    local rotation = number_of(where, e, "rotation", 0.0)
+    local scale    = number_of(where, e, "scale", 1.0)
+    if scale <= 0 then
+        fail(where .. " needs a scale above zero")
+    end
+    local v = {}
+    for k = 1, SET_ELEMENT do v[k] = 0.0 end
+    local shape, bound = {}, nil
+
+    if e.shape == "circle" then
+        shape[1] = number_of(where, e, "radius")
+        bound = shape[1]
+    elseif e.shape == "ellipse" or e.shape == "superellipse" then
+        local r = pair_of(where, e, "radii")
+        shape[1], shape[2] = r[1], r[2]
+        if e.shape == "superellipse" then
+            shape[3] = number_of(where, e, "exponent", 4.0)
+            if shape[3] < 1.0 then
+                fail(where .. " needs an exponent of at least 1")
+            end
+        end
+        bound = math.sqrt(r[1] * r[1] + r[2] * r[2])
+    elseif e.shape == "box" then
+        local s = pair_of(where, e, "size")
+        shape[1], shape[2], shape[3] = s[1] * 0.5, s[2] * 0.5, number_of(where, e, "rounding", 0.0)
+        bound = math.sqrt(shape[1] * shape[1] + shape[2] * shape[2])
+    elseif e.shape == "radial" then
+        local r = number_of(where, e, "radius")
+        local harmonics = e.harmonics or {}
+        if type(harmonics) ~= "table" or #harmonics > 3 then
+            fail(where .. " expects harmonics as at most 3 { k, amplitude, phase } triples")
+        end
+        shape[1], shape[2] = r, #harmonics
+        local spread = 0.0
+        for h, triple in ipairs(harmonics) do
+            if type(triple) ~= "table" or type(triple[1]) ~= "number" or type(triple[2]) ~= "number" then
+                fail(where .. " expects harmonic " .. h .. " as { k, amplitude, phase }")
+            end
+            shape[3 * h], shape[3 * h + 1], shape[3 * h + 2] = triple[1], triple[2], triple[3] or 0.0
+            spread = spread + math.abs(triple[2])
+        end
+        if spread >= 1.0 then
+            fail(where .. " needs the harmonic amplitudes to add up to less than 1, or the radius turns negative")
+        end
+        bound = r * (1.0 + spread)
+    elseif e.shape == "capsule" then
+        local width = number_of(where, e, "width")
+        if e.from ~= nil or e.to ~= nil then
+            local a, b = pair_of(where, e, "from"), pair_of(where, e, "to")
+            at = { (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5 }
+            rotation = math.deg(math.atan(b[2] - a[2], b[1] - a[1]))
+            shape[1] = 0.5 * math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2)
+        else
+            shape[1] = 0.5 * number_of(where, e, "length")
+        end
+        shape[2] = 0.5 * width
+        bound = shape[1] + shape[2]
+    elseif e.shape == "ring" or e.shape == "arc" then
+        local r, width = number_of(where, e, "radius"), number_of(where, e, "width")
+        if e.shape == "ring" then
+            shape[1], shape[2] = r, width
+        else
+            shape[1], shape[2], shape[3] = r, math.rad(number_of(where, e, "aperture") * 0.5), width
+        end
+        bound = r + width * 0.5
+    elseif e.shape == "sector" then
+        shape[1], shape[2] = number_of(where, e, "reach"), math.rad(number_of(where, e, "angle") * 0.5)
+        bound = shape[1]
+    elseif e.shape == "polygon" or e.shape == "band" then
+        local list = e.points
+        local least = e.shape == "polygon" and 3 or 2
+        if type(list) ~= "table" or #list < least then
+            fail(where .. " needs 'points' as a list of at least " .. least .. " { x, z } points")
+        end
+        local default_width = e.shape == "band" and number_of(where, e, "width", 0.0) or 0.0
+        v[23] = #points / 3
+        v[24] = #list
+        bound = 0.0
+        for k, p in ipairs(list) do
+            if type(p) ~= "table" or type(p[1]) ~= "number" or type(p[2]) ~= "number" then
+                fail(where .. " needs point " .. k .. " as { x, z } or { x, z, width }")
+            end
+            local w = p[3] or default_width
+            if e.shape == "band" and not (w > 0) then
+                fail(where .. " needs a width above zero at point " .. k .. ", as p[3] or 'width'")
+            end
+            points[#points + 1], points[#points + 2], points[#points + 3] = p[1], p[2], w
+            bound = math.max(bound, math.sqrt(p[1] * p[1] + p[2] * p[2]) + w * 0.5)
+        end
+    end
+
+    local radians = math.rad(rotation)
+    v[1], v[2], v[3] = kind, e.water and 1.0 or 0.0, number_of(where, e, "id", i)
+    v[4], v[5], v[6], v[7], v[8] = at[1], at[2], math.cos(radians), math.sin(radians), scale
+    for k = 1, 12 do v[8 + k] = shape[k] or 0.0 end
+    v[21] = number_of(where, e, "smooth", 0.0)
+    v[22] = bound and bound * scale or 0.0
+    if e.profile ~= nil then
+        encode_profile(where, e.profile, v)
+    end
+    return v, bound and { x = at[1], z = at[2], r = bound * scale + v[21] } or nil
+end
+
+-- The block of `elements` (see lands.comp.glsl): `reach` is the distance past which nothing is measured,
+-- `bin` the side of the bins (chosen from the elements when not given), `blend` how far apart in metres
+-- two elements' distances are for their profiles to mix (the relief mode).
+function Shapes.SetBlock(t)
+    check("Shapes.SetBlock", t, { "elements", "reach", "bin", "blend" })
+    local list = t.elements
+    if type(list) ~= "table" then
+        fail("Shapes.SetBlock needs 'elements' as a list of shapes")
+    end
+    local reach = t.reach or 2000.0
+    if type(reach) ~= "number" or reach <= 0 then
+        fail("Shapes.SetBlock needs reach as a number of metres above zero")
+    end
+    local numbers, points, circles, global = {}, {}, {}, {}
+    for i, e in ipairs(list) do
+        if type(e) ~= "table" then
+            fail("Shapes.SetBlock expects element " .. i .. " as a table")
+        end
+        local v, circle = encode_element(i, e, points)
+        for k = 1, SET_ELEMENT do numbers[#numbers + 1] = v[k] end
+        if circle then
+            circle.r = circle.r + reach
+            circles[i] = circle
+        else
+            global[#global + 1] = i - 1
+        end
+    end
+
+    -- Bins over the elements' reach, when there are enough elements for them to pay: each lists, in list
+    -- order, the elements whose reach touches it, and every global element.
+    local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
+    local radii = {}
+    for _, c in pairs(circles) do
+        x0, z0 = math.min(x0, c.x - c.r), math.min(z0, c.z - c.r)
+        x1, z1 = math.max(x1, c.x + c.r), math.max(z1, c.z + c.r)
+        radii[#radii + 1] = c.r
+    end
+    local bin, nx, nz = 1.0, 0, 0
+    if #list > 16 and #radii > 0 then
+        table.sort(radii)
+        local extent = math.max(x1 - x0, z1 - z0)
+        bin = t.bin or math.max(radii[(#radii + 1) // 2], extent / 128.0)
+        nx, nz = math.ceil((x1 - x0) / bin), math.ceil((z1 - z0) / bin)
+    end
+    local lists = {}
+    for b = 1, nx * nz do lists[b] = {} end
+    for i = 1, #list do
+        local c = circles[i]
+        if c == nil then
+            for b = 1, nx * nz do table.insert(lists[b], i - 1) end
+        elseif nx > 0 then
+            local gx0, gx1 = math.floor((c.x - c.r - x0) / bin), math.floor((c.x + c.r - x0) / bin)
+            local gz0, gz1 = math.floor((c.z - c.r - z0) / bin), math.floor((c.z + c.r - z0) / bin)
+            for gz = math.max(gz0, 0), math.min(gz1, nz - 1) do
+                for gx = math.max(gx0, 0), math.min(gx1, nx - 1) do
+                    local bx0, bz0 = x0 + gx * bin, z0 + gz * bin
+                    local dx = math.max(bx0 - c.x, 0.0, c.x - bx0 - bin)
+                    local dz = math.max(bz0 - c.z, 0.0, c.z - bz0 - bin)
+                    if dx * dx + dz * dz <= c.r * c.r then
+                        table.insert(lists[gz * nx + gx + 1], i - 1)
+                    end
+                end
+            end
+        else
+            global[#global + 1] = i - 1
+        end
+    end
+    table.sort(global)
+
+    local header = {}
+    for k = 1, 24 do header[k] = 0.0 end
+    local elements_at = 24
+    local offsets_at  = elements_at + #numbers
+    local lists_at    = offsets_at + nx * nz + 1
+    local flat, offsets, running = {}, {}, 0
+    for b = 1, nx * nz do
+        offsets[b] = running
+        for _, e in ipairs(lists[b]) do flat[#flat + 1] = e end
+        running = running + #lists[b]
+    end
+    offsets[nx * nz + 1] = running
+    local global_at = lists_at + #flat
+    local points_at = global_at + #global
+    header[1], header[2], header[3], header[4] = #list, bin, nx > 0 and x0 or 0.0, nx > 0 and z0 or 0.0
+    header[5], header[6], header[7] = nx, nz, reach
+    header[8], header[9], header[10], header[11] = elements_at, offsets_at, lists_at, points_at
+    header[12], header[13] = #global, global_at
+    header[14] = t.blend or 100.0
+
+    local values = header
+    local function append(t_) for _, x in ipairs(t_) do values[#values + 1] = x end end
+    append(numbers)
+    append(offsets)
+    append(flat)
+    append(global)
+    append(points)
+    if #values == 24 then values[25] = 0.0 end
+    return Geometry.Block{ values = values }
+end
+
+-- The shapes of `elements` in one node: `.value` is the signed distance (land negative) held to
+-- [-reach, reach], `.id` the id of the land element nearest each sample (0 where there is none). With
+-- `relief = true` the second value returned is the height of the elements' profiles over the land.
+function Shapes.Set(t)
+    check("Shapes.Set", t, { "elements", "reach", "bin", "blend", "position", "relief" })
+    local block = Shapes.SetBlock{ elements = t.elements, reach = t.reach, bin = t.bin, blend = t.blend }
+    local coast = Geometry.Lands{ block = block, mode = "coast", position = t.position }
+    if t.relief then
+        return coast, Geometry.Lands{ block = block, mode = "relief", position = t.position }
+    end
+    return coast
+end
+
 _G.Shapes = Shapes

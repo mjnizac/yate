@@ -361,7 +361,7 @@ Status RecordSection(vulkan::Queue& queue, KernelLibrary& kernels, const Compile
         if (dispatch.kind == OpKind::Grid) {
             constants.inputs[1] = resources.GridAddress();
         }
-        if (dispatch.kind == OpKind::Water) {
+        if (dispatch.kind == OpKind::Water || dispatch.kind == OpKind::Lands) {
             constants.inputs[3] = resources.GridAddress();
         }
 

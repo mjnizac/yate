@@ -1647,6 +1647,37 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
                                             Value{}, chain, Graph::ShapeParams{}, location))};
     });
 
+    // A block of numbers in the grid buffer, for an op that reads a list of its own there: its offset.
+    // The layout is the op's (`Geometry.Lands`: see lands.comp.glsl); `Shapes.Set` writes it.
+    geometry.set_function("Block", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation    location = CallerLocation(lua);
+        Args                    args(std::move(table), "Geometry.Block", location);
+        std::pmr::vector<f64_t> numbers(&memory::General().Resource());
+        args.Numbers("values", args.Length("values"), numbers);
+        args.Finish();
+        std::pmr::vector<f32_t> values(numbers.size(), 0.0f, &memory::General().Resource());
+        std::transform(numbers.begin(), numbers.end(), values.begin(), [](f64_t v) { return static_cast<f32_t>(v); });
+        Result<u32_t> offset = graph.AddGridBlock(values, location);
+        if (!offset) {
+            Fail(location, "{}", offset.error().Message());
+        }
+        return static_cast<f64_t>(*offset);
+    });
+    geometry.set_function("Lands", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Geometry.Lands", location);
+        const f64_t          block    = args.Number("block", -1.0);
+        const std::string    mode     = args.Text("mode", "coast");
+        const Value          position = PositionOrCoords(args, graph, location);
+        args.Finish();
+        if (mode != "coast" && mode != "relief") {
+            Fail(location, "Geometry.Lands expects mode 'coast' or 'relief', got '{}'", mode);
+        }
+        const u32_t at = block < 0.0 ? Graph::kNoBlock : static_cast<u32_t>(block);
+        return Handle{Unwrap(graph.AddLands(position, at, mode == "relief" ? Graph::LandsMode::Relief : Graph::LandsMode::Coast,
+                                            location))};
+    });
+
     // --- Vec ------------------------------------------------------------------------------------
 
     sol::table vec = state.create_named_table("Vec");
