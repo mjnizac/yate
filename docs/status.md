@@ -95,7 +95,6 @@ Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has
 `test_cli`, `test_geometry`, `test_library`, `test_compute_roundtrip`, `test_noise`, `test_kernels`,
 `test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. On the last run Release passed all of them. Run one
 suite at a time: two runs share `out/` and fail each other.
-suite at a time: two runs share `out/` and fail each other.
 
 Four of those look at something the engine did not itself produce, which is the property the earlier
 suite lacked:
