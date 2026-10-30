@@ -22,9 +22,11 @@
 -- `coast` preset), the exposure to the waves (the outward normal against the direction they come from) and
 -- the curvature of the coast as a bias.
 --
--- `Lands.Island`, `Lands.Archipelago` and `Lands.Continent` build a preset (`Lands.Preset` returns its
--- composition, to change before building). The resolved elements go to the export's metadata
--- (`engine.report`). The plan this follows is `docs/lands_plan.md`.
+-- `Lands.Island`, `Lands.Archipelago` and `Lands.Continent` build a preset: by default from Azgaar's heightmap
+-- template where the preset has one (`Lands.Template`, whose outlines are like his maps' and the references'),
+-- else, or with `outline = "shapes"`, from its composition (`Lands.Preset` returns it, to change before
+-- building). The resolved elements go to the export's metadata (`engine.report`). The plan this follows is
+-- `docs/lands_plan.md`.
 --
 -- Run by the engine after `46_network.lua`.
 
@@ -66,6 +68,7 @@ local function product_ranges(r)
         surface_height = { -r.depth_max, r.height_max },
         shore_mask     = { 0.0, 1.0 },
         coast_type     = { 0.0, 1.0 },
+        beach_mask     = { 0.0, 1.0 },
         region_id      = { 1.0, math.max(r.regions, 2) },
     }
 end
@@ -99,6 +102,11 @@ local function finish(o)
     local sed  = regional((t.sediment or 0.0) + coast.sediment, 73)
     local raw  = 0.50 * hard + 0.22 * exposure + 0.13 * convexity + 0.15 - 0.45 * sed
     local coast_type = Curves.Smoothstep{ input = raw, min = 0.20, max = 0.70 }
+    if o.beach_mask then
+        -- Sand is a beach, whatever the rock behind it; out to the water's edge (`o.beach_strip`, the sand
+        -- before the land mask fades it there), or half a cliff's profile stands at the edge as a brow.
+        coast_type = coast_type * (1.0 - (o.beach_strip or o.beach_mask))
+    end
 
     -- The ground: the relief, gullied at the scale it cannot show if asked, over a beach or cliff profile at
     -- the shore.
@@ -168,6 +176,19 @@ local function finish(o)
         -- The sea floor's own forms, never brought up to the surface.
         bathymetry = bathymetry + Combine.Min{ a = o.seabed, b = depth - 2.0 }
     end
+    if o.floor then
+        -- A floor of its own, taken over from the coast's profile `o.floor_blend` metres offshore.
+        bathymetry = Combine.Blend{ a = bathymetry, b = o.floor,
+                                    mask = Curves.Smoothstep{ input = off, min = 0.0, max = o.floor_blend } }
+    end
+    if o.platform then
+        -- A platform cut by the waves where the coast is a cliff: `depth` down out to `width`, then a wall.
+        local p = o.platform
+        local on = Curves.Smoothstep{ input = coast_type, min = 0.45, max = 0.65 } * p.keep
+        local out = 1.0 - Curves.Smoothstep{ input = off - p.width, min = -2.0 * resolution, max = 0.0 }
+        local flat = -p.depth * Curves.Clamp{ input = off / (2.0 * resolution), min = 0.0, max = 1.0 }
+        bathymetry = Combine.Blend{ a = bathymetry, b = Combine.Max{ a = flat, b = bathymetry }, mask = on * out }
+    end
 
     local surface_height = Combine.Blend{ a = bathymetry, b = land_height, mask = o.land_mask }
 
@@ -180,11 +201,12 @@ local function finish(o)
     info.margin = {
         shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
     }
-    info.height_max, info.depth_max = relief * 1.6, abyssal_depth * 1.05
+    -- An ocean floor of drowned land (`o.deep`) goes down to 5.5 times the abyssal depth, in its trenches.
+    info.height_max, info.depth_max = relief * 1.6, abyssal_depth * (o.deep and 5.6 or 1.05)
     local land = {
         coast_sdf = coast_sdf, land_mask = o.land_mask, land_height = land_height,
         bathymetry = bathymetry, surface_height = surface_height, shore_mask = shore_mask,
-        coast_type = coast_type, region_id = o.region_id, info = info,
+        coast_type = coast_type, region_id = o.region_id, beach_mask = o.beach_mask or o.land_mask * 0.0, info = info,
     }
 
     -- The script's outputs: `height` and `normals` always, then whatever is asked for by name (a script
@@ -200,7 +222,7 @@ local function finish(o)
             if ranges[name] == nil or name == "surface_height" then
                 if name ~= "surface_height" then
                     fail("Lands: '" .. tostring(name) .. "' is not a product; they are coast_sdf, land_mask, "
-                         .. "land_height, bathymetry, shore_mask, coast_type and region_id (height is the surface)")
+                         .. "land_height, bathymetry, shore_mask, coast_type, beach_mask and region_id (height is the surface)")
                 end
             else
                 result[name] = { value = self[name], range = ranges[name] }
@@ -1257,6 +1279,2051 @@ function Lands.Compose(t)
     }
 end
 
+-- --- Lands.Template: Azgaar's heightmap templates ---------------------------------------------------
+
+-- Azgaar's Fantasy-Map-Generator builds land by a script of steps on a grid of about 10 000 cells (a square
+-- lattice of points jittered by 0.9 of their spacing, neighbours by their Voronoi diagram), heights 0 to 100,
+-- the sea under 20: hills grown cell by cell outwards, ranges along greedy paths with spurs walking downhill,
+-- troughs, straits, pits, masks and smoothing. The steps and their numbers are his
+-- (`src/data/heightmap-templates.ts`, `src/model/physical/heightmap-generator.ts`); so is storing every
+-- height as a whole number, which sets how far a hill spreads. The coast is the Voronoi outline of the land
+-- cells, drawn on a raster finer than the cells and bent below the cell's size by a warp whose amplitude a
+-- roughness field sets (his coastline fractalization: calm and jagged stretches).
+
+-- Not one of his: the open ocean floor of a world's cell, in his steps over the whole map and no mask, read
+-- upside down (see `template_raster`): its hills are basins, its ranges trenches, its troughs rises.
+local SEAFLOOR_TEMPLATE = [[Hill 4-6 30-45 10-90 10-90
+Range 3-4 35-50 5-95 5-95
+Trough 2-3 20-35 5-95 5-95
+Hill 6-8 15-25 5-95 5-95
+Pit 3-5 15-25 10-90 10-90
+Smooth 2 0 0 0]]
+
+local TEMPLATES = {
+    volcano = [[Hill 1 90-100 44-56 40-60
+Multiply 0.8 50-100 0 0
+Range 1.5 30-55 45-55 40-60
+Smooth 3 0 0 0
+Hill 1.5 35-45 25-30 20-75
+Hill 1 35-55 75-80 25-75
+Hill 0.5 20-25 10-15 20-25
+Mask 3 0 0 0]],
+    high_island = [[Hill 1 90-100 65-75 47-53
+Add 7 all 0 0
+Hill 5-6 20-30 25-55 45-55
+Range 1 40-50 45-55 45-55
+Multiply 0.8 land 0 0
+Mask 3 0 0 0
+Smooth 2 0 0 0
+Trough 2-3 20-30 20-30 20-30
+Trough 2-3 20-30 60-80 70-80
+Hill 1 10-15 60-60 50-50
+Hill 1.5 13-16 15-20 20-75
+Range 1.5 30-40 15-85 30-40
+Range 1.5 30-40 15-85 60-70
+Pit 3-5 10-30 15-85 20-80]],
+    low_island = [[Hill 1 90-99 60-80 45-55
+Hill 1-2 20-30 10-30 10-90
+Smooth 2 0 0 0
+Hill 6-7 25-35 20-70 30-70
+Range 1 40-50 45-55 45-55
+Trough 2-3 20-30 15-85 20-30
+Trough 2-3 20-30 15-85 70-80
+Hill 1.5 10-15 5-15 20-80
+Hill 1 10-15 85-95 70-80
+Pit 5-7 15-25 15-85 20-80
+Multiply 0.4 20-100 0 0
+Mask 4 0 0 0]],
+    continents = [[Hill 1 80-85 60-80 40-60
+Hill 1 80-85 20-30 40-60
+Hill 6-7 15-30 25-75 15-85
+Multiply 0.6 land 0 0
+Hill 8-10 5-10 15-85 20-80
+Range 1-2 30-60 5-15 25-75
+Range 1-2 30-60 80-95 25-75
+Range 0-3 30-60 80-90 20-80
+Strait 2 vertical 0 0
+Strait 1 vertical 0 0
+Smooth 3 0 0 0
+Trough 3-4 15-20 15-85 20-80
+Trough 3-4 5-10 45-55 45-55
+Pit 3-4 10-20 15-85 20-80
+Mask 4 0 0 0]],
+    archipelago = [[Add 11 all 0 0
+Range 2-3 40-60 20-80 20-80
+Hill 5 15-20 10-90 30-70
+Hill 2 10-15 10-30 20-80
+Hill 2 10-15 60-90 20-80
+Smooth 3 0 0 0
+Trough 10 20-30 5-95 5-95
+Strait 2 vertical 0 0
+Strait 2 horizontal 0 0]],
+    atoll = [[Hill 1 75-80 50-60 45-55
+Hill 1.5 30-50 25-75 30-70
+Hill .5 30-50 25-35 30-70
+Smooth 1 0 0 0
+Multiply 0.2 25-100 0 0
+Hill 0.5 10-20 50-55 48-52]],
+    mediterranean = [[Range 4-6 30-80 0-100 0-10
+Range 4-6 30-80 0-100 90-100
+Hill 6-8 30-50 10-90 0-5
+Hill 6-8 30-50 10-90 95-100
+Multiply 0.9 land 0 0
+Mask -2 0 0 0
+Smooth 1 0 0 0
+Hill 2-3 30-70 0-5 20-80
+Hill 2-3 30-70 95-100 20-80
+Trough 3-6 40-50 0-100 0-10
+Trough 3-6 40-50 0-100 90-100]],
+    peninsula = [[Range 2-3 20-35 40-50 0-15
+Add 5 all 0 0
+Hill 1 90-100 10-90 0-5
+Add 13 all 0 0
+Hill 3-4 3-5 5-95 80-100
+Hill 1-2 3-5 5-95 40-60
+Trough 5-6 10-25 5-95 5-95
+Smooth 3 0 0 0
+Invert 0.4 both 0 0]],
+    pangea = [[Hill 1-2 25-40 15-50 0-10
+Hill 1-2 5-40 50-85 0-10
+Hill 1-2 25-40 50-85 90-100
+Hill 1-2 5-40 15-50 90-100
+Hill 8-12 20-40 20-80 48-52
+Smooth 2 0 0 0
+Multiply 0.7 land 0 0
+Trough 3-4 25-35 5-95 10-20
+Trough 3-4 25-35 5-95 80-90
+Range 5-6 30-40 10-90 35-65]],
+    isthmus = [[Hill 5-10 15-30 0-30 0-20
+Hill 5-10 15-30 10-50 20-40
+Hill 5-10 15-30 30-70 40-60
+Hill 5-10 15-30 50-90 60-80
+Hill 5-10 15-30 70-100 80-100
+Smooth 2 0 0 0
+Trough 4-8 15-30 0-30 0-20
+Trough 4-8 15-30 10-50 20-40
+Trough 4-8 15-30 30-70 40-60
+Trough 4-8 15-30 50-90 60-80
+Trough 4-8 15-30 70-100 80-100
+Invert 0.25 x 0 0]],
+    shattered = [[Hill 8 35-40 15-85 30-70
+Trough 10-20 40-50 5-95 5-95
+Range 5-7 30-40 10-90 20-80
+Pit 12-20 30-40 15-85 20-80]],
+    taklamakan = [[Hill 1-3 20-30 30-70 30-70
+Hill 2-4 60-85 0-5 0-100
+Hill 2-4 60-85 95-100 0-100
+Hill 3-4 60-85 20-80 0-5
+Hill 3-4 60-85 20-80 95-100
+Smooth 3 0 0 0]],
+    old_world = [[Range 3 70 15-85 20-80
+Hill 2-3 50-70 15-45 20-80
+Hill 2-3 50-70 65-85 20-80
+Hill 4-6 20-25 15-85 20-80
+Multiply 0.5 land 0 0
+Smooth 2 0 0 0
+Range 3-4 20-50 15-35 20-45
+Range 2-4 20-50 65-85 45-80
+Strait 3-7 vertical 0 0
+Trough 6-8 20-50 15-85 45-65
+Pit 5-6 20-30 10-90 10-90]],
+    fractious = [[Hill 12-15 50-80 5-95 5-95
+Mask -1.5 0 0 0
+Mask 3 0 0 0
+Add -20 30-100 0 0
+Range 6-8 40-50 5-95 10-90]],
+}
+
+-- Azgaar's powers by the number of cells: how fast a hill (blob) and a range (line) fall off per ring.
+local BLOB_POWER = { [1000] = 0.93, [2000] = 0.95, [5000] = 0.97, [10000] = 0.98, [20000] = 0.99, [30000] = 0.991,
+                     [40000] = 0.993, [50000] = 0.994, [60000] = 0.995, [70000] = 0.9955, [80000] = 0.996,
+                     [90000] = 0.9964, [100000] = 0.9973 }
+local LINE_POWER = { [1000] = 0.75, [2000] = 0.77, [5000] = 0.79, [10000] = 0.81, [20000] = 0.82, [30000] = 0.83,
+                     [40000] = 0.84, [50000] = 0.86, [60000] = 0.87, [70000] = 0.88, [80000] = 0.91,
+                     [90000] = 0.92, [100000] = 0.93 }
+
+-- A seeded stream of numbers in [0, 1) (xorshift32 started from a mix of the seed): the template's choices.
+local function stream(seed)
+    local s = (math.floor(seed) * 0x9E3779B9 + 0x6D2B79F5) & 0xFFFFFFFF
+    if s == 0 then s = 1 end
+    return function()
+        s = s ~ ((s << 13) & 0xFFFFFFFF)
+        s = s ~ (s >> 17)
+        s = s ~ ((s << 5) & 0xFFFFFFFF)
+        return (s & 0xFFFFFF) / 16777216.0
+    end
+end
+
+-- The heights of a template on a grid of about `cells` cells over a square map: his generator step by step.
+local function run_template(name, text, cells, seed)
+    local random = stream(seed)
+    local width, height = 1000.0, 1000.0 -- map units; only ratios of them matter
+    local spacing = math.sqrt(width * height / cells)
+    local nx = math.floor((width + 0.5 * spacing - 1e-10) / spacing)
+    local nz = math.floor((height + 0.5 * spacing - 1e-10) / spacing)
+    local n = nx * nz
+    local blob, line = BLOB_POWER[cells] or 0.98, LINE_POWER[cells] or 0.81
+
+    -- Points jittered by up to 0.45 spacing on either axis; neighbours: the four of the lattice and, in each
+    -- block of four, the diagonal the Delaunay triangulation of the jittered points keeps.
+    local px, pz = {}, {}
+    for z = 0, nz - 1 do
+        for x = 0, nx - 1 do
+            local i = z * nx + x + 1
+            px[i] = (x + 0.5) * spacing + (random() * 0.9 - 0.45) * spacing
+            pz[i] = (z + 0.5) * spacing + (random() * 0.9 - 0.45) * spacing
+        end
+    end
+    local near, diag = {}, {}
+    for i = 1, n do near[i] = {} end
+    local function link(a, b)
+        near[a][#near[a] + 1] = b
+        near[b][#near[b] + 1] = a
+    end
+    for z = 0, nz - 1 do
+        for x = 0, nx - 1 do
+            local i = z * nx + x + 1
+            if x < nx - 1 then link(i, i + 1) end
+            if z < nz - 1 then link(i, i + nx) end
+            if x < nx - 1 and z < nz - 1 then
+                -- a b over c d: the diagonal b-c is Delaunay when d falls inside the circle through a, b, c.
+                local a, b, c, d = i, i + 1, i + nx, i + nx + 1
+                local ax, az = px[a] - px[d], pz[a] - pz[d]
+                local bx, bz = px[b] - px[d], pz[b] - pz[d]
+                local cx, cz = px[c] - px[d], pz[c] - pz[d]
+                local det = (ax * ax + az * az) * (bx * cz - cx * bz) - (bx * bx + bz * bz) * (ax * cz - cx * az)
+                            + (cx * cx + cz * cz) * (ax * bz - bx * az)
+                -- The block's two triangles: a b c and b d c, or a b d and a d c.
+                if det > 0.0 then link(b, c) else link(a, d); diag[i] = true end
+            end
+        end
+    end
+
+    local h = {}
+    for i = 1, n do h[i] = 0 end
+    local function lim(v) return math.min(math.max(v, 0.0), 100.0) end
+    local function store(v) return math.floor(lim(v)) end -- his Uint8Array
+    local function rand(lo, hi) return math.floor(random() * (hi - lo + 1)) + lo end
+    local function chance(p) return p >= 1 or (p > 0 and random() < p) end
+    -- "1.5" is 1 or 2, "5-6" a whole number between, as his getNumberInRange.
+    local function number_in(r)
+        local v = tonumber(r)
+        if v then
+            local whole = v >= 0 and math.floor(v) or -math.floor(-v)
+            return whole + (chance(v - whole) and 1 or 0)
+        end
+        local sign = r:sub(1, 1) == "-" and -1 or 1
+        if sign < 0 then r = r:sub(2) end
+        local a, b = r:match("^([%d%.]+)%-([%d%.]+)$")
+        if not a then return 0 end
+        local count = rand(tonumber(a) * sign, tonumber(b))
+        return count < 0 and 0 or count
+    end
+    local function point_in(r, length)
+        local a, b = r:match("^([%d%.]+)%-([%d%.]+)$")
+        local lo = (tonumber(a) or tonumber(r) or 0) / 100
+        local hi = b and tonumber(b) / 100 or lo
+        if hi == 0 then hi = lo end
+        return rand(lo * length, hi * length)
+    end
+    local function slot(x, z)
+        local row = math.max(0, math.floor(math.min(z / spacing, nz - 1)))
+        local col = math.max(0, math.floor(math.min(x / spacing, nx - 1)))
+        return row * nx + col + 1
+    end
+
+    local function hill(count, height_, rx, rz)
+        for _ = 1, number_in(count) do
+            local hh = lim(number_in(height_))
+            local start, limit = nil, 0
+            repeat
+                start = slot(point_in(rx, width), point_in(rz, height))
+                limit = limit + 1
+            until not (h[start] + hh > 90 and limit < 50)
+            local change = { [start] = math.floor(hh) }
+            local queue, head = { start }, 1
+            while head <= #queue do
+                local q = queue[head]
+                head = head + 1
+                for _, c in ipairs(near[q]) do
+                    if (change[c] or 0) == 0 then
+                        change[c] = math.floor(change[q] ^ blob * (random() * 0.2 + 0.9))
+                        if change[c] > 1 then queue[#queue + 1] = c end
+                    end
+                end
+            end
+            for i, v in pairs(change) do h[i] = store(h[i] + v) end
+        end
+    end
+
+    local function pit(count, height_, rx, rz)
+        for _ = 1, number_in(count) do
+            local hh = lim(number_in(height_))
+            local start, limit = nil, 0
+            repeat
+                start = slot(point_in(rx, width), point_in(rz, height))
+                limit = limit + 1
+            until not (h[start] < 20 and limit < 50)
+            local used, queue, head = {}, { start }, 1
+            while head <= #queue do
+                local q = queue[head]
+                head = head + 1
+                hh = hh ^ blob * (random() * 0.2 + 0.9)
+                if hh < 1 then break end
+                for _, c in ipairs(near[q]) do
+                    if not used[c] then
+                        h[c] = store(h[c] - hh * (random() * 0.2 + 0.9))
+                        used[c] = true
+                        queue[#queue + 1] = c
+                    end
+                end
+            end
+        end
+    end
+
+    -- A greedy walk from `cur` to `goal`, a step now and then taken at random (`randomness`).
+    local function walk(cur, goal, used, randomness)
+        local out = { cur }
+        used[cur] = true
+        while cur ~= goal do
+            local best, nxt = math.huge, nil
+            for _, e in ipairs(near[cur]) do
+                if not used[e] then
+                    local d = (px[goal] - px[e]) ^ 2 + (pz[goal] - pz[e]) ^ 2
+                    if random() > 1 - randomness then d = d / 2 end
+                    if d < best then best, nxt = d, e end
+                end
+            end
+            if not nxt then return out end
+            cur = nxt
+            out[#out + 1] = cur
+            used[cur] = true
+        end
+        return out
+    end
+
+    -- A range (sign 1) or a trough (sign -1): the walk, rings of falling height round it, spurs downhill.
+    local function range(sign, count, height_, rx, rz)
+        for _ = 1, number_in(count) do
+            local used = {}
+            local hh = lim(number_in(height_))
+            local sx, sz = point_in(rx, width), point_in(rz, height)
+            if sign < 0 then
+                local limit = 0
+                while h[slot(sx, sz)] < 20 and limit < 49 do
+                    sx, sz = point_in(rx, width), point_in(rz, height)
+                    limit = limit + 1
+                end
+            end
+            local ex, ez, limit = 0, 0, 0
+            repeat
+                ex = random() * width * 0.8 + width * 0.1
+                ez = random() * height * 0.7 + height * 0.15
+                local dist = math.abs(ez - sz) + math.abs(ex - sx)
+                limit = limit + 1
+            until not ((dist < width / 8 or dist > width / (sign > 0 and 3 or 2)) and limit < 50)
+            local ridge = walk(slot(sx, sz), slot(ex, ez), used, sign > 0 and 0.15 or 0.2)
+            local queue, rings = {}, 0
+            for k, c in ipairs(ridge) do queue[k] = c end
+            while #queue > 0 do
+                local frontier = queue
+                queue = {}
+                rings = rings + 1
+                for _, c in ipairs(frontier) do h[c] = store(h[c] + sign * hh * (random() * 0.3 + 0.85)) end
+                hh = hh ^ line - 1
+                if hh < 2 then break end
+                for _, f in ipairs(frontier) do
+                    for _, c in ipairs(near[f]) do
+                        if not used[c] then
+                            queue[#queue + 1] = c
+                            used[c] = true
+                        end
+                    end
+                end
+            end
+            for d, cur in ipairs(ridge) do
+                if (d - 1) % 6 == 0 then
+                    for _ = 1, rings do
+                        local low, at = math.huge, nil
+                        for _, c in ipairs(near[cur]) do
+                            if h[c] < low then low, at = h[c], c end
+                        end
+                        h[at] = math.floor((h[cur] * 2 + h[at]) / 3)
+                        cur = at
+                    end
+                end
+            end
+        end
+    end
+
+    local function strait(width_, direction)
+        local desired = math.min(number_in(width_), nx / 3)
+        if desired < 1 and chance(desired) then return end
+        local vertical = direction == "vertical"
+        local sx = vertical and math.floor(random() * width * 0.4 + width * 0.3) or 5
+        local sz = vertical and 5 or math.floor(random() * height * 0.4 + height * 0.3)
+        local ex = vertical and math.floor(width - sx - width * 0.1 + random() * width * 0.2) or width - 5
+        local ez = vertical and height - 5 or math.floor(height - sz - height * 0.1 + random() * height * 0.2)
+        local cur, goal = slot(sx, sz), slot(ex, ez)
+        local ring = {}
+        while cur ~= goal do
+            local best, nxt = math.huge, cur
+            for _, e in ipairs(near[cur]) do
+                local d = (px[goal] - px[e]) ^ 2 + (pz[goal] - pz[e]) ^ 2
+                if random() > 0.8 then d = d / 2 end
+                if d < best then best, nxt = d, e end
+            end
+            cur = nxt
+            ring[#ring + 1] = cur
+        end
+        local used, query = {}, {}
+        local step = 0.1 / desired
+        for i = 0, desired - 1 do
+            local exp = 0.9 - step * (desired - i)
+            for _, r in ipairs(ring) do
+                for _, e in ipairs(near[r]) do
+                    if not used[e] then
+                        used[e] = true
+                        query[#query + 1] = e
+                        local v = math.floor(h[e] ^ exp)
+                        h[e] = v > 100 and 5 or v
+                    end
+                end
+            end
+            ring = { table.unpack(query) }
+        end
+    end
+
+    local function modify(r, add, mult)
+        local lo = r == "land" and 20 or (r == "all" and 0 or tonumber(r:match("^(%d+)")))
+        local hi = (r == "land" or r == "all") and 100 or tonumber(r:match("%-(%d+)$"))
+        local is_land = lo == 20
+        for i = 1, n do
+            local v = h[i]
+            if v >= lo and v <= hi then
+                if add ~= 0 then v = is_land and math.max(v + add, 20) or v + add end
+                if mult ~= 1 then v = is_land and (v - 20) * mult + 20 or v * mult end
+                h[i] = store(v)
+            end
+        end
+    end
+
+    local function smooth(fr)
+        local out = {}
+        for i = 1, n do
+            local sum, k = h[i], 1
+            for _, c in ipairs(near[i]) do sum, k = sum + h[c], k + 1 end
+            out[i] = fr == 1 and store(sum / k) or store((h[i] * (fr - 1) + sum / k) / fr)
+        end
+        h = out
+    end
+
+    local function mask(power)
+        local fr = power ~= 0 and math.abs(power) or 1
+        for i = 1, n do
+            local x, z = 2 * px[i] / width - 1, 2 * pz[i] / height - 1
+            local d = (1 - x * x) * (1 - z * z)
+            if power < 0 then d = 1 - d end
+            h[i] = store((h[i] * (fr - 1) + h[i] * d) / fr)
+        end
+    end
+
+    local function invert(p, axes)
+        if not chance(p) then return end
+        local out = {}
+        for i = 1, n do
+            local x, z = (i - 1) % nx, (i - 1) // nx
+            local ix = axes ~= "y" and nx - x - 1 or x
+            local iz = axes ~= "x" and nz - z - 1 or z
+            out[i] = h[iz * nx + ix + 1]
+        end
+        h = out
+    end
+
+    for step in text:gmatch("[^\n]+") do
+        local a = {}
+        for word in step:gmatch("%S+") do a[#a + 1] = word end
+        local tool = a[1]
+        if tool == "Hill" then hill(a[2], a[3], a[4], a[5])
+        elseif tool == "Pit" then pit(a[2], a[3], a[4], a[5])
+        elseif tool == "Range" then range(1, a[2], a[3], a[4], a[5])
+        elseif tool == "Trough" then range(-1, a[2], a[3], a[4], a[5])
+        elseif tool == "Strait" then strait(a[2], a[3])
+        elseif tool == "Mask" then mask(tonumber(a[2]))
+        elseif tool == "Invert" then invert(tonumber(a[2]), a[3])
+        elseif tool == "Add" then modify(a[3], tonumber(a[2]), 1)
+        elseif tool == "Multiply" then modify(a[3], 0, tonumber(a[2]))
+        elseif tool == "Smooth" then smooth(tonumber(a[2]))
+        else fail("Lands.Template '" .. name .. "' has an unknown step '" .. tostring(tool) .. "'") end
+    end
+    return { h = h, nx = nx, nz = nz, px = px, pz = pz, diag = diag, spacing = spacing, units = width }
+end
+
+-- The coast on a raster `o.sub` times finer than the cells.
+--   1. Each pixel's height is the cells', read linearly in the triangle of their (moved) points it falls in:
+--      land where a rounded copy of it is the sea level or more (his 20, or the share `o.fraction` asks for).
+--   2. The coast moved by `o.noise` (a list in metres, or nil), inwards where it is positive: a noise a few
+--      cells deep frays it whatever the height.
+--   3. `o.fjords` fjord systems, each a basin's valleys drowned from its outlet upstream, branching with its
+--      tributaries; after the fray, which would close them. `o.random` draws them.
+-- Returns the signed distance (exact, blurred once, in metres) and the heights, for the ground.
+local function rasterize(g, size, o)
+    local sub = o.sub
+    local n = g.nx * sub
+    local pixel = g.units / n
+    -- The cells' heights read linearly inside the triangles their points make (the triangulation whose edges
+    -- are the cells' neighbours, Raster.Triangles): every triangle a plane; outside every triangle (the map's
+    -- rim), the nearest point's. Each pixel keeps its triangle and its weights, for the ground in triangles.
+    local tri = Raster.Triangles{ px = g.px, pz = g.pz, h = g.h, diag = g.diag, nx = g.nx, nz = g.nz,
+                                  spacing = g.spacing, units = g.units, n = n }
+    local corners, weights, found = tri.corners, tri.weights, tri.found
+    local ta, tb, tc, wa, wb, wc = {}, {}, {}, {}, {}, {}
+    local land, height_, off = {}, tri.height, {}
+    for k = 1, n * n do
+        local q = 3 * k - 2
+        ta[k], tb[k], tc[k] = corners[q], corners[q + 1], corners[q + 2]
+        wa[k], wb[k], wc[k] = weights[q], weights[q + 1], weights[q + 2]
+        if not found[k] and o.outside then
+            -- Off the map's triangles a world's cell has its sea floor (`o.outside`, per pixel), and no facets
+            -- there: one corner's plane would flatten it.
+            height_[k], off[k] = o.outside[k], true
+        end
+    end
+    -- Three passes of a box `radius` pixels wide each way: about a Gaussian of that radius (Raster.Box).
+    local function rounded(values, radius)
+        if radius <= 0 then return values end
+        return Raster.Box{ values = values, n = n, radius = radius }
+    end
+    -- The outline is drawn on a rounded copy, so the coast does not run in the triangles' straight edges; the
+    -- ground keeps its triangles.
+    local outline = rounded(height_, o.round or 0)
+    -- The sea level: his 20, or the height that leaves `o.fraction` of the pixels above it.
+    local level = 20.0
+    if o.fraction then
+        local sorted = {}
+        for i = 1, n * n do sorted[i] = outline[i] end
+        table.sort(sorted)
+        level = sorted[math.min(math.max(math.floor((1.0 - o.fraction) * n * n) + 1, 1), n * n)]
+    end
+    for k = 1, n * n do
+        land[k] = outline[k] >= level
+    end
+    -- The ground in triangles (`o.bands`): each corner of a triangle takes the flat height of its band
+    -- (`o.bands.land` on land, `o.bands.sea` under it, functions of his height), and the triangle is the plane
+    -- through them: flat where its corners share a band, a slope where they do not. `cliff` is 1 over the
+    -- triangles whose first corner falls where `o.bands.cliff` (a list over the pixels) is under a half: there
+    -- the caller steps the bands on the continuous height instead, walls between flat bands.
+    local ground, floor, cliff
+    if o.bands then
+        local land_of, sea_of, pick = o.bands.land, o.bands.sea, o.bands.cliff
+        ground, floor, cliff = {}, {}, {}
+        for k = 1, n * n do
+            local a, b, c = ta[k], tb[k], tc[k]
+            local ix = math.min(math.max(math.floor(g.px[a] / pixel), 0), n - 1)
+            local iz = math.min(math.max(math.floor(g.pz[a] / pixel), 0), n - 1)
+            cliff[k] = pick[iz * n + ix + 1] < 0.5 and 1.0 or 0.0
+            ground[k] = wa[k] * land_of(g.h[a], level) + wb[k] * land_of(g.h[b], level) + wc[k] * land_of(g.h[c], level)
+            floor[k] = wa[k] * sea_of(g.h[a], level) + wb[k] * sea_of(g.h[b], level) + wc[k] * sea_of(g.h[c], level)
+        end
+    end
+    local metres = size / n
+    -- The exact Euclidean distance, in pixels, to the nearest pixel where `source(i)` holds (see
+    -- Raster.Distance, the engine's: Felzenszwalb and Huttenlocher's lower envelope of parabolas).
+    local function distance(source)
+        local mask = {}
+        for i = 1, n * n do mask[i] = source(i) and true or false end
+        return Raster.Distance{ mask = mask, n = n }
+    end
+    -- In pixels, land negative.
+    local function signed()
+        local to_land = distance(function(i) return land[i] end)
+        local to_sea = distance(function(i) return not land[i] end)
+        local sdf = {}
+        for i = 1, n * n do
+            sdf[i] = land[i] and -(math.min(to_sea[i], 1e6) - 0.5) or (math.min(to_land[i], 1e6) - 0.5)
+        end
+        return sdf
+    end
+    local sdf = signed()
+
+    if o.noise then
+        for i = 1, n * n do land[i] = sdf[i] * metres + o.noise[i] < 0.0 end
+        sdf = signed()
+    end
+    if (o.fjords or 0) > 0 then
+        -- Fjords are drowned valleys, so they are carved where the land drains: a priority flood from the coast
+        -- over the outline's height gives every land pixel the neighbour it drains to (the pits filled on the
+        -- way, so every path reaches the sea), the area each pixel drains is summed down those paths, and from
+        -- the outlets of the largest basins the valleys are cut upstream, every tributary that drains enough
+        -- with them: dendritic, as the references' fjord coasts are. The basins taken cluster round two or
+        -- three fjord coasts (`o.random` draws them), not spread evenly.
+        local random = o.random
+        local before, carved = 0, {}
+        for i = 1, n * n do if land[i] then before = before + 1 end end
+        -- The drainage (Raster.Drain): each land pixel's parent (0 at an outlet on the coast) and the area
+        -- drained through it.
+        local drained = Raster.Drain{ land = land, height = outline, n = n }
+        local parent, area, children, outlets = drained.parent, drained.area, {}, {}
+        for k = 1, n * n do
+            local p = parent[k]
+            if p == 0 then
+                outlets[#outlets + 1] = k
+            elseif p > 0 then
+                local list = children[p]
+                if not list then list = {}; children[p] = list end
+                list[#list + 1] = k
+            end
+        end
+        -- The fjord coasts, and each outlet's claim: the basin's area, the more the nearer a fjord coast.
+        local centres, reach = {}, 0.2 * n
+        for c = 1, math.min(#outlets, 2 + math.floor(random() * 2)) do
+            centres[c] = outlets[math.floor(random() * #outlets) + 1]
+        end
+        local function claim(k)
+            local x, z, near = (k - 1) % n, (k - 1) // n, 0.0
+            for _, c in ipairs(centres) do
+                local d2 = (x - (c - 1) % n) ^ 2 + (z - (c - 1) // n) ^ 2
+                near = math.max(near, math.exp(-d2 / (reach * reach)))
+            end
+            return area[k] * near
+        end
+        table.sort(outlets, function(a, b)
+            local ca, cb = claim(a), claim(b)
+            return ca > cb or (ca == cb and a < b)
+        end)
+        -- A pixel of a path, where it is carved: the mean of it and the four pixels it drains through, so the
+        -- path's steps in the raster's eight directions read as a bending line, not a stair of 45 degree turns.
+        local function centre(k)
+            local sx, sz, m, q = 0.0, 0.0, 0, k
+            while q and q ~= 0 and m < 5 do
+                sx, sz, m = sx + (q - 1) % n + 0.5, sz + (q - 1) // n + 0.5, m + 1
+                q = parent[q]
+            end
+            return sx / m, sz / m
+        end
+        local function disc(x, z, r, each)
+            for zz = math.max(math.floor(z - r), 0), math.min(math.ceil(z + r), n - 1) do
+                for xx = math.max(math.floor(x - r), 0), math.min(math.ceil(x + r), n - 1) do
+                    local d2 = (xx + 0.5 - x) ^ 2 + (zz + 0.5 - z) ^ 2
+                    if d2 <= r * r then each(zz * n + xx + 1, math.sqrt(d2) / r) end
+                end
+            end
+        end
+        -- The valley each fjord drowns, in the ground (the rounded height the strata read): a V twice the
+        -- fjord's width each side, as deep as half the land above the sea there, along the fjord and on
+        -- upstream past its head for 0.8 of its length, shallowing out to nothing.
+        local sink = {}
+        local function valley(k, r, share)
+            local x, z = centre(k)
+            disc(x, z, r, function(q, d)
+                if land[q] then
+                    local cut_ = 0.5 * math.max(outline[q] - level, 0.0) * share * (1.0 - d)
+                    sink[q] = math.max(sink[q] or 0.0, cut_)
+                end
+            end)
+        end
+        -- Up a basin from its outlet: every pixel whose drained area is a twentieth of the outlet's or more
+        -- (and at least four cells), as far as `length` pixels along the valley, and its valley beyond; the
+        -- width goes with the root of the area drained and narrows to the heads.
+        local cut = 0
+        for _, outlet in ipairs(outlets) do
+            if cut >= o.fjords or claim(outlet) < 4 * sub * sub then break end
+            cut = cut + 1
+            local total = area[outlet]
+            local least = math.max(4 * sub * sub, 0.05 * total)
+            local length = sub * (10.0 + 18.0 * random())
+            local width = sub * (1.2 + 1.2 * random())
+            local stack = { { outlet, 0.0 } }
+            while #stack > 0 do
+                local top = table.remove(stack)
+                local k, along = top[1], top[2]
+                local t = along / length
+                local r = 0.5 * width * (0.25 + 0.75 * math.sqrt(area[k] / total)) * (1.0 - 0.4 * math.min(t, 1.0)) + 0.5
+                if t <= 1.0 then
+                    local x, z = centre(k)
+                    disc(x, z, r, function(q)
+                        if land[q] then land[q], carved[q] = false, true end
+                    end)
+                    valley(k, 2.0 * r + sub, 1.0)
+                else
+                    valley(k, 2.0 * r + sub, 1.0 - (t - 1.0) / 0.8)
+                end
+                for _, q in ipairs(children[k] or {}) do
+                    if area[q] >= least then
+                        local step = (math.abs(q - k) == 1 or math.abs(q - k) == n) and 1.0 or 1.414
+                        if along + step <= 1.8 * length then stack[#stack + 1] = { q, along + step } end
+                    end
+                end
+            end
+        end
+        -- Into the rounded height the strata read and the height a smooth ground is.
+        for q, v in pairs(sink) do outline[q], height_[q] = outline[q] - v, height_[q] - v end
+        -- The fjords' walls frayed as the coast was, by a sixth of the same noise, within two pixels of them.
+        if o.noise then
+            local walls = signed()
+            local near = distance(function(i) return carved[i] end)
+            for i = 1, n * n do
+                if near[i] <= 2.0 and not carved[i] then land[i] = walls[i] * metres + o.noise[i] / 6.0 < 0.0 end
+            end
+        end
+        -- The land the fjords took is given back as a rim on the coast before them (the sea nearest it), never
+        -- within three pixels of a fjord, which would close its mouth: the share of land stays what the
+        -- template (or `o.fraction`) made it.
+        local fjord = distance(function(i) return carved[i] end)
+        local count, sea = 0, {}
+        for i = 1, n * n do
+            if land[i] then
+                count = count + 1
+            elseif not carved[i] and fjord[i] > 3.0 then
+                sea[#sea + 1] = i
+            end
+        end
+        table.sort(sea, function(a, b) return sdf[a] < sdf[b] or (sdf[a] == sdf[b] and a < b) end)
+        for i = 1, math.min(before - count, #sea) do land[sea[i]] = true end
+        sdf = signed()
+    end
+    -- Strata (`o.strata`): bands of height, flat, joined by ramps. A pixel of band j is at its level
+    -- (`o.strata.land_levels[j]`) unless it is within `o.strata.width` pixels of the next band's contour, where it
+    -- rises to that level by its distance to it. The top band rises from its contour to `o.strata.land_top`
+    -- the same way, and the sea floor goes down likewise (`o.strata.sea_levels`, the coast at depth 0). Bands
+    -- are read on the rounded height; the coast is the coast already drawn.
+    local strata_land, strata_sea
+    if o.strata then
+        local st = o.strata
+        -- The shelf (`o.strata.shelf`): as wide, in pixels, as the coast nearest each pixel of sea says (stepped
+        -- back along the distance's gradient, two pixels into the land): `wide` where that land is low, `narrow`
+        -- where it is high, times 0.7 to 1.3 by `noise` (a list in 0..1). It is the first band out to that
+        -- width whatever the cells' depth, and also where the cells are under `shallow` of the sea level deep.
+        local shelf_w = {}
+        if st.shelf then
+            local sh = st.shelf
+            local function at(x, z) return math.min(math.max(z, 0), n - 1) * n + math.min(math.max(x, 0), n - 1) + 1 end
+            for z = 0, n - 1 do
+                for x = 0, n - 1 do
+                    local k = z * n + x + 1
+                    local d, w = sdf[k], 0.0
+                    if not land[k] and d < 1.3 * sh.wide then
+                        local gx, gz = sdf[at(x + 1, z)] - sdf[at(x - 1, z)], sdf[at(x, z + 1)] - sdf[at(x, z - 1)]
+                        local l = math.max(math.sqrt(gx * gx + gz * gz), 1e-6)
+                        local q = at(math.floor(x - gx / l * (d + 2.0) + 0.5), math.floor(z - gz / l * (d + 2.0) + 0.5))
+                        local u = land[q] and (outline[q] - level) / (100.0 - level) or 0.0
+                        local e = math.min(math.max((u - 0.03) / 0.22, 0.0), 1.0)
+                        local low = 1.0 - e * e * (3.0 - 2.0 * e)
+                        w = (sh.narrow + (sh.wide - sh.narrow) * low) * (0.7 + 0.6 * sh.noise[q])
+                    end
+                    shelf_w[k] = w
+                end
+            end
+            -- Smoothed a cell: each pixel's nearest coast jumps across the lines where two coasts are as near.
+            shelf_w = rounded(shelf_w, sub)
+        end
+        local band = {}
+        for i = 1, n * n do
+            if land[i] then
+                local u, b = (outline[i] - level) / (100.0 - level), 1
+                for k = 2, #st.land_edges do if u >= st.land_edges[k] then b = k end end
+                band[i] = b
+            else
+                local s, b = (level - outline[i]) / math.max(level, 1.0), 1
+                for k = 2, #st.sea_edges do if s >= st.sea_edges[k] then b = k end end
+                if st.shelf then
+                    b = (sdf[i] < shelf_w[i] or s < st.shelf.shallow) and 1 or math.max(b, 2)
+                end
+                band[i] = -b
+            end
+        end
+        -- Under the sea each band is opened and closed by a cell (its fingers and its gaps under two cells
+        -- across removed): the cells' planes cross a depth in long thin slivers, and each sliver's ramps on
+        -- both sides were a straight groove or ridge across the floor.
+        local deeper = nil
+        for k = 2, #st.sea_edges do
+            local mask = {}
+            for i = 1, n * n do mask[i] = band[i] <= -k end
+            -- Opened, then closed, by a square `sub` pixels each way (Raster.Square).
+            mask = Raster.Square{ mask = mask, n = n, radius = sub, steps = { true, false, false, true } }
+            for i = 1, n * n do
+                mask[i] = not land[i] and mask[i] and (deeper == nil or deeper[i])
+            end
+            for i = 1, n * n do
+                if not land[i] then band[i] = mask[i] and math.min(band[i], -k) or math.max(band[i], -(k - 1)) end
+            end
+            deeper = mask
+        end
+        local function interpolate(sign, levels, top, count)
+            local out = {}
+            local below, above = {}, {}
+            for k = 1, count do
+                -- The coast (the first band's lower contour) and the top band's: where a band rises from.
+                below[k] = (k == 1 or k == count) and distance(function(i) return sign * band[i] < k end) or nil
+                above[k] = k > 1 and distance(function(i) return sign * band[i] >= k end) or nil
+            end
+            for i = 1, n * n do
+                local j = sign * band[i]
+                if j >= 1 then
+                    -- Flat at the band's level, but within `width` pixels (`st.width`, a list: short and steep
+                    -- here, long and gentle there) of the next band's contour it rises to that level by its
+                    -- distance to it; the first band rises from the coast the same way, the top one from its
+                    -- contour to `top`. Where a band is narrower than its ramp, the step is a cliff.
+                    local w = math.max(st.width[i], 1.0)
+                    local h = levels[j]
+                    -- The shelf falls the whole of its width, gently, to its level at its edge.
+                    if j == 1 then
+                        local w1 = (sign < 0 and st.shelf) and math.max(shelf_w[i], w) or w
+                        h = levels[1] * math.min(below[1][i] / w1, 1.0)
+                    end
+                    if j < count then
+                        h = h + (levels[j + 1] - levels[j]) * math.max(1.0 - above[j + 1][i] / w, 0.0)
+                    else
+                        h = h + (top - levels[j]) * math.min(below[j][i] / w, 1.0)
+                    end
+                    out[i] = h
+                end
+            end
+            return out
+        end
+        strata_land = interpolate(1, st.land_levels, st.land_top, #st.land_edges)
+        strata_sea = interpolate(-1, st.sea_levels, st.sea_bottom, #st.sea_edges)
+        for i = 1, n * n do
+            strata_land[i] = strata_land[i] or 0.0
+            strata_sea[i] = strata_sea[i] or 0.0
+        end
+        -- Facets: the strata's height taken at the corners of the triangles and each triangle filled as a
+        -- plane, so a long ramp is a few planes with edges between them and not a smooth gradient. Where
+        -- `st.cliff` (a list over the pixels, at the triangle's first corner) is under a half, the triangle keeps
+        -- the strata as they are, flat bands and the walls between them.
+        local corner_land, corner_sea = {}, {}
+        for v = 1, #g.px do
+            local ix = math.min(math.max(math.floor(g.px[v] / pixel), 0), n - 1)
+            local iz = math.min(math.max(math.floor(g.pz[v] / pixel), 0), n - 1)
+            -- Under the sea the corner is the median of its 3 x 3 pixels: a corner on one deep pixel past a band's
+            -- edge would sink its triangles into a pit; a median keeps the edges, as no mean would.
+            local around = {}
+            for dz = -1, 1 do
+                for dx = -1, 1 do
+                    local q = math.min(math.max(iz + dz, 0), n - 1) * n + math.min(math.max(ix + dx, 0), n - 1) + 1
+                    around[#around + 1] = strata_sea[q]
+                end
+            end
+            table.sort(around)
+            corner_land[v], corner_sea[v] = strata_land[iz * n + ix + 1], around[5]
+        end
+        for k = 1, n * n do
+            local a, b, c = ta[k], tb[k], tc[k]
+            local ix = math.min(math.max(math.floor(g.px[a] / pixel), 0), n - 1)
+            local iz = math.min(math.max(math.floor(g.pz[a] / pixel), 0), n - 1)
+            if not off[k] and (not st.cliff or st.cliff[iz * n + ix + 1] >= 0.5) then
+                strata_land[k] = wa[k] * corner_land[a] + wb[k] * corner_land[b] + wc[k] * corner_land[c]
+                strata_sea[k] = wa[k] * corner_sea[a] + wb[k] * corner_sea[b] + wc[k] * corner_sea[c]
+            end
+        end
+    end
+    for i = 1, n * n do sdf[i] = sdf[i] * metres end
+    -- Connected land (four neighbours), ranked by size from 1, and connected water with whether it touches
+    -- the map's edge (Raster.Label): the ids of `region_id` and what the report lists. The sea takes the id
+    -- of the nearest land, grown outwards a ring at a time, so ids read across the coast.
+    local labelled = Raster.Label{ land = land, n = n }
+    local region, masses, waters = labelled.region, labelled.masses, labelled.waters
+    for rank, body in ipairs(masses) do body.rank = rank end
+    return { n = n, cell = metres, sdf = Raster.Soften{ values = sdf, n = n }, height = height_, ground = ground,
+             floor = floor, cliff = cliff,
+             strata_land = strata_land, strata_sea = strata_sea, region = region,
+             masses = masses, waters = waters, level = level }
+end
+
+-- The terrain samples of a raster `n` pixels of `px` metres a side from its corner (`x0`, `z0`).
+local function raster_grid(x0, z0, n, px)
+    return function(value)
+        return Terrain.Sample{ value = value, origin = { x0 + 0.5 * px, z0 + 0.5 * px }, size = { n, n }, cell = px }
+    end
+end
+
+-- The beaches' width at the coast, in metres, as fields of the world at `cell_m` (a template's cell): a field
+-- fifteen cells across leaves whole faces of the land bare; along the rest the sand is never under an eighth
+-- of a cell, so the beaches join, and where one ten cells across says (long runs) it widens to between a fifth
+-- of a cell and one, as one six cells across says, and threefold where one sixteen cells across does.
+local function beach_widths(t, seed, cell_m)
+    local function field(cells, salt)
+        return Noises.fBm{ frequency = 1.0 / (cells * cell_m), octaves = 2, amplitude = 0.5, seed = seed + salt }.value + 0.5
+    end
+    local share = t.beaches or 0.5
+    local face = Curves.Smoothstep{ input = field(15.0, 487), min = 0.4, max = 0.55 }
+    local runs = Curves.Smoothstep{ input = field(10.0, 481), min = 1.0 - share - 0.15, max = 1.0 - share + 0.15 }
+    local wide = Curves.Clamp{ input = field(6.0, 483), min = 0.0, max = 1.0 }
+    local broad = Curves.Smoothstep{ input = field(16.0, 489), min = 0.45, max = 0.75 }
+    return face * (0.12 + runs * ((0.2 + 0.8 * wide) * (1.0 + 2.0 * broad) - 0.12)) * cell_m
+end
+
+-- --- The ocean floor -------------------------------------------------------------------------------
+
+-- How far below a map's floor the drowned land may be, by the distance offshore: past a shelf 0.045 of a
+-- cell wide, a wall of a share of the abyssal depth at each distance (in cells), unevenly apart and each its
+-- own height, 3.6 of the abyss in all by 0.11 of a cell. Each wall wavers on its own (`OCEAN_WAVER`). A cell
+-- is a world's cell, or a bounded map's whole side.
+local OCEAN_STAIRS = { { 0.045, 0.3 }, { 0.051, 0.35 }, { 0.056, 0.25 }, { 0.063, 0.35 }, { 0.068, 0.4 }, { 0.074, 0.25 },
+                       { 0.081, 0.4 }, { 0.086, 0.3 }, { 0.093, 0.4 }, { 0.099, 0.25 }, { 0.107, 0.35 } }
+local OCEAN_WAVER = 0.006
+for k, step in ipairs(OCEAN_STAIRS) do step[3], step[4] = math.cos(2.4 * k), math.sin(2.4 * k) end
+-- The drowned land's depth, as a share of the abyssal depth, by its stratum (0 to 1), in straight pieces: the
+-- trenches' floors, the far floor, the floor by the lands, the hills, the guyots' tops.
+local OCEAN_DEPTHS = { { 0.0, 5.5 }, { 0.2, 3.8 }, { 0.85, 1.0 }, { 0.92, 0.7 }, { 1.0, 0.1 } }
+
+local function ocean_capsule(list, from, to, w, height, kind)
+    list[#list + 1] = { shape = "capsule", from = from, to = to, width = w, smooth = 0.0,
+                        profile = { kind = kind or "dome", height = height, width = w } }
+end
+
+-- The open ocean floor at the lands' own detail: a drowned land, rastered like a template's (his jittered
+-- lattice, `o.lattice` cells a cell, his triangles, the land's strata of bands, ramps, walls and facets) and
+-- laid below the sea. So that cells have no seam, everything it is made of is the world's, not a map's: the
+-- lattice's points are jittered by a hash of their world index, and its heights are hills, ranges and pits
+-- (his steps' shapes) and the ocean's forms each cell places by its hash. A cell is rastered with eight
+-- lattice cells more each way, past the reach of a ramp, and cropped, so the next cell, rastered over the
+-- same points, gives the same pixels where they meet.
+--   o.seed, o.cell (metres), o.abyss (the abyssal depth, negative), o.lattice, o.sub (pixels a lattice cell),
+--   o.descent (0 to 1, how far the floor has fallen below the abyss, an expression), o.origin (the centre of
+--   cell 0, 0; the world's origin by default), o.sources (adds trenches and canyons the caller's lands place:
+--   `o.sources(i, j, deeps, canyons)`), o.key (kept in the engine under it when given), o.affordable (asked
+--   before a cell is made; nil out of budget).
+-- Returns `drowned(i, j)`: the cell's depths, then its canyons, then two fields the stairs waver by, each a
+-- list of (lattice * sub)^2, or nil.
+local function ocean_floor(o)
+    local seed, cell, abyss, lattice, sub, descent = o.seed, o.cell, o.abyss, o.lattice, o.sub, o.descent
+    local ox, oz = o.origin and o.origin[1] or 0.0, o.origin and o.origin[2] or 0.0
+    local nw = lattice * sub
+    local px = cell / nw
+    local step_m = cell / lattice
+    local SKIRT = 8
+    local function features(i, j)
+        local out_up, out_down = {}, {}
+        for a = i - 1, i + 1 do
+            for b = j - 1, j + 1 do
+                local random = stream(((math.floor(seed) * 40503 ~ a * 2246822519 ~ b * 3266489917) + 61) & 0x7FFFFFFF)
+                local function at() return { ox + (a - 0.5 + random()) * cell, oz + (b - 0.5 + random()) * cell } end
+                for _ = 1, 20 do
+                    local r = (0.02 + 0.055 * random()) * cell
+                    out_up[#out_up + 1] = { shape = "circle", radius = r, at = at(), smooth = 0.0,
+                                            profile = { kind = "dome", height = 0.2 + 0.6 * random(), width = r } }
+                end
+                for _ = 1, 8 do
+                    local from, angle, length = at(), random() * math.pi, (0.08 + 0.22 * random()) * cell
+                    local w = (0.02 + 0.03 * random()) * cell
+                    out_up[#out_up + 1] = { shape = "capsule", from = from, smooth = 0.0, width = w,
+                                            to = { from[1] + math.cos(angle) * length, from[2] + math.sin(angle) * length },
+                                            profile = { kind = "dome", height = 0.3 + 0.6 * random(), width = w } }
+                end
+                for _ = 1, 10 do
+                    local r = (0.02 + 0.045 * random()) * cell
+                    out_down[#out_down + 1] = { shape = "circle", radius = r, at = at(), smooth = 0.0,
+                                                profile = { kind = "dome", height = 0.3 + 0.7 * random(), width = r } }
+                end
+                -- Trenches: narrow cuts a few bands deep, the canyons of the deep floor.
+                for _ = 1, 6 do
+                    local from, angle, length = at(), random() * math.pi, (0.1 + 0.25 * random()) * cell
+                    local w = (0.01 + 0.015 * random()) * cell
+                    out_down[#out_down + 1] = { shape = "capsule", from = from, smooth = 0.0, width = w,
+                                                to = { from[1] + math.cos(angle) * length, from[2] + math.sin(angle) * length },
+                                                profile = { kind = "dome", height = 0.5 + 0.5 * random(), width = w } }
+                end
+            end
+        end
+        return out_up, out_down
+    end
+    -- The ocean's larger forms round cell (i, j), each placed by a hash of the world:
+    --  mounts   guyots and seamounts, cones whose top the clamp at his 100 cuts flat; one cell in four has a
+    --           hotspot chain of them, each older (lower, smaller) than the one before.
+    --  ridges   mid-ocean ridges, one in most ridge cells of five cells, in segments a fault zone offsets
+    --           sideways; `rifts` are the valley down each segment's crest and the fault troughs between.
+    --  deeps    abyssal trenches: one cell in ten an arc of its own, and those of the caller's lands.
+    --  canyons  valleys from the caller's coasts out across the slope to the deep floor.
+    local RIDGE = 5.0 * cell
+    local function ocean_forms(i, j)
+        local mounts, ridges, rifts, deeps, canyons = {}, {}, {}, {}, {}
+        local function hashed(a, b, salt)
+            return stream(((math.floor(seed) * 2246822519 ~ a * 73856093 ~ b * 19349663 ~ salt) + 97) & 0x7FFFFFFF)
+        end
+        for a = i - 2, i + 2 do
+            for b = j - 2, j + 2 do
+                local random = hashed(a, b, 0x51ed27)
+                local function at() return { ox + (a - 0.5 + random()) * cell, oz + (b - 0.5 + random()) * cell } end
+                if math.abs(a - i) <= 1 and math.abs(b - j) <= 1 then
+                    for _ = 1, math.floor(random() * 3) do
+                        local r = (0.03 + 0.04 * random()) * cell
+                        mounts[#mounts + 1] = { shape = "circle", radius = r, at = at(), smooth = 0.0,
+                                                profile = { kind = "cone", height = 0.5 + 0.6 * random(), width = r } }
+                    end
+                    if random() < 0.25 then
+                        local p, angle, n = at(), random() * 2.0 * math.pi, 4 + math.floor(random() * 4)
+                        for k = 0, n - 1 do
+                            local age = k / n
+                            local r = (0.055 - 0.03 * age) * cell
+                            mounts[#mounts + 1] = { shape = "circle", radius = r, at = { p[1], p[2] }, smooth = 0.0,
+                                                    profile = { kind = "cone", height = 1.15 - 0.6 * age, width = r } }
+                            local hop = (0.06 + 0.04 * random()) * cell
+                            p = { p[1] + math.cos(angle) * hop, p[2] + math.sin(angle) * hop }
+                            angle = angle + (random() - 0.5) * 0.4
+                        end
+                    end
+                end
+                if random() < 0.1 then
+                    -- An arc of a circle 0.8 to 1.4 cells across, its middle in this cell.
+                    local m, dir, R = at(), random() * 2.0 * math.pi, (0.8 + 0.6 * random()) * cell
+                    local span, w = 0.9 + 0.6 * random(), (0.015 + 0.015 * random()) * cell
+                    local c = { m[1] - math.cos(dir) * R, m[2] - math.sin(dir) * R }
+                    local last
+                    for k = 0, 6 do
+                        local t = dir + (k / 6 - 0.5) * span
+                        local p = { c[1] + math.cos(t) * R, c[2] + math.sin(t) * R }
+                        if last then ocean_capsule(deeps, last, p, w, 0.7 + 0.3 * random()) end
+                        last = p
+                    end
+                end
+            end
+        end
+        -- The ridges of the ridge cells within one of this cell.
+        local x, z = i * cell, j * cell
+        for P = math.floor((x - RIDGE) / RIDGE), math.floor((x + RIDGE) / RIDGE) do
+            for Q = math.floor((z - RIDGE) / RIDGE), math.floor((z + RIDGE) / RIDGE) do
+                local random = hashed(P, Q, 0x2c1b3c6d)
+                if random() < 0.6 then
+                    local angle = random() * math.pi
+                    local ux, uz = math.cos(angle), math.sin(angle)
+                    local s = -0.5 * RIDGE
+                    local cx, cz = ox + (P + random()) * RIDGE, oz + (Q + random()) * RIDGE
+                    local w = (0.06 + 0.03 * random()) * cell
+                    local prev
+                    while s < 0.5 * RIDGE do
+                        local len = (0.4 + 0.4 * random()) * cell
+                        local shift = (random() - 0.5) * 0.3 * cell
+                        local ax, az = cx + ux * s - uz * shift, cz + uz * s + ux * shift
+                        local bx, bz = ax + ux * len, az + uz * len
+                        ocean_capsule(ridges, { ax, az }, { bx, bz }, w, 0.8 + 0.2 * random())
+                        ocean_capsule(rifts, { ax, az }, { bx, bz }, 0.02 * cell, 1.0)
+                        if prev then
+                            -- The fault: a trough from the last segment's end past this one's start, both ways.
+                            local dx, dz = ax - prev[1], az - prev[2]
+                            local l = math.max(math.sqrt(dx * dx + dz * dz), 1.0)
+                            local ex, ez = dx / l * 0.12 * cell, dz / l * 0.12 * cell
+                            ocean_capsule(rifts, { prev[1] - ex, prev[2] - ez }, { ax + ex, az + ez }, 0.015 * cell, 0.8)
+                        end
+                        prev = { bx, bz }
+                        s = s + len
+                    end
+                end
+            end
+        end
+        if o.sources then o.sources(i, j, deeps, canyons) end
+        return mounts, ridges, rifts, deeps, canyons
+    end
+    return function(i, j)
+        local key = o.key and (o.key .. ";" .. i .. ";" .. j)
+        local kept = key and Raster.Recall{ key = key }
+        if kept then return kept end
+        if o.affordable and not o.affordable() then return nil end
+        -- The lattice over the cell and its skirt, in lattice cells from its corner.
+        local count = lattice + 2 * SKIRT
+        local gi0, gj0 = (i - 1) * lattice + lattice // 2 - SKIRT, (j - 1) * lattice + lattice // 2 - SKIRT
+        local x0 = ox + (i - 0.5) * cell - SKIRT * step_m
+        local z0 = oz + (j - 0.5) * cell - SKIRT * step_m
+        local g = { nx = count, nz = count, spacing = 1.0, units = count, px = {}, pz = {}, h = {}, diag = {} }
+        local xs, zs = {}, {}
+        for z = 0, count - 1 do
+            for x = 0, count - 1 do
+                local k = z * count + x + 1
+                local jitter = stream(((math.floor(seed) * 2654435761 ~ (gi0 + x) * 73856093 ~ (gj0 + z) * 19349663) + 7) & 0x7FFFFFFF)
+                g.px[k] = x + 0.5 + (jitter() * 0.9 - 0.45)
+                g.pz[k] = z + 0.5 + (jitter() * 0.9 - 0.45)
+                xs[k], zs[k] = x0 + g.px[k] * step_m, z0 + g.pz[k] * step_m
+            end
+        end
+        for z = 0, count - 2 do
+            for x = 0, count - 2 do
+                local q = z * count + x + 1
+                local a, b, c, d = q, q + 1, q + count, q + count + 1
+                local ax, az = g.px[a] - g.px[d], g.pz[a] - g.pz[d]
+                local bx, bz = g.px[b] - g.px[d], g.pz[b] - g.pz[d]
+                local cx, cz = g.px[c] - g.px[d], g.pz[c] - g.pz[d]
+                local det = (ax * ax + az * az) * (bx * cz - cx * bz) - (bx * bx + bz * bz) * (ax * cz - cx * az)
+                            + (cx * cx + cz * cz) * (ax * bz - bx * az)
+                g.diag[q] = det <= 0.0 or nil
+            end
+        end
+        -- His heights, 21 to 100 so the whole lattice is land to the raster: 88 for the floor by the lands,
+        -- falling to 36 with `descent`; hills and ranges up to 12 more, pits and small trenches down to 22
+        -- less; the ocean's forms (`ocean_forms`) up from there to the flat tops at 100 and down to the
+        -- trenches' floors at 21.
+        local up, down = features(i, j)
+        local mounts, ridges, rifts, deeps, canyons = ocean_forms(i, j)
+        local function relief(list, reach)
+            local _, v = Shapes.Set{ elements = list, reach = reach, relief = true, blend = 0.0 }
+            return v
+        end
+        local canyon = relief(canyons, 0.03 * cell)
+        local heights = Terrain.Sample{
+            value = 88.0 - 52.0 * descent + 12.0 * relief(up, 0.08 * cell) - 22.0 * relief(down, 0.08 * cell)
+                    + 80.0 * relief(mounts, 0.08 * cell) + 30.0 * relief(ridges, 0.1 * cell) - 14.0 * relief(rifts, 0.03 * cell)
+                    - 70.0 * relief(deeps, 0.04 * cell) - 20.0 * canyon,
+            xs = xs, zs = zs }
+        for k = 1, count * count do g.h[k] = math.min(math.max(heights[k], 21.0), 100.0) end
+        local n = count * sub
+        local grid_of = raster_grid(x0, z0, n, step_m / sub)
+        -- Twenty-two bands, unevenly apart, so the terraces going down are each at a depth of its own; the
+        -- first five for the trenches, the last two for the tops of the guyots.
+        local edges = { 0.0, 0.03, 0.06, 0.1, 0.14, 0.17, 0.2, 0.24, 0.29, 0.35, 0.41, 0.46, 0.52, 0.58, 0.63, 0.69,
+                        0.75, 0.8, 0.86, 0.92, 0.95, 0.98 }
+        local levels = {}
+        for k, e in ipairs(edges) do levels[k] = e end
+        local r = rasterize(g, count * step_m, {
+            sub = sub, round = 1, fjords = 0, random = stream(1),
+            strata = {
+                land_edges = edges, land_levels = levels, land_top = 1.0,
+                sea_edges = { 0.0 }, sea_levels = { 0.0 }, sea_bottom = 0.0,
+                -- Walls where the field is under a half. Regions a third of a cell across choose how many: most
+                -- steps walls in some, cliffs between terraces; most ramps in others, a rolling floor of slopes.
+                cliff = grid_of(Noises.fBm{ frequency = 1.0 / (6.0 * step_m), octaves = 2, amplitude = 0.5, seed = seed + 451 }.value + 0.2
+                                + 0.6 * Curves.Smoothstep{ input = Noises.fBm{ frequency = 1.0 / (0.33 * cell), octaves = 2,
+                                                                             amplitude = 0.5, seed = seed + 521 }.value + 0.5,
+                                                        min = 0.4, max = 0.6 }),
+                width = grid_of((0.5 + 5.5 * Curves.Smoothstep{ input = Noises.fBm{ frequency = 1.0 / (10.0 * step_m), octaves = 2,
+                                                                                  amplitude = 0.5, seed = seed + 471 }.value + 0.5,
+                                                             min = 0.2, max = 0.8 }) * sub),
+            },
+        })
+        -- The cell's own pixels, as depths (`OCEAN_DEPTHS`): the floor by the lands a little below the abyss,
+        -- far from any land nearly four times it, the trenches' floors 5.5 times, the guyots' tops a tenth.
+        -- Then the canyons at each pixel, which the stairs cut through the slopes with.
+        local out, offset = {}, SKIRT * sub
+        for z = 0, nw - 1 do
+            for x = 0, nw - 1 do
+                local s, f = r.strata_land[(z + offset) * n + x + offset + 1], OCEAN_DEPTHS[#OCEAN_DEPTHS][2]
+                for q = 2, #OCEAN_DEPTHS do
+                    local lo, hi = OCEAN_DEPTHS[q - 1], OCEAN_DEPTHS[q]
+                    if s <= hi[1] then
+                        f = lo[2] + (hi[2] - lo[2]) * (s - lo[1]) / (hi[1] - lo[1])
+                        break
+                    end
+                end
+                out[z * nw + x + 1] = abyss * f
+            end
+        end
+        local cxs, czs = {}, {}
+        for z = 0, nw - 1 do
+            for x = 0, nw - 1 do
+                cxs[z * nw + x + 1] = ox + (i - 0.5) * cell + (x + 0.5) * px
+                czs[z * nw + x + 1] = oz + (j - 0.5) * cell + (z + 0.5) * px
+            end
+        end
+        local cut = Terrain.Sample{ value = canyon, xs = cxs, zs = czs }
+        -- And two fields a twenty-fifth of a cell across, which each wall of the stairs mixes in its own way to
+        -- waver by.
+        local function waver(salt)
+            return Terrain.Sample{ value = Noises.fBm{ frequency = 1.0 / (0.04 * cell), octaves = 2, amplitude = 1.0,
+                                                       seed = seed + salt }.value, xs = cxs, zs = czs }
+        end
+        local wa, wb = waver(541), waver(547)
+        for q = 1, nw * nw do
+            out[nw * nw + q], out[2 * nw * nw + q], out[3 * nw * nw + q] = cut[q], wa[q], wb[q]
+        end
+        if key then Raster.Keep{ key = key, numbers = out } end
+        return out
+    end
+end
+
+-- Lays the drowned land `under` (from `ocean_floor`) below a map's sea floor `base` (a list of its pixels,
+-- changed in place) wherever it is shallower, and deeper as far as the map's floor lowered by the stairs
+-- allows: the lands keep their shelves and slopes, and past them the floor goes down to the drowned land's
+-- depths in walls and terraces. A canyon (the drowned land's second list) takes the stairs as if up to 0.05
+-- of a cell further out, from half a hundredth offshore, so it cuts down through them. `sdf` is the map's
+-- distance offshore in metres; `nw` its side in pixels.
+local function ocean_compose(base, sdf, under, nw, cell, abyss)
+    if not under then return end
+    for q = 1, nw * nw do
+        local d = sdf[q]
+        if d > 0.0 then
+            local drop, reach = 0.0, d + under[nw * nw + q] * 0.05 * cell
+                                         * math.min(math.max((d - 0.005 * cell) / (0.01 * cell), 0.0), 1.0)
+            local wa, wb = under[2 * nw * nw + q], under[3 * nw * nw + q]
+            for _, step in ipairs(OCEAN_STAIRS) do
+                if reach > (step[1] + OCEAN_WAVER * (step[3] * wa + step[4] * wb)) * cell then drop = drop + step[2] end
+            end
+            base[q] = math.max(under[q], base[q] + drop * abyss)
+        end
+    end
+end
+
+-- One template's map, `size` metres centred on (`cx`, `cz`), on its raster: the cells' heights from `tseed`,
+-- every noise from `seed` at its world position (so neighbouring maps share them). `edge` sinks the heights
+-- to the deepest sea over that share of the map at its rim, so the map meets the next one in open ocean.
+-- `place` ({ scale, x, z }, fractions of the map) draws the template smaller, at that corner of it, the
+-- rest open sea; `place.empty` leaves the whole map sea.
+-- Returns the raster (with its corner `x0`, `z0`) and what the surface needs of the map.
+local function template_raster(t, text, seed, tseed, size, cx, cz, edge, place)
+    local relief = t.height or 1200.0
+    local cells = t.cells or 10000
+    local roughness = t.roughness or 1.0
+    local g = run_template(t.template, text, cells, tseed)
+    -- How much of each point the template keeps: all of it inside, nothing over the outer two fifths of the
+    -- rim (a rounded square, a superellipse of power 3, or the lands come out square), so the shelf and the
+    -- slope end before it; there the map has `place.floor`, a world's sea floor in his heights, or the abyss.
+    local keep = {}
+    for i = 1, #g.px do
+        keep[i] = 1.0
+        if edge then
+            local dx, dz = math.abs(g.px[i] / g.units - 0.5) * 2.0, math.abs(g.pz[i] / g.units - 0.5) * 2.0
+            local m = 0.5 * (1.0 - (dx * dx * dx + dz * dz * dz) ^ (1.0 / 3.0)) / edge
+            m = math.min(math.max((m - 0.4) / 0.6, 0.0), 1.0)
+            keep[i] = (place and place.empty) and 0.0 or m * m * (3.0 - 2.0 * m)
+        end
+    end
+    local scale = place and place.scale or 1.0
+    if place then
+        -- The template's points drawn into its square of the map; off them (no triangle) the raster takes the
+        -- sea floor.
+        for i = 1, #g.px do
+            g.px[i] = g.units * (place.x + scale * g.px[i] / g.units)
+            g.pz[i] = g.units * (place.z + scale * g.pz[i] / g.units)
+        end
+    end
+    local sub = t.detail or 4
+    local cell_m = scale * size / g.nx
+    local n = g.nx * sub
+    local px_m = size / n
+    local grid_of = raster_grid(cx - 0.5 * size, cz - 0.5 * size, n, px_m)
+    -- A broad bend of the whole outline: the cells' points are moved by a warp half the map across, `bend` of
+    -- the map at most (0.08 by default; more stretches the triangles into long straight edges), so a
+    -- template's masked rectangle comes out lobed, and every triangle of the points stays a triangle.
+    local bend = (t.bend or 0.08) * scale * size
+    local xs, zs = {}, {}
+    for i = 1, #g.px do
+        xs[i], zs[i] = cx + (g.px[i] / g.units - 0.5) * size, cz + (g.pz[i] / g.units - 0.5) * size
+    end
+    local floor_at = (place and place.floor) and Terrain.Sample{ value = place.floor, xs = xs, zs = zs } or nil
+    for i = 1, #g.px do
+        local under = floor_at and floor_at[i] or 0.0
+        g.h[i] = under + (g.h[i] - under) * keep[i]
+    end
+    local bend_x = Terrain.Sample{ value = Noises.fBm{ frequency = 2.0 / (scale * size), octaves = 2, persistence = 0.4, amplitude = bend,
+                                                        seed = seed + 441 }.value, xs = xs, zs = zs }
+    local bend_z = Terrain.Sample{ value = Noises.fBm{ frequency = 2.0 / (scale * size), octaves = 2, persistence = 0.4, amplitude = bend,
+                                                        seed = seed + 443 }.value, xs = xs, zs = zs }
+    for i = 1, #g.px do
+        -- Faded out three cells from the edge of the template's square, so the points there keep covering it
+        -- with triangles.
+        local x0, z0 = (place and place.x or 0.0) * g.units, (place and place.z or 0.0) * g.units
+        local side = scale * g.units
+        local margin = math.min(g.px[i] - x0, x0 + side - g.px[i], g.pz[i] - z0, z0 + side - g.pz[i])
+                       / (3.0 * g.spacing * scale)
+        local fade = math.min(math.max(margin, 0.0), 1.0)
+        fade = fade * fade * (3.0 - 2.0 * fade)
+        g.px[i] = g.px[i] + fade * bend_x[i] * g.units / size
+        g.pz[i] = g.pz[i] + fade * bend_z[i] * g.units / size
+    end
+    -- The roughness field (his coastline's: calm stretches and jagged ones, 6 % of the map wide, threshold 0.25,
+    -- squared) and the coast's fray in metres: a fractal from eight cells down (persistence 0.7), `fray` cells at
+    -- its largest (2.5 by default, 0.5 on an atoll, whose ring is narrower), times 0.35 to 1 by the field.
+    local field = Noises.fBm{ frequency = 1.0 / (size * 0.06), octaves = 2, amplitude = 0.5, seed = seed + 401 }.value + 0.5
+    local rough = Curves.Clamp{ input = (field - 0.25) / 0.75, min = 0.0, max = 1.0 }
+    rough = rough * rough
+    local fray = Noises.fBm{ frequency = 1.0 / (8.0 * cell_m), octaves = 7, persistence = 0.7,
+                             amplitude = (t.fray or (t.template == "atoll" and 0.5 or 2.5)) * cell_m * roughness, seed = seed + 431 }.value * (0.35 + 0.65 * rough)
+    if t.land_fraction ~= nil and (type(t.land_fraction) ~= "number" or t.land_fraction <= 0 or t.land_fraction >= 1) then
+        fail("Lands.Template expects land_fraction between 0 and 1, got " .. tostring(t.land_fraction))
+    end
+    local margin = MARGINS[t.margin or "compressed"]
+    local shelf_depth = t.shelf_depth or margin.shelf_depth
+    local abyssal_depth = t.abyssal_depth or margin.abyssal_depth
+    -- The ground in terraces and triangles (`ground = "terraces"`): bands of height, flat each, the forms before
+    -- any detail. On land at the fractions of `height` in `terraces` (the lower edge of each band, his heights
+    -- above the sea level scaled to 0..1); under the sea, by how far below the sea level the cells are, the
+    -- shelf, two steps of the slope and the abyssal plain. A triangle whose corners fall in different bands
+    -- is a slope, unless a field six cells across makes its steps walls: `slopes` (half by default) of the
+    -- land is in triangles, the rest in cliffs.
+    local bands, strata
+    if (t.ground or "smooth") == "terraces" then
+        local lands = t.terraces or { 0.0, 0.1, 0.25, 0.45, 0.7 }
+        local seas = { { 0.0, shelf_depth }, { 0.3, 0.35 * abyssal_depth }, { 0.6, 0.7 * abyssal_depth },
+                       { 0.85, abyssal_depth } }
+        local pick = Noises.fBm{ frequency = 1.0 / (6.0 * cell_m), octaves = 2, amplitude = 0.5, seed = seed + 451 }.value + 0.5
+        bands = {
+            lands = lands, seas = seas, cliff = grid_of(pick + (t.slopes or 0.5) - 0.5),
+            land = function(v, sea)
+                local u, band = (v - sea) / (100.0 - sea), lands[1]
+                for _, e in ipairs(lands) do
+                    if u >= e then band = e end
+                end
+                return relief * math.max(band, 0.02)
+            end,
+            sea = function(v, sea)
+                local s, depth = (sea - v) / math.max(sea, 1.0), seas[1][2]
+                for _, e in ipairs(seas) do
+                    if s >= e[1] then depth = e[2] end
+                end
+                return -depth
+            end,
+        }
+    elseif t.ground == "strata" then
+        -- Strata: the same bands, flat, each rising to the next in a ramp before its contour, on land and under
+        -- the sea; how long the ramp is a field ten cells across chooses, from half a cell (steep, nearly a
+        -- step) to six (long and gentle). The top band rises to `height`, the deepest falls to the abyssal depth.
+        local lands = t.terraces or { 0.0, 0.1, 0.25, 0.45, 0.7 }
+        local land_levels = {}
+        for k, e in ipairs(lands) do land_levels[k] = relief * math.max(e, 0.03) end
+        strata = {
+            land_edges = lands, land_levels = land_levels, land_top = relief,
+            -- A world's cell (`place`) has open ocean to show, in seven bands, not four.
+            sea_edges = place and { 0.0, 0.3, 0.45, 0.6, 0.72, 0.85, 0.93 } or { 0.0, 0.3, 0.6, 0.85 },
+            sea_levels = place and { -shelf_depth, -0.3 * abyssal_depth, -0.45 * abyssal_depth, -0.6 * abyssal_depth,
+                                     -0.75 * abyssal_depth, -0.88 * abyssal_depth, -abyssal_depth }
+                         or { -shelf_depth, -0.35 * abyssal_depth, -0.7 * abyssal_depth, -abyssal_depth },
+            sea_bottom = -abyssal_depth,
+            cliff = grid_of(Noises.fBm{ frequency = 1.0 / (6.0 * cell_m), octaves = 2, amplitude = 0.5, seed = seed + 451 }.value
+                            + (t.slopes or 0.5)),
+            width = grid_of((0.5 + 5.5 * Curves.Smoothstep{ input = Noises.fBm{ frequency = 1.0 / (10.0 * cell_m), octaves = 2,
+                                                                            amplitude = 0.5, seed = seed + 471 }.value + 0.5,
+                                                       min = 0.2, max = 0.8 }) * sub),
+            -- The shelf: half a cell off a high coast, six off a low one, and the cells' shallowest seas.
+            shelf = { narrow = 0.5 * sub, wide = 6.0 * sub, shallow = 0.12,
+                      noise = grid_of(Noises.fBm{ frequency = 1.0 / (8.0 * cell_m), octaves = 2, amplitude = 0.5,
+                                                  seed = seed + 491 }.value + 0.5) },
+        }
+    elseif t.ground ~= nil and t.ground ~= "smooth" then
+        fail("Lands.Template ground must be 'smooth', 'terraces' or 'strata', got '" .. tostring(t.ground) .. "'")
+    end
+    -- Off the template's triangles, the same sea floor per pixel.
+    local outside = (place and place.floor) and grid_of(place.floor) or nil
+    local r = rasterize(g, size, { sub = sub, round = math.floor((t.round or 0.3) * sub + 0.5), fraction = t.land_fraction,
+                                   noise = grid_of(fray), bands = bands, strata = strata,
+                                   outside = outside,
+                                   fjords = t.fjords or (t.template == "atoll" and 0 or 10), random = stream(tseed + 77) })
+    r.x0, r.z0 = cx - 0.5 * size, cz - 0.5 * size
+    if not place and t.ocean ~= false then
+        -- A bounded map's ocean floor: the world's (`ocean_floor`, `ocean_compose`) with the whole map for its
+        -- cell, so the stairs, the drowned land and the ocean's forms are at the map's scale. The floor falls
+        -- away from the land masses (squares four fifths of their size), and canyons run out from each.
+        local abyss = -abyssal_depth
+        local squares, lands = {}, {}
+        for _, m in ipairs(r.masses) do
+            if m.cells >= 4 * sub * sub then
+                local side = math.sqrt(m.cells) * px_m
+                local at = { r.x0 + (m.x / m.cells + 0.5) * px_m, r.z0 + (m.z / m.cells + 0.5) * px_m }
+                squares[#squares + 1] = { shape = "box", size = { 0.8 * side, 0.8 * side }, at = at, smooth = 0.0 }
+                lands[#lands + 1] = { at = at, side = side }
+            end
+        end
+        local wobble = Noises.fBm{ frequency = 1.0 / (0.25 * size), octaves = 3, amplitude = 0.35, seed = seed + 503 }.value
+        local descent = Curves.Clamp{ input = 1.0 + wobble, min = 0.0, max = 1.0 }
+        if #squares > 0 then
+            local off = Shapes.Set{ elements = squares, reach = 0.7 * size }.value
+            descent = Curves.Clamp{ input = (off - 0.05 * size) / (0.6 * size) + wobble, min = 0.0, max = 1.0 }
+        end
+        local drowned = ocean_floor{
+            seed = seed, cell = size, abyss = abyss, lattice = g.nx, sub = 2, descent = descent, origin = { cx, cz },
+            sources = function(_, _, _, canyons)
+                local random = stream(tseed + 613)
+                for _, l in ipairs(lands) do
+                    for _ = 1, 4 + math.floor(random() * 6) do
+                        local angle, length = random() * 2.0 * math.pi, 0.55 * l.side + (0.1 + 0.1 * random()) * size
+                        ocean_capsule(canyons, l.at, { l.at[1] + math.cos(angle) * length, l.at[2] + math.sin(angle) * length },
+                                      (0.015 + 0.01 * random()) * size, 0.7 + 0.3 * random())
+                    end
+                end
+            end,
+        }
+        -- Below the strata's sea floor, or a smooth or terraced map's, which the surface then takes offshore.
+        local base = r.strata_sea
+        if not base then
+            base = {}
+            for q = 1, n * n do base[q] = r.floor and r.floor[q] or -shelf_depth end
+        end
+        -- Made at two pixels a cell, not the map's `sub` (a quarter of the work at four), and read at the map's
+        -- pixels: each of its four lists resampled.
+        local under, coarse = drowned(0, 0), g.nx * 2
+        local read = {}
+        for part = 0, 3 do
+            local list = {}
+            for q = 1, coarse * coarse do list[q] = under[part * coarse * coarse + q] end
+            local fine = Raster.Resample{ values = list, from = { coarse, r.x0, r.z0, size / coarse },
+                                          to = { n, r.x0, r.z0, px_m }, outside = list[1] }
+            for q = 1, n * n do read[part * n * n + q] = fine[q] end
+        end
+        ocean_compose(base, r.sdf, read, n, size, abyss)
+        -- Over the map's outer twenty-fifth the sea floor goes to the far floor's depth, which its rim is: past
+        -- the map every grid repeats its edge, and a floor that varies there runs on as streaks.
+        local rim = 0.04 * n
+        for z = 0, n - 1 do
+            for x = 0, n - 1 do
+                local q = z * n + x + 1
+                local e = math.min(x, z, n - 1 - x, n - 1 - z) / rim
+                if e < 1.0 and r.sdf[q] > 0.0 then base[q] = 3.8 * abyss + (base[q] - 3.8 * abyss) * e * e * (3.0 - 2.0 * e) end
+            end
+        end
+        r.seabed, r.deep = not r.strata_sea and base or nil, true
+    end
+    if place and strata then
+        -- A world's cell samples the beaches' widths itself, at the world's cell size, so they are kept with it.
+        r.at_coast = grid_of(beach_widths(t, seed, place.beach_m or 0.75 * size / g.nx))
+    end
+    return r, { seed = seed, size = size, cell_m = cell_m, bands = bands, cells = g.nx * g.nz, nx = g.nx }
+end
+
+-- The surface of a template's raster `r` (one map, or several stitched): the coast, ground, beaches and sea
+-- floor on the GPU, the report and the products. `s` is what `template_raster` said of the map.
+local function template_surface(t, r, s)
+    local seed, size, cell_m, bands = s.seed, s.size, s.cell_m, s.bands
+    local resolution, relief = t.resolution or 8.0, t.height or 1200.0
+    local roughness = t.roughness or 1.0
+    local margin = MARGINS[t.margin or "compressed"]
+    local shelf_depth = t.shelf_depth or margin.shelf_depth
+    local abyssal_depth = t.abyssal_depth or margin.abyssal_depth
+    local grid_of = raster_grid(r.x0, r.z0, r.n, r.cell)
+    local field = Noises.fBm{ frequency = 1.0 / (size * 0.06), octaves = 2, amplitude = 0.5, seed = seed + 401 }.value + 0.5
+    local rough = Curves.Clamp{ input = (field - 0.25) / 0.75, min = 0.0, max = 1.0 }
+    rough = rough * rough
+    local ox0, oz0 = r.x0 + 0.5 * r.cell, r.z0 + 0.5 * r.cell
+
+    -- Below the raster's cells, a warp by the same field, faded out two cells from the coast so it bends the
+    -- coast and not the sea floor or the interior.
+    local c = Terrain.Coords{}
+    local plain = Terrain.Grid{ values = r.sdf, size = { r.n, r.n }, origin = { ox0, oz0 }, cell = r.cell }
+    local near_coast = 1.0 - Curves.Smoothstep{ input = Combine.Max{ a = plain, b = -plain }, min = cell_m, max = 2.0 * cell_m }
+    rough = rough * near_coast
+    local ox, oz = c.x, c.z
+    -- From half a cell down to four samples, one octave per halving: the offset keeps a fixed share of each
+    -- wavelength, so the coast is as rough at every scale the export can show.
+    local octaves = math.max(1, math.min(8, math.floor(math.log(0.5 * cell_m / (4.0 * resolution), 2)) + 1))
+    if 0.5 * cell_m >= 4.0 * resolution then
+        local amplitude = 0.35 * 0.5 * cell_m * roughness
+        ox = ox + rough * Noises.fBm{ frequency = 2.0 / cell_m, octaves = octaves, amplitude = amplitude, seed = seed + 411 }.value
+        oz = oz + rough * Noises.fBm{ frequency = 2.0 / cell_m, octaves = octaves, amplitude = amplitude, seed = seed + 421 }.value
+    end
+    local position = Vec.Combine{ ox, oz }
+    local function sample(values)
+        return Terrain.Grid{ values = values, size = { r.n, r.n }, origin = { ox0, oz0 }, cell = r.cell,
+                             position = position }
+    end
+    local coast_sdf = sample(r.sdf)
+
+    local transition = math.max(resolution * 1.5, 12.0)
+    local land_mask = 1.0 - Curves.Smoothstep{ input = coast_sdf, min = -transition, max = transition }
+    local level = r.level
+    local ground, floor, beach_mask, platform, sand = nil, nil, nil, nil, nil
+    if r.strata_land then
+        ground, floor = sample(r.strata_land), sample(r.strata_sea)
+        -- Beaches: a strip of sand laid on the sea side of the coast, so the land keeps all its ground and the
+        -- sand clings to the foot of a cliff as to a low shore. A field fifteen cells across leaves whole faces
+        -- of the land bare; along the rest the sand is never under an eighth of a cell, so the beaches join, and
+        -- where one ten cells across says (long runs) it widens to between a fifth of a cell and one, as one six
+        -- cells across says, and threefold where one sixteen cells across does. Offshore each pixel takes the
+        -- width of the coast nearest it (stepped back along the distance's gradient), so the sand follows the
+        -- coast and never runs out to sea as an arm where the width grows; and at most a third of the water's
+        -- half-width there (the distance where it stops growing, stepped forward), so the sand of two coasts
+        -- never meets across a strait or ties an islet to the land. A finer noise frays the edge. The sand
+        -- rises from the water to 3 m at the old coast.
+        local function field(cells, salt)
+            return Noises.fBm{ frequency = 1.0 / (cells * cell_m), octaves = 2, amplitude = 0.5, seed = seed + salt }.value + 0.5
+        end
+        -- Sampled with the raster where it was made (a world's cells, kept with them), else here.
+        local at_coast = r.at_coast or grid_of(beach_widths(t, seed, cell_m))
+        local reach_px = math.ceil(4.0 * cell_m / r.cell)
+        local projected = Raster.Project{ sdf = r.sdf, n = r.n, cell = r.cell, reach = reach_px, at_coast = at_coast }
+        local fine = Noises.fBm{ frequency = 1.0 / (0.5 * cell_m), octaves = 3, amplitude = 0.04 * cell_m, seed = seed + 485 }.value
+        local reach = sample(projected)
+        local has = Curves.Smoothstep{ input = reach, min = 0.03 * cell_m, max = 0.1 * cell_m }
+        local width = has * (reach + fine)
+        local strip = Curves.Smoothstep{ input = coast_sdf, min = -transition, max = 0.0 } * has
+        local on_sand = 3.0 * Curves.Clamp{ input = (width - coast_sdf) / (width + 1.0), min = 0.0, max = 1.0 }
+        ground = Combine.Blend{ a = ground, b = on_sand, mask = strip }
+        coast_sdf = coast_sdf - width
+        land_mask = 1.0 - Curves.Smoothstep{ input = coast_sdf, min = -transition, max = transition }
+        beach_mask, sand = strip * land_mask, strip
+        -- Old coasts: where the sea stood lower its waves cut flats into the shelf and the slope, at a quarter,
+        -- three fifths and 1.6 times the shelf's depth, each a flat and then a wall as deep as an eighth to a
+        -- third of the shelf; their line follows the coast's, jagged by a noise a cell across.
+        -- Off a beach the floor is the sand's: it goes down from the beach's edge at most as steeply as the
+        -- shelf goes down over two cells, so a wide beach before a narrow shelf does not end in a wall; it
+        -- fades out between two and three cells off, or it would run on as a ridge to the abyss.
+        local off = Curves.Clamp{ input = coast_sdf, min = 0.0, max = 1.0e7 }
+        -- Its mask is the beach's spread a cell (only the mask: where the nearest coast flips from a beach to
+        -- rock it would jump, a thin ridge across the shelf's edge).
+        local near = 1.0 - Curves.Smoothstep{ input = off, min = 2.0 * cell_m, max = 3.0 * cell_m }
+        local spread = Filters.Blur{ input = has, radius = math.max(math.floor(cell_m / resolution + 0.5), 1) }
+        floor = Combine.Blend{ a = floor, b = Combine.Max{ a = floor, b = -shelf_depth * off / (2.0 * cell_m) }, mask = spread * near }
+        local depth = -floor
+        local pick = depth + Noises.fBm{ frequency = 1.0 / cell_m, octaves = 3, amplitude = 0.04 * shelf_depth, seed = seed + 493 }.value
+        for _, step in ipairs{ { 0.25, 0.12 }, { 0.6, 0.15 }, { 1.6, 0.3 } } do
+            local l, h = step[1] * shelf_depth, step[2] * shelf_depth
+            depth = depth - Curves.Clamp{ input = depth - l, min = 0.0, max = h }
+                    + h * Curves.Smoothstep{ input = pick, min = l + h - 0.03 * shelf_depth, max = l + h }
+        end
+        floor = -depth
+        -- A platform the waves cut at the foot of the cliffs (not off the beaches): flat 8 m down, a fifth of
+        -- a cell to most of one out as a field six cells across says, then a wall down to the floor.
+        platform = { depth = 8.0, keep = 1.0 - has,
+                     width = (0.2 + 0.6 * Curves.Clamp{ input = field(6.0, 495), min = 0.0, max = 1.0 }) * cell_m }
+    elseif r.ground then
+        -- Walls: the bands stepped on the continuous height, a hundredth of the range wide, where the triangles
+        -- are cliffs; planes where they are slopes.
+        local function step(x, edge)
+            return Curves.Clamp{ input = (x - edge) / 0.008 + 0.5, min = 0.0, max = 1.0 }
+        end
+        local cells_h = sample(r.height)
+        local u, s = (cells_h - level) / (100.0 - level), (level - cells_h) / math.max(level, 1.0)
+        local lands, seas = bands.lands, bands.seas
+        local walls_land = relief * math.max(lands[1], 0.02)
+        for k = 2, #lands do
+            walls_land = walls_land + relief * (lands[k] - math.max(lands[k - 1], 0.02)) * step(u, lands[k])
+        end
+        local walls_sea = -seas[1][2]
+        for k = 2, #seas do
+            walls_sea = walls_sea - (seas[k][2] - seas[k - 1][2]) * step(s, seas[k][1])
+        end
+        local walls = sample(r.cliff)
+        ground = Combine.Blend{ a = sample(r.ground), b = walls_land, mask = walls }
+        floor = Combine.Blend{ a = sample(r.floor), b = walls_sea, mask = walls }
+    else
+        ground = Curves.Clamp{ input = (sample(r.height) - level) / (100.0 - level), min = 0.0, max = 1.0 } * relief
+    end
+    -- Offshore, a smooth or terraced map takes its ocean floor (`r.seabed`), its strata's were laid already.
+    if r.seabed then floor = sample(r.seabed) end
+    local region_id = Curves.Terrace{ input = sample(r.region), step = 1.0, sharpness = 1.0 }
+
+    -- The report: each land mass by size (`mass/1` the largest), and the water bodies, an `ocean` where one
+    -- touches the map's edge, else a `sea` over a hundredth of the map or a `lake`.
+    local px_area = r.cell * r.cell
+    local elements, land_cells = {}, 0
+    for rank, m in ipairs(r.masses) do
+        land_cells = land_cells + m.cells
+        local area = m.cells * px_area
+        elements[rank] = {
+            id = "mass/" .. rank, kind = "land", shape = "template", area_measured = area,
+            centroid = { r.x0 + (m.x / m.cells + 0.5) * r.cell, r.z0 + (m.z / m.cells + 0.5) * r.cell },
+            class = area >= size * size * 0.1 and "continent" or (area >= size * size * 0.001 and "island" or "isle"),
+        }
+    end
+    local waters = {}
+    for k, w in ipairs(r.waters) do
+        local area = w.cells * px_area
+        waters[k] = { area = area, touches_edge = w.edge,
+                      class = w.edge and "ocean" or (area >= size * size * 0.01 and "sea" or "lake") }
+    end
+    local fraction = land_cells / (r.n * r.n)
+    local width_scale = margin.scale and size * 0.5 or 1.0
+    local shelf_width = t.shelf_width or margin.shelf_width * width_scale
+    local slope_width = t.slope_width or margin.slope_width * width_scale
+    local side = r.n * r.cell
+    local template = s.templates or t.template
+    engine.report("lands", { template = template, frame = s.frame or { size = size },
+                             window = { r.x0, r.z0, r.x0 + side, r.z0 + side },
+                             cells = s.cells, level = level, land_fraction = fraction, elements = elements,
+                             pending = s.pending or nil,
+                             waters = waters })
+    local info = { size = size, extent = side * 0.5, template = template, cells = s.cells, level = level,
+                   land_fraction = fraction, regions = math.max(#elements, 1), elements = elements, waters = waters }
+    return finish{
+        t = t, seed = seed, size = size, resolution = resolution, relief = relief, coast = COASTS[t.coast or "mixed"],
+        coast_sdf = coast_sdf, land_mask = land_mask, region_id = region_id, ground = ground, gullies = false,
+        shelf_width = shelf_width, shelf_depth = shelf_depth, slope_width = slope_width, abyssal_depth = abyssal_depth,
+        floor = floor, floor_blend = platform and 160.0 or 2.0 * cell_m, beach_mask = beach_mask, beach_strip = sand, platform = platform,
+        deep = r.deep,
+        info = info,
+    }
+end
+
+local TEMPLATE_KEYS = {
+    bend = true, fray = true, fjords = true, ocean = true, template = true, steps = true, detail = true, seed = true, size = true,
+    resolution = true, height = true, cells = true, roughness = true, land_fraction = true, ground = true, terraces = true,
+    round = true, slopes = true, beaches = true,
+    margin = true, coast = true, shelf_width = true, shelf_depth = true, slope_width = true, abyssal_depth = true,
+    wave_from = true, hardness = true, sediment = true, shore_band = true,
+    beach_width = true, beach_height = true, cliff_width = true, cliff_height = true,
+}
+
+-- Land and sea from one of Azgaar's templates over a map of `size` metres centred on the origin.
+function Lands.Template(t)
+    if type(t) ~= "table" then
+        fail("Lands.Template expects a table of named arguments, as in Lands.Template{ template = 'high_island' }")
+    end
+    for key in pairs(t) do
+        if not TEMPLATE_KEYS[key] then
+            local list = {}
+            for k in pairs(TEMPLATE_KEYS) do list[#list + 1] = k end
+            table.sort(list)
+            fail("Lands.Template does not take '" .. tostring(key) .. "'; it accepts " .. table.concat(list, ", "))
+        end
+    end
+    if t.coast ~= nil and COASTS[t.coast] == nil then
+        fail("Lands.Template coast must be 'mixed', 'rocky', 'sedimentary' or 'cliff', got '" .. tostring(t.coast) .. "'")
+    end
+    if t.margin ~= nil and MARGINS[t.margin] == nil then
+        fail("Lands.Template margin must be 'compressed' or 'geologic', got '" .. tostring(t.margin) .. "'")
+    end
+    local text = t.steps or TEMPLATES[t.template]
+    if text == nil then
+        local names = {}
+        for k in pairs(TEMPLATES) do names[#names + 1] = k end
+        table.sort(names)
+        fail("Lands.Template needs a 'template': " .. table.concat(names, ", ") .. "; got '" .. tostring(t.template) .. "'")
+    end
+    local seed, size = t.seed or 0, t.size or 48000.0
+    local r, s = template_raster(t, text, seed, seed, size, 0.0, 0.0, nil)
+    return template_surface(t, r, s)
+end
+
+-- The templates the world draws from, by weight: islands for its cells, lands over most of a map for its
+-- continents (not the mediterranean, whose land is at the map's rim, where the map sinks it).
+local WORLD_TEMPLATES = { high_island = 3, volcano = 2, low_island = 2, archipelago = 2, atoll = 1, shattered = 1 }
+local CONTINENT_TEMPLATES = { continents = 2, pangea = 2, old_world = 2, fractious = 1, peninsula = 1, isthmus = 1 }
+local WORLD_KEYS = { world_cell = true, region = true, templates = true, edge = true, empty = true, budget = true,
+                     continent_cell = true, continents = true, continent_templates = true, continent_detail = true }
+for key in pairs(TEMPLATE_KEYS) do
+    if key ~= "template" and key ~= "steps" and key ~= "size" and key ~= "land_fraction" then WORLD_KEYS[key] = true end
+end
+
+-- A world cell's raster kept by the engine for the rest of the process (Raster.Keep), so a viewer that
+-- re-runs the script as the camera moves pays only for the cells it has not seen. The key is every number
+-- the raster was made from; the raster and what the surface needs of it go as one list of numbers.
+local CELL_LISTS = { "sdf", "height", "ground", "floor", "cliff", "strata_land", "strata_sea", "region", "at_coast" }
+local function cell_key(t, parts)
+    local keys, text = {}, { "world/7" }
+    for key, v in pairs(t) do
+        if key ~= "region" and key ~= "resolution" and key ~= "templates" and key ~= "budget" then keys[#keys + 1] = key end
+    end
+    table.sort(keys)
+    for _, key in ipairs(keys) do
+        local v = t[key]
+        text[#text + 1] = key .. "=" .. (type(v) == "table" and table.concat(v, ",") or tostring(v))
+    end
+    for _, v in ipairs(parts) do text[#text + 1] = tostring(v) end
+    return table.concat(text, ";")
+end
+local function pack_cell(r, s)
+    local out = { r.n, r.cell, r.level, r.x0, r.z0, s.cell_m, s.cells, s.nx, #r.masses, #r.waters }
+    for _, name in ipairs(CELL_LISTS) do
+        local list = r[name]
+        out[#out + 1] = list and 1 or 0
+        if list then
+            for i = 1, r.n * r.n do out[#out + 1] = list[i] end
+        end
+    end
+    for _, m in ipairs(r.masses) do
+        out[#out + 1], out[#out + 2], out[#out + 3] = m.cells, m.x, m.z
+    end
+    for _, w in ipairs(r.waters) do
+        out[#out + 1], out[#out + 2] = w.cells, w.edge and 1 or 0
+    end
+    return out
+end
+local function unpack_cell(list, seed, size)
+    local r = { n = list[1], cell = list[2], level = list[3], x0 = list[4], z0 = list[5], masses = {}, waters = {} }
+    local s = { seed = seed, size = size, cell_m = list[6], cells = list[7], nx = list[8] }
+    local at, count = 11, r.n * r.n
+    for _, name in ipairs(CELL_LISTS) do
+        local present = list[at]
+        at = at + 1
+        if present == 1 then
+            r[name] = table.move(list, at, at + count - 1, 1, {})
+            at = at + count
+        end
+    end
+    for k = 1, list[9] do
+        r.masses[k] = { cells = list[at], x = list[at + 1], z = list[at + 2], rank = k }
+        at = at + 3
+    end
+    for k = 1, list[10] do
+        r.waters[k] = { cells = list[at], edge = list[at + 1] == 1 }
+        at = at + 2
+    end
+    return r, s
+end
+
+-- The unbounded world in templates: each world cell (`world_cell` metres, 96 km by default; cell (i, j) centred
+-- on (i, j) times it) is one template's map, drawn by weight from `templates` by a hash of (seed, i, j) and
+-- sunk to the abyss over `edge` of it at its rim (a quarter), so the cells meet in open ocean and need nothing of
+-- each other: any window over the same cells is the same world. The cells under `region` ({ x0, z0, x1, z1 },
+-- a square of them) are rastered one by one and stitched, then the surface is evaluated once over them all;
+-- beyond them is the abyss. The rest of the keys are Lands.Template's.
+function Lands.World(t)
+    if type(t) ~= "table" then
+        fail("Lands.World expects a table of named arguments, as in Lands.World{ seed = 1 }")
+    end
+    for key in pairs(t) do
+        if not WORLD_KEYS[key] then
+            local list = {}
+            for k in pairs(WORLD_KEYS) do list[#list + 1] = k end
+            table.sort(list)
+            fail("Lands.World does not take '" .. tostring(key) .. "'; it accepts " .. table.concat(list, ", "))
+        end
+    end
+    local seed, cell = t.seed or 0, t.world_cell or 96000.0
+    local region = t.region or { -0.5 * cell, -0.5 * cell, 0.5 * cell, 0.5 * cell }
+    local weights, names, total = t.templates or WORLD_TEMPLATES, {}, 0.0
+    for name, w in pairs(weights) do
+        if TEMPLATES[name] == nil then fail("Lands.World: '" .. tostring(name) .. "' is not a template") end
+        names[#names + 1] = name
+        total = total + w
+    end
+    table.sort(names)
+    for _, name in ipairs(names) do names[name] = weights[name] end
+    local i0, j0 = math.floor(region[1] / cell + 0.5), math.floor(region[2] / cell + 0.5)
+    -- Cell i spans (i - 1/2, i + 1/2) cells: a region ending on a cell's edge does not reach into the next.
+    local k = math.max(math.ceil(region[3] / cell - 0.5) - i0, math.ceil(region[4] / cell - 0.5) - j0) + 1
+    local tw = {}
+    for key, v in pairs(t) do tw[key] = v end
+    tw.ground = tw.ground or "strata"
+    -- Three pixels a cell, not four: nine cells must raster inside the script's minute, and below the pixel
+    -- the warp on the GPU draws the coast anyway.
+    tw.detail = tw.detail or 3
+    local edge = t.edge or 0.25
+    local cells_n = tw.cells or 10000
+    local spacing = math.sqrt(1.0e6 / cells_n)
+    local nw = math.floor((1000.0 + 0.5 * spacing - 1e-10) / spacing) * tw.detail
+    local px = cell / nw
+    local cap = 0.12 * cell
+    local abyss = -(t.abyssal_depth or MARGINS[t.margin or "compressed"].abyssal_depth)
+    -- What a pixel no map covers is: the open abyss, in its strata as deep as the drowned land goes far out.
+    local OPEN = { sdf = cap, height = 0.0, strata_land = 0.0, strata_sea = 3.8 * abyss, region = 0.0, at_coast = 0.0,
+                   ground = 0.0, floor = abyss, cliff = 0.0 }
+    local function pick_template(random, list, sum)
+        local pick, acc = random() * sum, 0.0
+        for _, candidate in ipairs(list) do
+            acc = acc + list[candidate]
+            if pick < acc then return candidate end
+        end
+        return list[#list]
+    end
+    -- How many maps this run may make that the engine does not keep yet (`budget`, none by default): past
+    -- it a map is left out, its cell open sea, and the report says `pending`, so a viewer that follows the
+    -- camera runs the script again at once and the world fills in nearest first, a few maps a run.
+    local made, budget, pending = 0, t.budget or math.huge, false
+    local function affordable()
+        if made >= budget then
+            pending = true
+            return false
+        end
+        made = made + 1
+        return true
+    end
+    -- A map's raster, from the engine's keep when this process made it before (Raster.Keep).
+    local function raster_of(name, tseed, size, cx, cz, place, parts)
+        tw.template = name
+        local key = cell_key(tw, parts)
+        local kept = tw.ground ~= "terraces" and Raster.Recall{ key = key } or nil
+        local r, s
+        if kept then
+            r, s = unpack_cell(kept, seed, size)
+        elseif affordable() then
+            r, s = template_raster(tw, TEMPLATES[name], seed, tseed, size, cx, cz, edge, place)
+            if tw.ground ~= "terraces" then Raster.Keep{ key = key, numbers = pack_cell(r, s) } end
+        end
+        tw.template = nil
+        return r, s
+    end
+
+    -- The continents: a layer of cells `continent_cell` across (four world cells by default), each holding
+    -- at most one (`continents` of them, 0.55 by default), a continental template drawn into 45 to 85 % of
+    -- the cell at a place of its own; rastered at their own size and read at the world's pixels.
+    local C = t.continent_cell or 4.0 * cell
+    local lands_list, lands_sum = {}, 0.0
+    for name, w in pairs(t.continent_templates or CONTINENT_TEMPLATES) do
+        if TEMPLATES[name] == nil then fail("Lands.World: '" .. tostring(name) .. "' is not a template") end
+        lands_list[#lands_list + 1] = name
+        lands_sum = lands_sum + w
+    end
+    table.sort(lands_list)
+    for _, name in ipairs(lands_list) do lands_list[name] = (t.continent_templates or CONTINENT_TEMPLATES)[name] end
+    -- The sea floor (below), which the continents' rasters read when a cell first reaches them.
+    local seafloor
+    local continents, used = {}, {}
+    local function continent(I, J)
+        local id = I .. "," .. J
+        if continents[id] ~= nil then return continents[id] end
+        local cseed = (math.floor(seed) * 19349663 ~ I * 73856093 ~ J * 50331653 ~ 0x5bd1e995) & 0x7FFFFFFF
+        local random = stream(cseed)
+        local present = random() < (t.continents or 0.55)
+        local name = pick_template(random, lands_list, lands_sum)
+        local scale = 0.45 + 0.4 * random()
+        local side = scale * C
+        local x0 = (I - 0.5) * C + random() * (1.0 - scale) * C
+        local z0 = (J - 0.5) * C + random() * (1.0 - scale) * C
+        local entry = false
+        if present then
+            -- Placed now, rastered only once a cell it reaches asks (`raster` below).
+            entry = { name = name, x0 = x0, z0 = z0, side = side, id = id, cseed = cseed, I = I, J = J }
+        end
+        continents[id] = entry
+        return entry
+    end
+    local function rastered(c)
+        if c.r == nil then
+            local saved = tw.detail
+            tw.detail = t.continent_detail or 4
+            c.r = raster_of(c.name, c.cseed, c.side, c.x0 + 0.5 * c.side, c.z0 + 0.5 * c.side,
+                            { scale = 1.0, x = 0.0, z = 0.0, beach_m = 0.75 * cell / (nw // saved), floor = seafloor },
+                            { "continent", seed, c.cseed, c.I, c.J, C, c.side, c.x0, c.z0, edge })
+            tw.detail = saved
+        end
+        return c
+    end
+    -- The continents whose square, widened by a tenth of it, overlaps world cell (i, j).
+    local function touching(i, j, placed_only)
+        local out = {}
+        local x0, z0, x1, z1 = (i - 0.5) * cell, (j - 0.5) * cell, (i + 0.5) * cell, (j + 0.5) * cell
+        for I = math.floor(x0 / C + 0.5) - 1, math.floor(x1 / C + 0.5) + 1 do
+            for J = math.floor(z0 / C + 0.5) - 1, math.floor(z1 / C + 0.5) + 1 do
+                local c = continent(I, J)
+                if c then
+                    local m = 0.1 * c.side
+                    if c.x0 - m < x1 and c.x0 + c.side + m > x0 and c.z0 - m < z1 and c.z0 + c.side + m > z0 then
+                        if placed_only then
+                            out[#out + 1] = c
+                        elseif rastered(c).r then
+                            -- A continent the run had no budget for is left out this time.
+                            out[#out + 1] = c
+                        end
+                    end
+                end
+            end
+        end
+        return out
+    end
+
+    -- An island cell's draws: its template, how much of the cell it fills (25 to 90 %) and where in it, and
+    -- whether it is open sea (`empty`, 0.35 of the cells), so the islands are not a grid.
+    local function island(i, j)
+        local tseed = (math.floor(seed) * 73856093 ~ i * 19349663 ~ j * 83492791) & 0x7FFFFFFF
+        local random = stream(tseed)
+        local name = pick_template(random, names, total)
+        local scale = 0.25 + 0.65 * random()
+        return name, tseed, { scale = scale, x = random() * (1.0 - scale), z = random() * (1.0 - scale),
+                              empty = random() < (t.empty or 0.35) }
+    end
+    -- The sea floor every map sinks to at its rim and keeps off its triangles, in his heights (the sea level
+    -- is 20), from the lands round it: 13 (the upper slope) at the lands' squares, falling to 1.5 (the abyss)
+    -- 0.6 of a world cell off them, so the islands of a group share a rise; beyond, the drowned land below
+    -- (`drowned`) is the floor.
+    local squares = {}
+    for I = math.floor(region[1] / C + 0.5) - 1, math.floor(region[3] / C + 0.5) + 1 do
+        for J = math.floor(region[2] / C + 0.5) - 1, math.floor(region[4] / C + 0.5) + 1 do
+            local c = continent(I, J)
+            if c then
+                squares[#squares + 1] = { shape = "box", size = { 0.75 * c.side, 0.75 * c.side },
+                                          at = { c.x0 + 0.5 * c.side, c.z0 + 0.5 * c.side }, smooth = 0.0 }
+            end
+        end
+    end
+    for i = i0 - 2, i0 + k + 1 do
+        for j = j0 - 2, j0 + k + 1 do
+            local _, _, place = island(i, j)
+            if not place.empty and #touching(i, j, true) == 0 then
+                local side = place.scale * cell
+                squares[#squares + 1] = { shape = "box", size = { 0.6 * side, 0.6 * side }, smooth = 0.0,
+                                          at = { (i - 0.5 + place.x) * cell + 0.5 * side, (j - 0.5 + place.z) * cell + 0.5 * side } }
+            end
+        end
+    end
+    seafloor = Terrain.Const{ value = 1.5 }
+    if #squares > 0 then
+        local off = Shapes.Set{ elements = squares, reach = 0.6 * cell }.value
+        seafloor = seafloor + 11.5 * Curves.Clamp{ input = 1.0 - off / (0.6 * cell), min = 0.0, max = 1.0 }
+    end
+    -- How far the drowned land has fallen below the abyss, 0 to 1: none within a twentieth of a cell of the
+    -- lands' squares, all of it 0.65 of a cell off, so the deepest floor is midway between lands far apart;
+    -- bent by a field a quarter of a cell across, or its contours would be the squares' rounded rectangles.
+    local bend = Noises.fBm{ frequency = 1.0 / (0.25 * cell), octaves = 3, amplitude = 0.35, seed = seed + 503 }.value
+    local descent = Curves.Clamp{ input = 1.0 + bend, min = 0.0, max = 1.0 }
+    if #squares > 0 then
+        local off = Shapes.Set{ elements = squares, reach = 0.7 * cell }.value
+        descent = Curves.Clamp{ input = (off - 0.05 * cell) / (0.6 * cell) + bend, min = 0.0, max = 1.0 }
+    end
+    -- The open ocean floor (`ocean_floor`), the world's: kept in the engine per cell, made within the budget,
+    -- and with the trenches and canyons of its continents and islands.
+    local lattice = math.floor((1000.0 + 0.5 * spacing - 1e-10) / spacing)
+    local drowned = ocean_floor{
+        seed = seed, cell = cell, abyss = abyss, lattice = lattice, sub = tw.detail, descent = descent,
+        key = "drowned/10;" .. seed .. ";" .. nw, affordable = affordable,
+        sources = function(i, j, deeps, canyons)
+            -- Off the continents near: a trench along one side, and canyons all round.
+            for _, c in ipairs(touching(i, j, true)) do
+                local random = stream((c.cseed * 31 + 0x3a8f) & 0x7FFFFFFF)
+                local x0, z0, side = c.x0, c.z0, c.side
+                local function edge_point(t, k, out)
+                    -- Side k of the square at t along it, `out` metres outside (inside when negative).
+                    if k == 0 then return { x0 + t * side, z0 - out } end
+                    if k == 1 then return { x0 + side + out, z0 + t * side } end
+                    if k == 2 then return { x0 + t * side, z0 + side + out } end
+                    return { x0 - out, z0 + t * side }
+                end
+                if random() < 0.6 then
+                    local k, w, last = math.floor(random() * 4), (0.02 + 0.01 * random()) * cell, nil
+                    for q = 0, 6 do
+                        local t = 0.15 + 0.7 * q / 6
+                        local p = edge_point(t, k, (0.08 + 0.06 * (1.0 - (2.0 * t - 1.0) ^ 2)) * side)
+                        if last then ocean_capsule(deeps, last, p, w, 1.0) end
+                        last = p
+                    end
+                end
+                for _ = 1, 16 + math.floor(random() * 12) do
+                    local k, t = math.floor(random() * 4), 0.05 + 0.9 * random()
+                    ocean_capsule(canyons, edge_point(t, k, -0.12 * side), edge_point(t + (random() - 0.5) * 0.1, k, 0.15 * cell),
+                                  (0.015 + 0.01 * random()) * cell, 0.7 + 0.3 * random())
+                end
+            end
+            -- Canyons off the islands near, from the middle of each out past its slope.
+            for a = i - 1, i + 1 do
+                for b = j - 1, j + 1 do
+                    local _, tseed, place = island(a, b)
+                    if not place.empty and #touching(a, b, true) == 0 then
+                        local random = stream((tseed * 17 + 0x1f3d) & 0x7FFFFFFF)
+                        local side = place.scale * cell
+                        local cx, cz = (a - 0.5 + place.x) * cell + 0.5 * side, (b - 0.5 + place.z) * cell + 0.5 * side
+                        for _ = 1, 4 + math.floor(random() * 6) do
+                            local angle, length = random() * 2.0 * math.pi, 0.55 * side + (0.1 + 0.1 * random()) * cell
+                            ocean_capsule(canyons, { cx, cz }, { cx + math.cos(angle) * length, cz + math.sin(angle) * length },
+                                          (0.015 + 0.01 * random()) * cell, 0.7 + 0.3 * random())
+                        end
+                    end
+                end
+            end
+        end,
+    }
+
+    local big = { n = k * nw, cell = px, level = 20.0, x0 = (i0 - 0.5) * cell, z0 = (j0 - 0.5) * cell, deep = true,
+                  masses = {}, waters = {} }
+    local s, picked = nil, {}
+    -- A cell the run had no budget for: open sea, made again (and kept) by a later run.
+    local function open_cell()
+        local r = { masses = {}, waters = {} }
+        for _, key in ipairs{ "sdf", "height", "strata_land", "strata_sea", "region", "at_coast" } do
+            local list = {}
+            for q = 1, nw * nw do list[q] = OPEN[key] end
+            r[key] = list
+        end
+        return r
+    end
+    -- Nearest the region's centre first, so a budget spends itself where the camera is.
+    local order, mx, mz = {}, 0.5 * (region[1] + region[3]), 0.5 * (region[2] + region[4])
+    for b = 0, k - 1 do
+        for a = 0, k - 1 do order[#order + 1] = { a, b } end
+    end
+    table.sort(order, function(p, q)
+        local dp = ((i0 + p[1]) * cell - mx) ^ 2 + ((j0 + p[2]) * cell - mz) ^ 2
+        local dq = ((i0 + q[1]) * cell - mx) ^ 2 + ((j0 + q[2]) * cell - mz) ^ 2
+        return dp < dq or (dp == dq and (p[2] < q[2] or (p[2] == q[2] and p[1] < q[1])))
+    end)
+    for _, cell_ab in ipairs(order) do
+        local a, b = cell_ab[1], cell_ab[2]
+        do
+            local i, j = i0 + a, j0 + b
+            local here_x0, here_z0 = (i - 0.5) * cell, (j - 0.5) * cell
+            local r, shift
+            local lands = touching(i, j)
+            if #lands > 0 then
+                -- Over the cell's own sea floor, the continents read at its pixels; where two reach, the one nearer
+                -- its coast.
+                local base = raster_of(names[1], 0, cell, i * cell, j * cell,
+                                       { scale = 1.0, x = 0.0, z = 0.0, empty = true, floor = seafloor },
+                                       { "sea", seed, i, j, cell, edge }) or open_cell()
+                r, shift = { masses = {}, waters = {} }, 0
+                for _, key in ipairs(CELL_LISTS) do r[key] = base[key] end
+                local to = { nw, here_x0, here_z0, px }
+                for _, c in ipairs(lands) do
+                    if used[c.id] == nil then
+                        -- The continent's land ids follow the ids before it, once, wherever it is read.
+                        used[c.id] = #big.masses
+                        local ratio = (c.r.cell / px) ^ 2
+                        for _, m in ipairs(c.r.masses) do
+                            local mx = ((c.r.x0 + (m.x / m.cells + 0.5) * c.r.cell) - big.x0) / px - 0.5
+                            local mz = ((c.r.z0 + (m.z / m.cells + 0.5) * c.r.cell) - big.z0) / px - 0.5
+                            local count = m.cells * ratio
+                            big.masses[#big.masses + 1] = { cells = count, x = mx * count, z = mz * count }
+                        end
+                    end
+                    local from = { c.r.n, c.r.x0, c.r.z0, c.r.cell }
+                    local read = {}
+                    for _, key in ipairs(CELL_LISTS) do
+                        if c.r[key] then
+                            read[key] = Raster.Resample{ values = c.r[key], from = from, to = to,
+                                                         nearest = key == "region", outside = OPEN[key] }
+                        end
+                    end
+                    local ids = used[c.id]
+                    for q = 1, nw * nw do
+                        -- Only where the continent's map reaches (its distance short of the open sea's cap).
+                        if r.sdf == nil or r.sdf[q] == nil or (read.sdf[q] < cap and read.sdf[q] < r.sdf[q]) then
+                            for key, list in pairs(read) do
+                                r[key] = r[key] or {}
+                                local v = list[q]
+                                r[key][q] = (key == "region" and v > 0) and v + ids or v
+                            end
+                        end
+                    end
+                end
+                picked[#picked + 1] = "continent"
+            else
+                local name, tseed, place = island(i, j)
+                place.floor = seafloor
+                picked[#picked + 1] = place.empty and "sea" or name
+                r, s = raster_of(name, tseed, cell, i * cell, j * cell, place,
+                                 { seed, tseed, i, j, cell, edge, place.scale, place.x, place.z, place.empty })
+                r = r or open_cell()
+                shift = #big.masses
+                for _, m in ipairs(r.masses) do
+                    big.masses[#big.masses + 1] = { cells = m.cells, x = m.x + a * nw * m.cells, z = m.z + b * nw * m.cells }
+                end
+                for _, w in ipairs(r.waters) do
+                    if not w.edge then big.waters[#big.waters + 1] = w end
+                end
+            end
+            -- Under the cell's own sea, the drowned land (`ocean_compose`).
+            if r.strata_sea then ocean_compose(r.strata_sea, r.sdf, drowned(i, j), nw, cell, abyss) end
+            -- The cell's pixels at its place in the stitched raster, the distance offshore capped short of the
+            -- rim's open sea, so every cell meets the next at the same value, an empty one too.
+            local N = big.n
+            for q = 1, nw * nw do
+                if r.sdf[q] > cap then r.sdf[q] = cap end
+            end
+            for _, key in ipairs(CELL_LISTS) do
+                local src = r[key]
+                if src then
+                    local dst = big[key] or {}
+                    big[key] = dst
+                    local add = (key == "region" and r.masses[1] ~= nil) and shift or 0
+                    for z = 0, nw - 1 do
+                        local row, from = (b * nw + z) * N + a * nw, z * nw
+                        for x = 1, nw do
+                            local v = src[from + x]
+                            dst[row + x] = (add > 0 and v > 0) and v + add or v
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- A list some cells lack (the open sea's where only a continent's or an island's has it).
+    for _, key in ipairs(CELL_LISTS) do
+        local dst = big[key]
+        if dst then
+            for q = 1, big.n * big.n do dst[q] = dst[q] or OPEN[key] end
+            -- The raster's rim is the open sea: past it every grid repeats its edge, and a continent the
+            -- region cut through would run on as land to the horizon.
+            local N = big.n
+            for q = 0, N - 1 do
+                dst[q + 1], dst[(N - 1) * N + q + 1] = OPEN[key], OPEN[key]
+                dst[q * N + 1], dst[q * N + N] = OPEN[key], OPEN[key]
+            end
+        end
+    end
+    s = s or { seed = seed, size = cell, cells = cells_n, nx = nw // tw.detail }
+    tw.template = nil
+    -- One cell size for the surface's scales, whatever the cells drew, so every window agrees.
+    s.cell_m = 0.75 * cell / s.nx
+    s.cells = s.cells * k * k
+    s.templates = table.concat(picked, ",")
+    s.frame = { world_cell = cell, region = region }
+    s.pending = pending
+    return template_surface(tw, big, s)
+end
+
+
 -- --- Presets --------------------------------------------------------------------------------------
 
 -- Islands as compositions of shapes: `Lands.Preset` returns the `Lands.Compose` table, to change before it
@@ -1277,9 +3344,8 @@ local PRESET_KEYS = { name = true, seed = true, size = true, land_fraction = tru
 -- Keys the grid-built island took that a composition of shapes has no use for.
 local RETIRED = {
     layout = "take a 'preset' (Lands.Island and Lands.Archipelago list theirs)",
-    roughness = "the coast's detail comes after the shapes (phase 4 of the lands plan); edit the shapes",
     dissection = "drainage comes after the shapes; edit the shapes",
-    cells = "nothing is simulated on a grid", count = "an island is one composition; see Lands.Archipelago",
+    count = "an island is one composition; see Lands.Archipelago",
     aspect = "edit the 'main' element's aspect", area = "draw it as a polygon element in Lands.Compose",
     areas = "draw them as polygon elements in Lands.Compose",
 }
@@ -1663,6 +3729,52 @@ end
 
 -- An island from a preset (see `Lands.Preset`), built: the preset's keys, plus any `Lands.Compose` key,
 -- which overrides the preset's (`edit` and `remove` change its elements by id).
+-- The presets one of Azgaar's templates draws. By default their outline is the template's (`Lands.Template`),
+-- like his maps and like the reference heightmaps; `outline = "shapes"` builds the composition of shapes
+-- instead, whose elements have ids an `edit` reaches.
+local TEMPLATE_OF = {
+    volcano = "volcano", high_island = "high_island", low_island = "low_island", atoll = "atoll",
+    scattered = "archipelago", shattered = "shattered",
+    continent = "continents", pangea = "pangea", old_world = "old_world", mediterranean = "mediterranean",
+    peninsula = "peninsula", isthmus = "isthmus", fractious = "fractious", taklamakan = "taklamakan",
+}
+
+-- The built land, from the template when the preset has one and `outline` does not say "shapes"; nil for the
+-- composition. `defaults` are the preset's size, height and coast.
+local function from_template(where, t, defaults)
+    local outline = t.outline
+    if outline ~= nil and outline ~= "template" and outline ~= "shapes" then
+        fail(where .. " takes outline = 'template' or 'shapes', got '" .. tostring(outline) .. "'")
+    end
+    if outline == "shapes" or (outline == nil and not TEMPLATE_OF[t.preset]) then
+        return nil
+    end
+    if not TEMPLATE_OF[t.preset] then
+        fail(where .. " preset '" .. tostring(t.preset) .. "' has no template outline; it is a composition of shapes")
+    end
+    local copy = { template = TEMPLATE_OF[t.preset] }
+    for key, value in pairs(t) do
+        if key ~= "preset" and key ~= "outline" then
+            if not TEMPLATE_KEYS[key] then
+                fail(where .. " with the template outline does not take '" .. tostring(key)
+                     .. "'; outline = 'shapes' builds the composition of shapes, which does")
+            end
+            copy[key] = value
+        end
+    end
+    copy.size, copy.height, copy.coast = copy.size or defaults.size, copy.height or defaults.height, copy.coast or defaults.coast
+    return Lands.Template(copy)
+end
+
+-- `t` without `outline`, for the composition.
+local function without_outline(t)
+    local copy = {}
+    for key, value in pairs(t) do
+        if key ~= "outline" then copy[key] = value end
+    end
+    return copy
+end
+
 function Lands.Island(t)
     if type(t) ~= "table" then
         fail("Lands.Island expects a table of named arguments, as in Lands.Island{ preset = 'high_island' }")
@@ -1678,6 +3790,10 @@ function Lands.Island(t)
         table.sort(names)
         fail("Lands.Island needs a 'preset': " .. table.concat(names, ", ") .. ". Nothing is assumed about the island")
     end
+    local p = ISLAND_PRESETS[t.preset] or {}
+    local built = from_template("Lands.Island", t, { size = 24000.0, height = p.height, coast = p.coast })
+    if built then return built end
+    t = without_outline(t)
     local compose = Lands.Preset{ name = t.preset, seed = t.seed, size = t.size, land_fraction = t.land_fraction,
                                   height = t.height }
     for key, value in pairs(t) do
@@ -1705,6 +3821,10 @@ function Lands.Archipelago(t)
         table.sort(names)
         fail("Lands.Archipelago needs a 'preset': " .. table.concat(names, ", ") .. "; got '" .. tostring(t.preset) .. "'")
     end
+    local p = ARCHIPELAGO_PRESETS[t.preset]
+    local built = from_template("Lands.Archipelago", t, { size = 48000.0, height = p.height, coast = p.coast })
+    if built then return built end
+    t = without_outline(t)
     local compose = Lands.Preset{ name = t.preset, seed = t.seed, size = t.size, land_fraction = t.land_fraction,
                                   height = t.height, count = t.count, area = t.area }
     for key, value in pairs(t) do
@@ -1732,6 +3852,10 @@ function Lands.Continent(t)
         table.sort(names)
         fail("Lands.Continent needs a 'preset': " .. table.concat(names, ", ") .. "; got '" .. tostring(t.preset) .. "'")
     end
+    local p = LAND_PRESETS[t.preset]
+    local built = from_template("Lands.Continent", t, { size = p.size, height = p.height, coast = p.coast })
+    if built then return built end
+    t = without_outline(t)
     local compose = Lands.Preset{ name = t.preset, seed = t.seed, size = t.size, land_fraction = t.land_fraction,
                                   height = t.height }
     for key, value in pairs(t) do

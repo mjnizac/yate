@@ -21,8 +21,12 @@ way, is in `docs/decisions.md`; open work is in `docs/todo.md`.
 
 Two executables over one engine: `terrain_export` (Headless) writes 16-bit PNG heightmaps, 16-bit RGB
 vector maps and raw `f32` volumes with a metadata sidecar; `terrain_viewer` (Graphics) draws the same
-graph as a GPU-displaced grid with an orbit camera (`--view`, `--target`), a ring of streamed tiles,
-hot reload, `--screenshot`, and the analytic sea level (`--water`, off by default).
+graph as a GPU-displaced grid with an orbit camera (`--view`, `--target`), a ring of streamed tiles with
+rings of detail beyond it (`--max-level`), hot reload, `--screenshot`, and the analytic sea level (`--water`,
+off by default). It streams nearest and faced tiles first within a time bound, re-runs a script round the
+camera (`--follow`), scales the map's width (`--map-scale`), draws with 4x MSAA and facet normals, waits for
+the vertical blank, and builds its view from the camera's direction (the eye far from the origin no longer
+rounds it: no shudder when turning).
 
 Nineteen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular, with an optional
 `position`), `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`,
@@ -59,8 +63,19 @@ elements that change no coast; water bodies classed in the report (`sea`, `lake`
 `frame.edge_margin` and positions as percentages. `Lands.Continent` builds the land presets as compositions
 (`continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`, `peninsula`, `isthmus`, `fractious`,
 `taklamakan`, `all_land`, `lakeland`, `ocean_only`); the grid-built macro is retired. Golden datasets `lands_*`
-(32); previews in `docs/images/lands/`. The plan is in `docs/lands_plan.md` (local): phases 1 (islands),
-2 (archipelagos) and 3 (continents and other lands) are done, 4 (detail on the shapes) is next.
+(33); previews in `docs/images/lands/`. Outlines like the references come from `Lands.Template`, a port of Azgaar's
+heightmap templates (his steps on a jittered grid of 10 000 cells, his share of land) bent and frayed by his
+roughness field, with fjords where the land drains (dendritic, round two or three fjord coasts, their valleys
+cut into the ground), beaches and an ocean floor of stairs and drowned land (guyots, ridges, trenches,
+canyons): the presets with a template (volcano, high_island, low_island, atoll, scattered, shattered,
+continent, pangea, old_world, mediterranean, peninsula, isthmus, fractious, taklamakan) draw it by default,
+`outline = "shapes"` builds the compositions. `Lands.World` is the unbounded world from the templates
+(islands in 96 km cells, continents in cells four times that, made incrementally within a `budget` for the
+viewer's `--follow`; `assets/scripts/lands/infinite_world.lua`). The raster passes it needs (distance,
+morphology, blur, beach projection, resampling, the triangles, the drainage, the labels, a keep across runs)
+are C++ (`Raster.*`). The plan is in `docs/lands_plan.md` (local): phases 1
+(islands), 2 (archipelagos) and 3 (continents and other lands) are done; the outlines (`docs/todo.md`) come
+before phase 4.
 
 Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
 `terrains/alpine.lua`, with previews in `docs/images/ranges/`.

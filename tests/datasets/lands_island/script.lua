@@ -1,4 +1,5 @@
--- Island from a preset: a main mass, two lobes and a bay by default, every element with an id.
+-- Island from a preset: high_island by default, its outline drawn by Azgaar's template of the same name (volcano,
+-- high_island, low_island and atoll have one; `outline = "shapes"` builds the composition of shapes, with ids).
 --
 --   terrain_viewer --script assets/scripts/lands/island.lua --water --resolution 8
 --   terrain_export --script assets/scripts/lands/island.lua --min -12000,-12000 --max 12000,12000 --resolution 8 --out out/island

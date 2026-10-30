@@ -333,8 +333,8 @@ void TestPresets() {
     CHECK(std::fabs(before / (12000.0 * 12000.0) - 0.2) < 0.005);
     CHECK(std::fabs(after / before - 1.21) < 0.02);
     Graph retired;
-    const Status refused = Run(retired, "retired", "{ preset = 'volcano', roughness = 0.5 }", "Lands.Island");
-    CHECK(!refused && std::string_view{refused.error().Format().data()}.find("no longer takes 'roughness'") != std::string_view::npos);
+    const Status refused = Run(retired, "retired", "{ preset = 'volcano', outline = 'shapes', dissection = 0.5 }", "Lands.Island");
+    CHECK(!refused && std::string_view{refused.error().Format().data()}.find("no longer takes 'dissection'") != std::string_view::npos);
     Graph unnamed;
     const Status needs = Run(unnamed, "unnamed", "{ seed = 1 }", "Lands.Island");
     CHECK(!needs && std::string_view{needs.error().Format().data()}.find("needs a 'preset'") != std::string_view::npos);
@@ -447,15 +447,15 @@ void TestArchipelagoPresets() {
     const Case cases[] = {
         {"arch_presets", R"(
     for _, name in ipairs({ 'scattered', 'cluster', 'hotspot', 'arc', 'atolls', 'shattered', 'chain' }) do
-        local land = Lands.Archipelago{ preset = name, seed = 2, size = 48000 }
+        local land = Lands.Archipelago{ preset = name, outline = 'shapes', seed = 2, size = 48000 }
         for id, s in pairs(land.info.scatters) do
             expect(s.placed >= 0.75 * (s.placed + s.skipped), name .. ': ' .. id .. ' placed ' .. s.placed .. ' of ' .. (s.placed + s.skipped))
         end
     end
-    local land = Lands.Archipelago{ preset = 'scattered', seed = 2, size = 48000 })"},
+    local land = Lands.Archipelago{ preset = 'scattered', outline = 'shapes', seed = 2, size = 48000 })"},
         {"arch_request", R"(
     -- "Six islands of 3 to 5 km2, and make the third one larger."
-    local land = Lands.Archipelago{ preset = 'scattered', seed = 2, size = 48000, count = 6, area = { 3e6, 5e6 },
+    local land = Lands.Archipelago{ preset = 'scattered', outline = 'shapes', seed = 2, size = 48000, count = 6, area = { 3e6, 5e6 },
                                     edit = { ['isles/3'] = { scale = 1.3 } } }
     local isles = generated(land, 'isles')
     expect(#isles == 6, 'placed ' .. #isles)
@@ -671,8 +671,13 @@ void TestReferenceBands() {
     };
     const auto in = [](double v, const double (&r)[2]) { return v >= r[0] && v <= r[1]; };
     for (const Case& c : cases) {
-        Graph        graph;
-        const Status ran = Run(graph, c.preset, std::string("{ preset = '") + c.preset + "', seed = 4, size = " + std::to_string(static_cast<int>(c.size)) + " }", c.call);
+        Graph graph;
+        // Without the ocean floor where the preset draws a template, which nothing here measures and which
+        // would take most of the time (three of them are compositions, which have none).
+        const std::string_view name = c.preset;
+        const b8_t composed = name == "rim_island" || name == "mesa_island" || name == "inland_sea";
+        const Status ran = Run(graph, c.preset, std::string("{ preset = '") + c.preset + "', seed = 4, size = " + std::to_string(static_cast<int>(c.size))
+                                                    + (composed ? " }" : ", ocean = false }"), c.call);
         if (!ran) {
             std::printf("FAIL %s: %s\n", c.preset, ran.error().Format().data());
             CHECK(false);
@@ -687,6 +692,65 @@ void TestReferenceBands() {
         CHECK(in(s.dominant, c.band->dominant));
     }
 }
+void TestTemplates() {
+    test::Section("Azgaar's templates give his share of land, a land_fraction asked for, and say what outline takes");
+    // Land share over six previews of each template in his generator (azgaar.github.io, 2026-10-28), widened by
+    // 0.08 either side for a square map against his 4:3 and for one seed against six. taklamakan is short of
+    // his by about 0.09 on average (0.76 to 0.95 over six seeds against his 0.87 to 0.97): its hills hug the
+    // four edges, and they cover less of a square map; its band starts at 0.75.
+    struct Band {
+        const char* name;
+        double      low, high;
+    };
+    const Band bands[] = {
+        {"volcano", 0.20, 0.33},     {"high_island", 0.29, 0.35}, {"low_island", 0.28, 0.34}, {"continents", 0.30, 0.37},
+        {"archipelago", 0.14, 0.19}, {"atoll", 0.04, 0.09},       {"mediterranean", 0.49, 0.64}, {"peninsula", 0.27, 0.34},
+        {"pangea", 0.45, 0.56},      {"isthmus", 0.51, 0.67},     {"shattered", 0.23, 0.31},  {"taklamakan", 0.75, 0.97},
+        {"old_world", 0.39, 0.56},   {"fractious", 0.52, 0.69},
+    };
+    for (const Band& b : bands) {
+        Graph        graph;
+        const Status ran = RunBody(graph, b.name, std::string("    local land = Lands.Template{ template = '") + b.name
+                                                     + "', seed = 1, size = 48000, detail = 2, ocean = false }\n"
+                                                       "    local f = land.info.land_fraction\n"
+                                                       "    expect(f >= " + std::to_string(b.low - 0.08) + " and f <= "
+                                                     + std::to_string(b.high + 0.08) + ", 'land ' .. f)");
+        ++test::g_checks;
+        if (!ran) {
+            ++test::g_failures;
+            std::printf("FAIL %s: %s\n", b.name, ran.error().Format().data());
+        }
+    }
+    Graph        share;
+    const Status asked = RunBody(share, "template_share", R"(
+    local land = Lands.Island{ preset = 'high_island', seed = 3, size = 24000, land_fraction = 0.7, detail = 2 }
+    expect(math.abs(land.info.land_fraction - 0.7) < 0.02, 'land ' .. land.info.land_fraction)
+    expect(land.info.elements[1].id == 'mass/1', 'the largest mass is not mass/1'))");
+    CHECK(asked);
+    if (!asked) {
+        std::printf("FAIL template_share: %s\n", asked.error().Format().data());
+    }
+    const struct {
+        const char* name;
+        const char* compose;
+        const char* fragment;
+    } refused[] = {
+        {"template_edit", "{ preset = 'high_island', edit = { main = { scale = 2 } } }", "outline = 'shapes' builds the composition"},
+        {"template_none", "{ preset = 'rim_island', outline = 'template' }", "has no template outline"},
+        {"template_bad", "{ preset = 'high_island', outline = 'blob' }", "takes outline = 'template' or 'shapes'"},
+    };
+    for (const auto& c : refused) {
+        Graph        graph;
+        const Status ran = Run(graph, c.name, c.compose, "Lands.Island");
+        ++test::g_checks;
+        if (ran || std::string_view{ran.error().Format().data()}.find(c.fragment) == std::string_view::npos) {
+            ++test::g_failures;
+            std::printf("FAIL %s: expected an error naming '%s', got: %.240s\n", c.name, c.fragment,
+                        ran ? "success" : ran.error().Format().data());
+        }
+    }
+}
+
 void TestErrors() {
     test::Section("a wrong composition is refused with what was expected");
     struct Case {
@@ -740,6 +804,7 @@ int main() {
     TestArchipelagoPresets();
     TestRidgeAndLands();
     TestReferenceBands();
+    TestTemplates();
     TestErrors();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();

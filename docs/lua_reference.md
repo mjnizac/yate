@@ -1271,9 +1271,45 @@ shape, kind, centre, closed-form `area`) and what it measured on the frame (`are
 `terrain_metrics --by-id`, and `tools/dev.sh lands-check ... --expect count=6,area=2e6..4e6,land=0.2..0.4`
 checks a request against what was built.
 
-**`Lands.Island{ preset = ..., seed, size, land_fraction, height }`** builds an island from a preset,
-which `Lands.Preset{ name = ... }` returns as the `Lands.Compose` table to change before building. Any
-`Lands.Compose` key passes through, so `edit` reaches the preset's elements by id.
+**Outlines from Azgaar's templates: `Lands.Template`.** The presets of `Lands.Island`, `Lands.Archipelago`
+and `Lands.Continent` that one of Azgaar's heightmap templates draws (volcano, high_island, low_island,
+atoll; scattered, shattered; continent, pangea, old_world, mediterranean, peninsula, isthmus, fractious,
+taklamakan) take their outline from it by default; `outline = "shapes"` builds the composition of shapes
+below instead, with element ids an `edit` reaches. `Lands.Template{ template = ..., seed, size, height,
+land_fraction }` builds one directly:
+
+1. **His generator, step by step**: a grid of about `cells` cells (10 000 by default) on a square lattice of
+   points jittered by 0.9 of their spacing, heights 0 to 100 kept as whole numbers, his sea level 20, and his
+   steps with his numbers (`Hill` grown cell by cell outwards, `Range` along a greedy walk with spurs walking
+   downhill, `Trough`, `Strait`, `Pit`, `Mask`, `Invert`, `Add`, `Multiply`, `Smooth`). `steps` takes a
+   template of your own in his syntax (`"Hill 1 90-100 44-56 40-60\nMask 3 0 0 0"`). Over six seeds the
+   share of land falls in the spread of his own generator for every template but taklamakan, short by about
+   0.09 on a square map (its hills hug the edges).
+2. **The coast** on a raster `detail` (4) times finer than the cells: the cells' heights interpolated, read
+   through a broad `bend` (0.08 of the map) so a masked rectangle comes out lobed; the coast frayed by a
+   fractal `fray` cells deep (2.5), calm or jagged by his roughness field; then `fjords` (10, none on an
+   atoll) fjord systems where the land drains: the largest basins round two or three fjord coasts drowned
+   from their outlets upstream with their tributaries, widest at the mouth, their valleys cut into the
+   ground behind, and the land they take given back as a rim on the coast so the share of land stays; the
+   exact distance to it. Below a cell, a warp by the same field, faded out two cells from the coast.
+3. `land_fraction` sets the sea level by quantile; `roughness` scales the fray and the warp.
+4. **The ocean floor** (`ocean`, on unless `false`), the unbounded world's at the map's scale: past a shelf
+   0.045 of the map wide the floor goes down in eleven wavering walls to a drowned land of 22 strata, which
+   falls away from the land masses to nearly four times the abyssal depth and holds guyots and hotspot
+   chains, mid-ocean ridges with their rift and faults, trench arcs to 5.5 times the abyssal depth and
+   canyons out from each mass; over the map's outer twenty-fifth it goes to the far floor's depth.
+
+The report lists the land masses (`mass/1` the largest, with area and centroid, classed `continent`,
+`island` or `isle`) and the water bodies; `region_id` is the mass's rank. It takes about 4 s of script on
+a 48 km map, 1.5 s more for the ocean floor (the raster is built in Lua).
+
+![Lands.Template, land masks at seed 1 over 48 km: volcano, high_island, low_island, continents, archipelago, atoll, mediterranean; peninsula, pangea, isthmus, shattered, taklamakan, old_world, fractious](images/lands/templates.png)
+
+**`Lands.Island{ preset = ..., seed, size, land_fraction, height, outline }`** builds an island from a preset.
+With `outline = "shapes"` (and for caldera, rim_island and mesa_island, which have no template),
+`Lands.Preset{ name = ... }` returns the `Lands.Compose` table to change before building, and any
+`Lands.Compose` key passes through, so `edit` reaches the preset's elements by id. The table lists the
+compositions:
 
 | Preset | Elements (ids) | Default land, height |
 | --- | --- | --- |
@@ -1310,8 +1346,9 @@ patterns are explicit geometry and work anywhere. Islands are classed by measure
 The sea floor is built on the coast distance with the land joined by a smooth minimum half the shelf and
 slope wide, so it has no crease midway between two coasts and a strait between near islands is shallow.
 
-**`Lands.Archipelago{ preset = ..., seed, size, count, area, land_fraction, height }`** (48 km by
-default; `area` in square metres overrides the preset's, which are fractions of the map):
+**`Lands.Archipelago{ preset = ..., seed, size, count, area, land_fraction, height, outline }`** (48 km by
+default; scattered and shattered come from a template unless `outline = "shapes"`; `count` and `area`, in
+square metres, override the composition's, which are fractions of the map):
 
 | Preset | What | Ids |
 | --- | --- | --- |
@@ -1331,8 +1368,10 @@ pieces meet in saddles, the highest exactly `height` over the land and the other
 40 degrees from the crest's normal, 0.55 of its height. Relief changes no coast: where a range runs out to sea
 it stops at the shore.
 
-**`Lands.Continent{ preset = ..., seed, size, land_fraction, height }`** builds a continent or any other land,
-and `Lands.Preset{ name = ... }` returns its composition to change before building. Sizes are fractions of
+**`Lands.Continent{ preset = ..., seed, size, land_fraction, height, outline }`** builds a continent or any
+other land; the presets with a template draw it unless `outline = "shapes"` (inland_sea, all_land, lakeland
+and ocean_only are compositions only). `Lands.Preset{ name = ... }` returns the composition to change before
+building. Sizes are fractions of
 the map; the whole composition turns by an angle drawn from the seed (not `taklamakan`, whose ranges follow
 the map's edges). The land is a low plateau (0.08 of `height`) and the ranges carry the relief.
 
@@ -1505,6 +1544,11 @@ branches, which meet them at their level; `river = { kinds, width = { min, max }
 `lakes = { count, area = { min, max }, altitude = { min, max }, kinds, islands, on_rivers }` fills the
 largest natural depressions and dams `on_rivers` valleys. With `kinds = "auto"` (the default) the kind is
 read from the ground: steep and high is `glacial` or `mountain`, a plateau `canyon`, flat `lowland`.
+By default what is generated depends on the region: export another region and other rivers may be
+chosen. `world_cell = s` (metres, e.g. 16000) makes it depend on the world only: the analysis is snapped
+to cells of that size plus a ring of cells around them, at a fixed cell size, and `count` is per world
+cell. Two exports that touch the same cells get the same rivers and lakes, point for point, so an
+infinite world can be exported piece by piece.
 `net:summary()` lists what was made, generated ones marked `*`. `net:audit(wet, seed)` walks every
 channel as drawn and counts where the water rises and where the ground stands over it; both should be 0
 (`test_water` holds it there).

@@ -38,6 +38,8 @@ engine_add_unit_test(test_hydrology)
 engine_add_unit_test(test_water)
 # Lands.Compose, the land made of shapes, through the CPU sampler.
 engine_add_unit_test(test_compose)
+# Some thirty template maps with their fjords, one with its ocean floor: about 50 s in Release, 4 min in Debug.
+set_tests_properties(test_compose PROPERTIES TIMEOUT 300)
 
 # The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only
 # metrics and nothing from the engine; libspng only to read reference heightmaps given as PNG.

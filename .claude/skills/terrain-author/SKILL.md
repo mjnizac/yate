@@ -144,6 +144,7 @@ Shapes first, detail after. Translate the request into elements, never into nois
 | "seamount", "guyot", "trench" | `seabed = true` with `cone`/`plateau`; `margin = "active"` on the island |
 | "anywhere in the world" | `frame = { world_cell = 16000, region = ... }` and absolute positions |
 | "a continent", "a supercontinent", "an inland sea", "a peninsula", "an isthmus", "a closed basin", "lakes everywhere" | `Lands.Continent{ preset = ... }`: `continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`, `peninsula`, `isthmus`, `fractious`, `taklamakan`, `all_land`, `lakeland`, `ocean_only` |
+| "an island like these", "an archipelago", "a continent" judged by its outline | the presets with an Azgaar template draw it by default (`Lands.Template`: his generator, then bend, fjords and fray); `outline = "shapes"` for the composition with ids and `edit`; `land_fraction` sets the sea level; `Lands.Template{ steps = [[Hill 1 90-100 44-56 40-60 ...]] }` (his syntax, one step a line) for a template of your own |
 | "a range N m high", "with spurs every S m", "two passes" | `{ id = "range", ridge = { points = ..., width = W, height = N, spacing = S, saddles = 2 } }`; its pieces are `range/crest/K`, `range/spur/K` |
 | "a massif", "a basin" | `relief = true` with a profile (a negative `dome` for a basin): it changes no coast |
 | "here, a third of the way across" | in a bounded map, `at = { "33%", "50%" }`; `frame.edge_margin` keeps scatters off the edge |

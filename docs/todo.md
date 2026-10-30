@@ -98,12 +98,11 @@ viewer screenshot. Each item is done when it is in `ctest`.
       width from drainage summed at confluences, falls with plunge pools and rapids, deltas and estuaries.
 - [x] **Water plan, phase 3**: lake outlines from contours, outlets at the lowest shore point, cirque
       headwalls and moraine dams, paternoster lakes, shore kinds, a lobed delta fan.
-- [ ] **Water plan, phases 4 and 5**: generation per world cell, levels sampled on the course; texture
-      masks, water colour by body, foam.
-- [ ] **Generation over an unbounded world**: drawn elements work anywhere, but `generate` analyses one
-      `region`; the same region gives the same rivers in the viewer and in any export inside it. Rivers
-      everywhere without a region needs the analysis per fixed world cell, a river owned by the cell of
-      its source.
+- [x] **Water plan, phase 4**: levels sampled on the course, falls found on them; the fused op.
+- [ ] **Water plan, phase 5**: texture masks, water colour by body, foam.
+- [x] **Generation over an unbounded world**: `generate.world_cell` snaps the analysis to fixed world
+      cells plus a ring, `count` per cell; two exports touching the same cells get the same rivers
+      (`test_water`).
 - [x] **The graph's 1024 nodes capped a script at about twenty rivers and lakes**: the fused `Water` op
       carves each in one node, its channel measured exactly on its course; `test_water` holds 35 elements.
 - [x] **Lakes found by the generator had star-shaped outlines**: now the contour of their level.
@@ -179,10 +178,58 @@ The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail af
       `spacing`) and relief elements, land profiles joined by their maximum, water bodies classed in the
       report, `frame.edge_margin` and percentages, the land presets of `Lands.Continent` (the grid-built
       macro retired), the references measured into bands in `test_compose`; 11 new goldens.
-- [ ] **Phase 4, detail on the shapes** (`docs/lands_plan.md`): the presets' coast dimension (1.0 to 1.2
-      against 1.02 to 1.39 on the references) and hypsometric integral (0.10 on the continents against 0.15
-      to 0.62) are short of the references' bands, as forms without detail are; `test_compose` prints both.
-- [ ] **The archipelago references are painted maps**, not heightmaps: no band for that type.
+- [ ] **Before phase 4: outlines like the references' (first priority).** What matters is the outline of
+      the land, as the thirteen images in `docs/references/{islands,archipelagos,continents}` show it: they
+      are the result wanted for now for islands, archipelagos and continents (the user's decision,
+      2026-10-28), and the outlines of the four reviewed generators are the minimum bar; what stands on the
+      land comes later.
+      * Done (2026-10-29): `Lands.Template`, a faithful port of Azgaar's fourteen templates (his steps and
+        numbers, a jittered grid of 10 000 cells, whole-number heights), whose land share over six seeds falls
+        in the spread of his own generator (measured on azgaar.github.io); on it a broad bend, fjords walked
+        inland, a fractal fray by his roughness field and a sub-cell warp, the exact distance; `land_fraction`
+        by quantile; masses and water bodies in the report. The presets with a template draw it by default
+        (`outline = "shapes"` for the compositions). Coast dimension 1.15 to 1.47, in or above the
+        references' band; hypsometric integral 0.19 to 0.39 on most. The plan's discard of grid growth
+        (section 5.2) is reversed for bounded maps.
+      * Done (2026-10-29): fjords follow the drainage (a priority flood from the coast, the area drained
+        summed down it, the valleys of the largest basins drowned upstream with their tributaries), 10 systems
+        a map round two or three fjord coasts, after the fray; the land they take is given back as a rim on
+        the coast, so the shares stay; each path carved at the mean of five of its pixels (no 45 degree
+        stair), the walls frayed by a sixth of the coast's noise, the valley cut into the ground along it and
+        past its head.
+      * Done (2026-10-29): every template map has the unbounded world's ocean floor at its own scale
+        (`ocean_floor`, `ocean_compose`; `ocean = false` turns it off): stairs, drowned land, guyots, ridges,
+        trenches and canyons, faded to the far floor at the map's rim. 1.5 s more a map (its drowned land is
+        made at two pixels a cell); `test_compose` measures without it but in one case, about 4 min in Debug
+        (timeout 300).
+      * The finest scale of the coast is smoother than the references': the raster holds 4 pixels a cell
+        (detail 8 gives 1.17 to 1.22 at 14 s), and below it only the warp acts.
+      * Speed: about 4 s of Lua a 24 km island with its fjords and ocean floor, after the triangles, the
+        drainage, the labels and the distances moved to C++ (`Raster.*`); paid again at every level change in
+        the viewer. What is left in Lua is the strata's per-pixel loops, the shelf and the drowned land's
+        raster.
+      * taklamakan has about 0.09 less land than his (its hills hug the edges of a square map, his are 4:3).
+      * The archipelago references (`8u0yqm3yabcy.png`, `images.jpg`, `images1.jpg`) are painted maps: extract
+        land masks by the sea's colour and measure an archipelago band. mapgen2 and heman have not been run
+        beside it (only Azgaar's previews were).
+      * A count of masses above a share of the land in `terrain_metrics` (the JPEG references' speckle makes
+        the raw count meaningless) and its band.
+      * The unbounded world from templates is `Lands.World` (`assets/scripts/lands/infinite_world.lua`);
+        `frame.world_cell` still takes only the compositions. Neither has goldens or tests yet.
+      * `region_id` of a template reads a few samples below 1 inland of some coasts (`Curves.Terrace` over the
+        interpolated ranks).
+- [ ] **Relief on the land (after the outlines, lower priority).** Templates: the ground is his whole-number
+      heights interpolated, combed into parallel streaks in the hillshade, and 4 to 9 % of it is closed
+      depressions (his pits and troughs, which he turns into lakes). Compositions: the interior is a low
+      plateau with a few ranges, so the continents' hypsometric integral is 0.10 against 0.15 to 0.62 on the references, which
+      detail noise will not close: the presets need massifs and uplands (`relief` elements of varied
+      heights, as Azgaar builds land from overlapping `Hill` steps). Ranges read drawn: a three-point spline
+      nearly straight, spurs as straight capsules at even intervals; they need wander along the crest and
+      spurs that descend and branch. The crest's flanks show a regular ripple in the hillshades, an artefact
+      of how its pieces join, to find and remove.
+- [ ] **Phase 4, detail on the shapes** (`docs/lands_plan.md`): what remains of it once the outlines are done
+      (relief noise bound to the distance inland, erosion, the exact distance if erosion moves the coast,
+      fetch).
 - [ ] **A lake's shore cliff stands above a low plain round it** (`all_land.lua`, `lake_b`: a ring 17 m deep):
       the cliff height is not held under the land behind it, as the land presets do with `cliff_height`.
 - [ ] **Debug shaders are built unoptimized** (`-g` against `-O`), so a golden sample on a discontinuity can
