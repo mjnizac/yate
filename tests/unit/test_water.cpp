@@ -256,6 +256,37 @@ end
 )"));
 }
 
+void TestWorldCells() {
+    test::Section("with world cells, two regions in the same cells generate the same rivers");
+    Graph graph;
+    CHECK(Run(graph, "world", R"(
+return function(params)
+    local c = Terrain.Coords{}
+    local base = Noises.fBm{ frequency = 0.0004, octaves = 5, amplitude = 350.0, seed = 5 }.value + c.x * 0.05 + 400.0
+    local function make(region)
+        return Water.Network{ terrain = base, region = region,
+                              generate = { world_cell = 8000, rivers = { count = 2 }, lakes = { count = 1 } } }
+    end
+    local a = make({ -6000, -6000, 6000, 6000 })
+    local b = make({ -7000, -5000, 5000, 7000 })
+    if #a.rivers == 0 then error("nothing was generated") end
+    if #a.rivers ~= #b.rivers or #a.lakes ~= #b.lakes then
+        error(string.format("%d rivers and %d lakes against %d and %d", #a.rivers, #a.lakes, #b.rivers, #b.lakes))
+    end
+    for k, r in ipairs(a.rivers) do
+        local s = b.rivers[k]
+        if #r.points ~= #s.points then error("river " .. k .. " has a different course") end
+        for i = 1, #r.points do
+            if r.points[i][1] ~= s.points[i][1] or r.points[i][2] ~= s.points[i][2] or r.levels[i] ~= s.levels[i] then
+                error("river " .. k .. " differs at point " .. i)
+            end
+        end
+    end
+    return { height = { value = base, range = { -200, 900 } } }
+end
+)"));
+}
+
 } // namespace
 
 int main() {
@@ -269,6 +300,7 @@ int main() {
     TestAudit();
     TestMany();
     TestShape();
+    TestWorldCells();
     CHECK_EQ(lua::AllocatedBytes(), u64_t{0});
     memory::Shutdown();
     log::Shutdown();

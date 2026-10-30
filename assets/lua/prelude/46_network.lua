@@ -535,10 +535,10 @@ local function lake_kind_auto(lake)
 end
 
 -- A level along the river that never rises, falling at least `slope` per metre, held over `floor`.
-local function profile(g, points, slope, floor)
+local function profile(g, points, slope, floor, heights)
     local levels, s = {}, 0.0
     for i, p in ipairs(points) do
-        local ground = g.height(p[1], p[2])
+        local ground = heights and heights[i] or g.height(p[1], p[2])
         if i == 1 then
             levels[i] = ground
         else
@@ -571,7 +571,20 @@ function Water.Network(t)
         fail("Water.Network expects region as { min_x, min_z, max_x, max_z }")
     end
     local gen   = t.generate or {}
-    local cell  = t.cell or math.max(40.0, math.max(region[3] - region[1], region[4] - region[2]) / 256.0)
+    -- With `generate.world_cell`, what is generated belongs to fixed cells of the world, so it does not
+    -- depend on the region asked for: the terrain is analysed over the region grown to whole cells and one
+    -- more ring of them, at a cell size set by the world cell, and `count` is per cell. Any two regions in
+    -- the same cells generate the same rivers and lakes; the viewer and an export inside one agree.
+    local world = gen.world_cell
+    if world then
+        region = { math.floor(region[1] / world) * world - world, math.floor(region[2] / world) * world - world,
+                   math.ceil(region[3] / world) * world + world, math.ceil(region[4] / world) * world + world }
+    end
+    local cell  = t.cell or (world and math.max(40.0, world / 96.0))
+        or math.max(40.0, math.max(region[3] - region[1], region[4] - region[2]) / 256.0)
+    local function world_key(x, z)
+        return world and (math.floor(x / world) * 100003 + math.floor(z / world)) or 0
+    end
     local lake_area = (gen.lakes and gen.lakes.area and gen.lakes.area[1]) or 2e5
     local g = analyse{ terrain = t.terrain, region = region, cell = cell, seed = t.seed or 0,
                        sea_level = t.sea_level, lake_area = lake_area }
@@ -603,8 +616,14 @@ function Water.Network(t)
             end
         end
         table.sort(pool, function(a, b) return a.area * a.depth > b.area * b.depth end)
-        for k = 1, math.min(want, #pool) do
+        local taken, per_cell = 0, {}
+        for k = 1, #pool do
             local l = pool[k]
+            local wk = world_key(l.cx, l.cz)
+            if (world and (per_cell[wk] or 0) >= want) or (not world and taken >= want) then
+                goto skip
+            end
+            per_cell[wk], taken = (per_cell[wk] or 0) + 1, taken + 1
             chosen[l] = true
             local kind = glakes.kinds
             if kind == nil or kind == "auto" then
@@ -614,6 +633,7 @@ function Water.Network(t)
             end
             add_lake{ points = outline_of(g, l, label), level = l.level, depth = math.max(l.depth, 8.0) * 1.6,
                       kind = kind, islands = glakes.islands, generated = true }
+            ::skip::
         end
     end
     local function in_lake(c)
@@ -779,16 +799,23 @@ function Water.Network(t)
         end
         local total = runs[n]
         local ds = total / math.max(1, n - 1)
-        local levels = profile(g, path, slope, floor)
+        -- The ground under the course itself, sampled on the terrain at every point rather than read off
+        -- the 100 m analysis grid: a cliff is where it is, and as steep as it is.
+        local pxs, pzs = {}, {}
+        for i, p in ipairs(path) do
+            pxs[i], pzs[i] = p[1], p[2]
+        end
+        local heights = Terrain.Sample{ value = t.terrain, xs = pxs, zs = pzs, cell = 4.0, seed = t.seed or 0 }
+        local levels = profile(g, path, slope, floor, heights)
 
-        -- Falls: where the ground the river follows drops by 25 m or more within a cell and a half of the
-        -- sampled terrain, at a slope of 45 % and three times the river's own, a cliff it falls over. Only
+        -- Falls: where the ground the river follows drops by 25 m or more within 60 m, at a slope of 90 % and
+        -- three times the river's own, a cliff it falls over. Only
         -- the kinds that keep their steps have them (`falls`): a canyon cuts back through its cliff instead. Each fall keeps its step: the grading and the smoothing below work on the stretches
         -- between falls, which would otherwise spread a waterfall into a long rapid.
         local falls = {}
         if k.falls then
-            local span = math.max(1, math.ceil(g.cell * 1.5 / ds))
-            local steep = math.max(0.45, 3.0 * (levels[1] - levels[n]) / math.max(1.0, total))
+            local span = math.max(1, math.ceil(60.0 / ds))
+            local steep = math.max(0.9, 3.0 * (levels[1] - levels[n]) / math.max(1.0, total))
             local function falls_at(j)
                 local drop = levels[j] - levels[j + span]
                 return drop > math.max(25.0, steep * span * ds), drop
@@ -1131,11 +1158,16 @@ function Water.Network(t)
         table.sort(mouths, function(a, b) return up[a] * math.sqrt(g.d.area[a]) > up[b] * math.sqrt(g.d.area[b]) end)
         local picked = {}
         local on_stem = {}
+        local per_cell = {}
         for _, mth in ipairs(mouths) do
-            if #picked >= count then
+            if not world and #picked >= count then
                 break
             end
             local p, far = g.at(mth), true
+            local wk = world_key(p[1], p[2])
+            if (per_cell[wk] or 0) >= count then
+                far = false
+            end
             for _, q in ipairs(picked) do
                 local o = g.at(q)
                 if (p[1] - o[1]) ^ 2 + (p[2] - o[2]) ^ 2 < spacing * spacing then
@@ -1144,6 +1176,7 @@ function Water.Network(t)
             end
             if far then
                 picked[#picked + 1] = mth
+                per_cell[wk] = (per_cell[wk] or 0) + 1
             end
         end
         local width = opts.width or { 6.0, 80.0 }
