@@ -297,3 +297,22 @@ slope and the hypsometric integral. Check first that it is heights and not shade
 `tests/library/<name>.json` names a script under `assets/scripts`, its bounds, resolution and seed, and
 metric ranges; `test_library` exports it and checks them. An entry with `"target": true` is a range taken
 from references that the example does not meet yet: printed with `->`, not failed.
+
+## Planning and implementing a change
+
+Opus plans (plan mode), Sonnet implements through the `implementer` agent, then `reviewer` and
+`build-runner` run in parallel, then the orchestrator commits. A plan is a message, not a file; its
+conclusion goes into `docs/design.md` and its leftovers into `docs/todo.md`, so nothing stale is kept.
+
+A plan has these parts, each short enough to be checked:
+
+1. **Goal**: one sentence, and what must be true afterwards.
+2. **Files**: every file to touch and why; new files only if the stack's convention or Claude's reading
+   needs them. Over about 150 changed lines, split it into two plans.
+3. **Docs**: which of `status.md`, `todo.md`, `design.md`, `lua_reference.md` change (`tools/dev.sh docs-check`
+   fails when they drift). A change that finishes a milestone updates `status.md` and `todo.md` in its commit.
+4. **Removes**: the old code, test, script or doc this replaces, deleted in the same commit.
+5. **Verify**: exact commands, each with its expected result (`tools/dev.sh lint`, `tools/dev.sh test Release
+   -L fast`, `-R <suite>`, `tools/dev.sh review <script> ...`). Debug and Release full suites run once, before
+   the commit that touches the engine.
+6. **Revert**: what to undo if verification fails twice.
