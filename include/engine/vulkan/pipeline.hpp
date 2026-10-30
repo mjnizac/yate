@@ -71,7 +71,7 @@ static_assert(sizeof(KernelPushConstants) == 128,
 /// Number of workgroups needed to cover a padded section.
 ///
 /// `R2` dispatches are 2D and map `(gl_GlobalInvocationID.x, .y)` to `(x, z)`; `R3` dispatches
-/// are 3D and map `.xyz` to `(x, y, z)`. `lib/kernel.glsl` implements the matching side.
+/// are 3D and map `.xyz` to `(x, y, z)`. `lib/kernel.lib.glsl` implements the matching side.
 [[nodiscard]] constexpr std::array<u32_t, 3> DispatchSize(u32_t domain, std::array<u32_t, 3> extent,
                                                           u32_t halo) noexcept {
     const u32_t padding = 2 * halo;
@@ -117,7 +117,7 @@ struct SpecializationValues {
     }
 };
 
-/// Fills ids 0..2 with the workgroup size of `domain`, matching `lib/kernel.glsl`.
+/// Fills ids 0..2 with the workgroup size of `domain`, matching `lib/kernel.lib.glsl`.
 [[nodiscard]] constexpr SpecializationValues WorkgroupSpecialization(u32_t domain) noexcept {
     SpecializationValues values;
     if (domain == 3) {

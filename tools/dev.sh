@@ -11,6 +11,7 @@
 #   tools/dev.sh clean [DAYS]                                   removes out/ entries untouched for DAYS (7)
 #   tools/dev.sh lint                                           mechanical checks of the CLAUDE.md rules over src/ and include/
 #   tools/dev.sh headings [doc]                                 line numbers of a doc's headings (default docs/decisions.md)
+#   tools/dev.sh docs-check                                     the docs agree with the repo: paths, suites, op count, todo
 #
 # `review` exports the script as raw floats, measures it (out/review/<name>/metrics.json), writes a
 # hillshade, takes the viewer shots in one run, and prints a short summary. `lands` prints what a Lands
@@ -188,6 +189,49 @@ lint() {
 # Lines of the Markdown headings of a doc, `line: # heading`, to read a section by offset instead of the file.
 headings() { grep -nE '^#{1,4} ' "$ROOT/${1:-docs/decisions.md}"; }
 
+# Checks that the docs agree with the repo: every path they quote exists, the suites and the op count in status.md
+# match ctest and OpKind, no finished task stays in todo.md. Scripts nothing refers to are only listed.
+docs_check() {
+    local failed=0 docs=("$ROOT/AGENTS.md" "$ROOT/CLAUDE.md" "$ROOT"/docs/*.md) path hits
+    # Paths of other projects the docs analyse, not ours.
+    local external='^(include/heman\.h|src/(distance|generate|ops)\.c|src/(island-shape|lava|map|noisy-edges)\.js|src/data/|src/model/)'
+    while read -r path; do
+        [[ "$path" == *'*'* || "$path" =~ $external ]] && continue
+        [[ "$path" == lib/* ]] && path="assets/shaders/$path"
+        [[ -e "$ROOT/$path" ]] || { echo "missing path quoted in the docs: $path"; failed=1; }
+    done < <(grep -ohE '`(docs|src|include|tests|assets|tools|lib)/[A-Za-z0-9_./-]+`' "${docs[@]}" | tr -d '`' | sort -u)
+
+    local ctest_exe="$CTEST" suites status_suites
+    if [[ -f "$ROOT/build/Release/CTestTestfile.cmake" ]]; then
+        suites="$(cd "$ROOT/build/Release" && "$ctest_exe" -N | grep -oE 'test_[a-z_0-9]+' | sort -u)"
+        status_suites="$(grep -oE 'test_[a-z_0-9]+' "$ROOT/docs/status.md" | sort -u)"
+        hits="$(diff <(echo "$suites") <(echo "$status_suites") || true)"
+        [[ -z "$hits" ]] || { echo "suites differ between ctest (<) and docs/status.md (>):"; echo "$hits"; failed=1; }
+    else
+        echo "docs-check: build/Release is not configured, suites not compared"
+    fi
+
+    local words=(zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen
+                 seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five)
+    local ops claimed
+    ops="$(awk '/^enum class OpKind/ { on = 1; next } on && /^    Count/ { exit } on && /^    [A-Z][A-Za-z0-9]*( = 0)?,/ { n++ } END { print n }' \
+        "$ROOT/include/engine/terrain/graph.hpp")"
+    claimed="$(grep -oiE '^[a-z-]+ ops' "$ROOT/docs/status.md" | head -1 | cut -d' ' -f1 | tr 'A-Z' 'a-z')"
+    [[ "${words[$ops]:-$ops}" == "$claimed" ]] || { echo "docs/status.md says '$claimed ops', OpKind has $ops"; failed=1; }
+
+    hits="$(grep -nE '^- \[x\]' "$ROOT/docs/todo.md" || true)"
+    [[ -z "$hits" ]] || echo "warning: $(echo "$hits" | wc -l) finished tasks left in docs/todo.md (phase 3 moves them out)"
+
+    local script name
+    while read -r script; do
+        name="$(basename "$script" .lua)"
+        grep -rqwF "$name" "$ROOT/docs" "$ROOT/tests" "$ROOT/assets/lua" "$ROOT/assets/scripts" "$ROOT/src" --exclude="$name.lua" 2>/dev/null \
+            || echo "warning: no doc, test or script mentions $script"
+    done < <(git -C "$ROOT" ls-files 'assets/scripts/*.lua')
+    [[ "$failed" == 0 ]] && echo "docs-check: ok"
+    return "$failed"
+}
+
 case "${1:-}" in
     build) shift; build "$@" ;;
     test) shift; run_tests "$@" ;;
@@ -196,6 +240,7 @@ case "${1:-}" in
     lands-check) shift; lands_check "$@" ;;
     clean) shift; clean "$@" ;;
     lint) lint ;;
+    docs-check) docs_check ;;
     headings) shift; headings "$@" ;;
-    *) sed -n '2,18p' "$0"; exit 2 ;;
+    *) sed -n '2,19p' "$0"; exit 2 ;;
 esac

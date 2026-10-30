@@ -57,7 +57,7 @@ persistently mapped FIFO rings. Peak bytes are tracked per category for the meta
 
 `terrain_export` evaluates a job section by section and writes 16-bit PNGs plus a JSON sidecar.
 
-**Noise with analytic derivatives.** `assets/shaders/lib/noise.glsl` implements 2D and 3D simplex
+**Noise with analytic derivatives.** `assets/shaders/lib/noise.lib.glsl` implements 2D and 3D simplex
 noise whose value *and* exact gradient come out of one evaluation, by differentiating the kernel in
 closed form. Fractal accumulation carries the gradient through the chain rule. `test_noise` compares
 the analytic gradient against a central difference of the value channel over 4096 samples and finds a

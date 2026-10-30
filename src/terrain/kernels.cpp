@@ -328,7 +328,7 @@ static_assert(RegistryIsOrdered(), "kOps entries must be in OpKind order");
 
 // --- CPU reference: simplex noise ----------------------------------------------------------------
 //
-// A deliberate second implementation of what assets/shaders/lib/noise.glsl does. Having the two
+// A deliberate second implementation of what assets/shaders/lib/noise.lib.glsl does. Having the two
 // agree to within float rounding is what `test_kernels` checks, and it is the only way a change to
 // one of them cannot silently diverge from the other.
 
