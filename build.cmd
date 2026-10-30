@@ -30,7 +30,10 @@ goto collect
 call "%VS_ROOT%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 set "PATH=%CMAKE_BIN%;%NINJA_BIN%;%PATH%"
 
+rem Already configured and no extra arguments: ninja reruns cmake itself when a CMake file changes.
+if "!EXTRA!"=="" if exist "%~dp0build\%BUILD_TYPE%\build.ninja" goto build
 cmake -S "%~dp0." -B "%~dp0build\%BUILD_TYPE%" -G Ninja ^
     -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
     -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl !EXTRA! || exit /b 1
+:build
 cmake --build "%~dp0build\%BUILD_TYPE%" || exit /b 1

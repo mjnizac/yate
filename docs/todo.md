@@ -113,7 +113,8 @@ viewer screenshot. Each item is done when it is in `ctest`.
 
 ## Viewer and performance
 
-- [ ] **`test_viewer` fails** on "distance picks the level" (`MissingTiles() == 0`) in every Debug run and,
+- [ ] **`test_viewer` "distance picks the level"** now waits up to 10 rounds of 60 frames for `MissingTiles() == 0`;
+      passes in Release, Debug not rechecked. Before it failed in every Debug run and,
       from 2026-10-28, in most Release runs, with its own noise script. Find whether the build is too slow
       for the frame budget the test allows or tiles are really missing.
 
@@ -157,8 +158,6 @@ viewer screenshot. Each item is done when it is in `ctest`.
       none. A sun-direction heightmap pass in the viewer would cover any script.
 - [ ] **`--detail 1` lost a piece of foreground** next to the camera once; not investigated.
 - [ ] **Strata steps are regular close up**: one bed thickness and one dip per terrain.
-- [ ] **`test_datasets` `volume_r3` timing** fails intermittently (24 to 29 ms against a 20 ms baseline,
-      the same spread the history shows for weeks); the baseline or the tolerance needs a decision.
 
 ## Lands macro (`Lands.*`)
 

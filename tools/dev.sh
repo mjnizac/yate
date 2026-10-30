@@ -8,6 +8,7 @@
 #                       [--seed N] [--out DIR] [--type Release|Debug]
 #   tools/dev.sh lands <script.lua> --bounds minx,minz,maxx,maxz [--res M] [--param k=v]... [--out DIR]
 #   tools/dev.sh lands-check <script.lua> --bounds ... --expect count=N,area=MIN..MAX,land=MIN..MAX
+#   tools/dev.sh clean [DAYS]                                   removes out/ entries untouched for DAYS (7)
 #
 # `review` exports the script as raw floats, measures it (out/review/<name>/metrics.json), writes a
 # hillshade, takes the viewer shots in one run, and prints a short summary. `lands` prints what a Lands
@@ -156,11 +157,17 @@ lands_check() {
     exit "$failed"
 }
 
+# Deletes what out/ holds that has not changed for DAYS (default 7): old experiments, never a running suite's lock.
+clean() {
+    find "$ROOT/out" -mindepth 1 -maxdepth 1 -mtime "+${1:-7}" ! -name .ctest.lock -exec rm -rf {} +
+}
+
 case "${1:-}" in
     build) shift; build "$@" ;;
     test) shift; run_tests "$@" ;;
     review) shift; review "$@" ;;
     lands) shift; lands "$@" ;;
     lands-check) shift; lands_check "$@" ;;
-    *) sed -n '2,17p' "$0"; exit 2 ;;
+    clean) shift; clean "$@" ;;
+    *) sed -n '2,18p' "$0"; exit 2 ;;
 esac

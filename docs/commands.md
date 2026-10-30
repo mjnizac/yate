@@ -112,7 +112,7 @@ Unit tests link the engine objects directly and define `IS_ENGINE`, so they can 
 allocators, the Vulkan context and the section pool. `test_compute_roundtrip` needs a Vulkan 1.4
 device and the compiled shaders.
 
-`ctest -L fast` runs the suites that take seconds (about 9 s in Release); `-L slow` the ones that export
+`ctest -L fast` runs the suites that take seconds (about 9 s in Release); `-L compose` is `test_compose` (about 50 s); `-L slow` the ones that export
 whole terrains or open the viewer. `test_datasets --record-history` appends its timings to
 `tests/history/`; a plain run leaves the tree clean.
 
@@ -190,7 +190,7 @@ sea; the panel has the same controls and a reload keeps them. The panel also tog
 and the rivers apart: a script's outputs named `lakes` and `rivers` are water surfaces of their own (see
 `Water.Apply`), drawn with the same colour. An output named `sea` is the sea's surface (see
 `Water.Network`): with it the sea is drawn only where the script put it, and the panel's level is not used. Terrain below the level takes the
-water colour in proportion to the water in front of it, with a pale band where it meets the surface:
+water colour in proportion to the water in front of it:
 
 ```bash
 build/Release/bin/terrain_viewer --script assets/scripts/terrains/island.lua --water --screenshot out/island.png

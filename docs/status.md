@@ -93,9 +93,8 @@ Both configurations build warning-free with MSVC 19.44 at `/W4`, and `ctest` has
 `test_allocators`, `test_mapping`, `test_errors`, `test_compiler`, `test_lua_errors`,
 `test_output_files`, `test_lands`, `test_relief`, `test_hydrology`, `test_water`, `test_compose`,
 `test_cli`, `test_geometry`, `test_library`, `test_compute_roundtrip`, `test_noise`, `test_kernels`,
-`test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. On the last run Release passed all but the
-`volume_r3` timing in `test_datasets` and, in most runs, `test_viewer`'s "distance picks the level", and Debug
-all but that `test_viewer` check (see known defects). Run one
+`test_seams`, `test_erosion`, `test_viewer`, `test_datasets`. On the last run Release passed all of them. Run one
+suite at a time: two runs share `out/` and fail each other.
 suite at a time: two runs share `out/` and fail each other.
 
 Four of those look at something the engine did not itself produce, which is the property the earlier
@@ -150,10 +149,8 @@ Open, with the measurements, in `docs/todo.md`:
   carves are at the scale of the cell and differ. Finer than 2 m the count is capped at 96.
 * **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
   it. Adding diagonal neighbours was tried and measured worse.
-* **`volume_r3` timing in `test_datasets`** runs 21 to 80 % over its 20 ms baseline in Release, against a
-  25 % failure threshold; the baseline or the tolerance needs a decision.
-* **`test_viewer` fails** on "distance picks the level" (`MissingTiles() == 0`): in every Debug run and, from
-  2026-10-28, in most Release runs too (its own noise script, nothing of the lands). Not investigated (todo).
+* **`test_viewer` "distance picks the level"** failed in every Debug run and, from
+  2026-10-28, in most Release runs too: the test now waits for the tiles; Release passes, Debug not rechecked (todo).
 * **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not
   reproduce locally; Linux has never built. Both need the log of the failing step.
 * **Water at the ring's edge** shows a plate where the surface stands above a lower floor (todo).

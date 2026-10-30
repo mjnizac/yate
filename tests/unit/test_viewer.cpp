@@ -458,8 +458,11 @@ int main() {
             // placing the eye would move the target with it and change nothing.
             viewer.SetFlyMode(true);
             viewer.MoveCameraTo(0.0f, 20000.0f, 0.0f);
-            window.StopAfter(window.FramesPresented() + 60);
-            (*application)->Run();
+            // Streaming is bounded by time, not frames: give the new level's tiles frames to arrive.
+            for (u32_t round = 0; round < 10 && (round == 0 || viewer.MissingTiles() != 0); ++round) {
+                window.StopAfter(window.FramesPresented() + 60);
+                (*application)->Run();
+            }
             std::printf("     level %u at 20 km, spacing x%u\n", viewer.Level(),
                         1u << viewer.Level());
             CHECK(viewer.Level() > 0);
