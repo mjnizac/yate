@@ -9,6 +9,8 @@
 #   tools/dev.sh lands <script.lua> --bounds minx,minz,maxx,maxz [--res M] [--param k=v]... [--out DIR]
 #   tools/dev.sh lands-check <script.lua> --bounds ... --expect count=N,area=MIN..MAX,land=MIN..MAX
 #   tools/dev.sh clean [DAYS]                                   removes out/ entries untouched for DAYS (7)
+#   tools/dev.sh lint                                           mechanical checks of the CLAUDE.md rules over src/ and include/
+#   tools/dev.sh headings [doc]                                 line numbers of a doc's headings (default docs/decisions.md)
 #
 # `review` exports the script as raw floats, measures it (out/review/<name>/metrics.json), writes a
 # hillshade, takes the viewer shots in one run, and prints a short summary. `lands` prints what a Lands
@@ -22,7 +24,7 @@ CTEST="$VS_ROOT/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/ctest.exe
 
 build() {
     local type="${1:-Release}"
-    cmd //c "$(cygpath -w "$ROOT/build.cmd") $type" 2>&1 | grep -E " error |warning C|FAILED|^ninja: build stopped" || true
+    cmd //c "$(cygpath -w "$ROOT/build.cmd") $type" 2>&1 | grep -E " error |warning C|FAILED|CMake Error|^ninja: build stopped" || true
     test -x "$ROOT/build/$type/bin/terrain_export.exe" || { echo "dev.sh: build failed" >&2; exit 1; }
 }
 
@@ -35,7 +37,7 @@ run_tests() {
     # Expanded now: the local is gone by the time the trap runs.
     trap "rmdir '$lock'" EXIT
     (cd "$ROOT/build/$type" && "$CTEST" --output-on-failure "$@" 2>&1 \
-        | grep -E "Test +#|tests passed|FAILED|Failed|SEGFAULT|Timeout|^FAIL" || true)
+        | grep -E "Test +#|tests passed|FAILED|Failed|SEGFAULT|Timeout|^FAIL|^ +(actual|expected|error) +:|^-- " || true)
 }
 
 review() {
@@ -162,6 +164,30 @@ clean() {
     find "$ROOT/out" -mindepth 1 -maxdepth 1 -mtime "+${1:-7}" ! -name .ctest.lock -exec rm -rf {} +
 }
 
+# Mechanical checks of CLAUDE.md's rules over src/ and include/, in seconds and with no model: no new/delete/malloc
+# outside engine/memory (placement new is the allowed form), no side effects in ENGINE_ASSERT, every executable
+# routes operator new, and the kernel push constant stays at 128 bytes. Prints one line per problem, exits 1 on any.
+lint() {
+    local found=0 hits
+    hits="$(grep -rnE '(^|[^_[:alnum:].>"])(new [[:alpha:]_]|delete[ \[;])' --include=*.cpp --include=*.hpp "$ROOT/src" "$ROOT/include" \
+        | grep -vE '/memory/|= *delete|operator|^[^:]*:[0-9]+: *(//|\*)' || true)"
+    [[ -z "$hits" ]] || { echo "new/delete outside the memory system:"; echo "$hits"; found=1; }
+    hits="$(grep -rnE '\b(malloc|calloc|realloc|free)\(' --include=*.cpp --include=*.hpp "$ROOT/src" "$ROOT/include" | grep -v '/memory/' || true)"
+    [[ -z "$hits" ]] || { echo "malloc family outside the memory system:"; echo "$hits"; found=1; }
+    hits="$(grep -rnE 'ENGINE_ASSERT\([^;]*(\+\+|--|[^=!<>]=[^=])' --include=*.cpp --include=*.hpp "$ROOT/src" "$ROOT/include" || true)"
+    [[ -z "$hits" ]] || { echo "side effect inside ENGINE_ASSERT:"; echo "$hits"; found=1; }
+    hits="$(awk '/^add_executable\(/ { name = $0; inside = 1; has = 0 } inside && /new_delete\.cpp/ { has = 1 }
+        inside && /\)/ { if (!has) print FILENAME ": " name; inside = 0 }' "$ROOT/CMakeLists.txt")"
+    [[ -z "$hits" ]] || { echo "executable without src/memory/new_delete.cpp:"; echo "$hits"; found=1; }
+    grep -rqE 'static_assert\(sizeof\(KernelPushConstants\) *== *128' "$ROOT/include" "$ROOT/src" \
+        || { echo "static_assert of the 128-byte KernelPushConstants is missing"; found=1; }
+    [[ "$found" == 0 ]] && echo "lint: ok"
+    return "$found"
+}
+
+# Lines of the Markdown headings of a doc, `line: # heading`, to read a section by offset instead of the file.
+headings() { grep -nE '^#{1,4} ' "$ROOT/${1:-docs/decisions.md}"; }
+
 case "${1:-}" in
     build) shift; build "$@" ;;
     test) shift; run_tests "$@" ;;
@@ -169,5 +195,7 @@ case "${1:-}" in
     lands) shift; lands "$@" ;;
     lands-check) shift; lands_check "$@" ;;
     clean) shift; clean "$@" ;;
+    lint) lint ;;
+    headings) shift; headings "$@" ;;
     *) sed -n '2,18p' "$0"; exit 2 ;;
 esac

@@ -112,6 +112,8 @@ Unit tests link the engine objects directly and define `IS_ENGINE`, so they can 
 allocators, the Vulkan context and the section pool. `test_compute_roundtrip` needs a Vulkan 1.4
 device and the compiled shaders.
 
+`tools/dev.sh lint` checks the memory, `ENGINE_ASSERT`, `new_delete.cpp` and push-constant rules in seconds; `tools/dev.sh headings <doc>` maps a long doc by line.
+
 `ctest -L fast` runs the suites that take seconds (about 9 s in Release); `-L compose` is `test_compose` (about 50 s); `-L slow` the ones that export
 whole terrains or open the viewer. `test_datasets --record-history` appends its timings to
 `tests/history/`; a plain run leaves the tree clean.
