@@ -24,25 +24,30 @@ Result<VkFormat> PickDepthFormat(VkPhysicalDevice device) {
 }
 
 Result<RenderPass> RenderPass::Create(VkDevice device, VkFormat colorFormat,
-                                      VkFormat depthFormat) {
+                                      VkFormat depthFormat, VkSampleCountFlagBits samples) {
     if (device == VK_NULL_HANDLE) {
         ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Vulkan,
                     "a render pass needs a device");
     }
+    const b8_t multisampled = samples != VK_SAMPLE_COUNT_1_BIT;
 
-    const std::array<VkAttachmentDescription, 2> attachments{
+    // Multisampled, the colour is drawn into an image of its own that nothing keeps past the pass
+    // (attachment 0) and resolved into the swapchain image (attachment 2), which is what is presented.
+    const std::array<VkAttachmentDescription, 3> attachments{
         VkAttachmentDescription{.flags          = 0,
                                 .format         = colorFormat,
-                                .samples        = VK_SAMPLE_COUNT_1_BIT,
+                                .samples        = samples,
                                 .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                                .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+                                .storeOp        = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                                               : VK_ATTACHMENT_STORE_OP_STORE,
                                 .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                                 .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                                 .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-                                .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR},
+                                .finalLayout    = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                                               : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR},
         VkAttachmentDescription{.flags   = 0,
                                 .format  = depthFormat,
-                                .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .samples = samples,
                                 .loadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR,
                                 // Nothing reads depth after the frame, and saying so lets a tiled
                                 // architecture keep it in tile memory and never write it out.
@@ -50,12 +55,23 @@ Result<RenderPass> RenderPass::Create(VkDevice device, VkFormat colorFormat,
                                 .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                                 .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                                 .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-                                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL}};
+                                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL},
+        VkAttachmentDescription{.flags          = 0,
+                                .format         = colorFormat,
+                                .samples        = VK_SAMPLE_COUNT_1_BIT,
+                                .loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+                                .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                                .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+                                .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR}};
 
     const VkAttachmentReference colorReference{
         .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     const VkAttachmentReference depthReference{
         .attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    const VkAttachmentReference resolveReference{
+        .attachment = 2, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     const VkSubpassDescription subpass{.flags                   = 0,
                                        .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -63,7 +79,7 @@ Result<RenderPass> RenderPass::Create(VkDevice device, VkFormat colorFormat,
                                        .pInputAttachments       = nullptr,
                                        .colorAttachmentCount    = 1,
                                        .pColorAttachments       = &colorReference,
-                                       .pResolveAttachments     = nullptr,
+                                       .pResolveAttachments     = multisampled ? &resolveReference : nullptr,
                                        .pDepthStencilAttachment = &depthReference,
                                        .preserveAttachmentCount = 0,
                                        .pPreserveAttachments    = nullptr};
@@ -95,7 +111,7 @@ Result<RenderPass> RenderPass::Create(VkDevice device, VkFormat colorFormat,
                                       .pNext = nullptr,
                                       .flags = 0,
                                       .attachmentCount =
-                                          static_cast<u32_t>(attachments.size()),
+                                          multisampled ? 3u : 2u,
                                       .pAttachments    = attachments.data(),
                                       .subpassCount    = 1,
                                       .pSubpasses      = &subpass,
@@ -106,6 +122,7 @@ Result<RenderPass> RenderPass::Create(VkDevice device, VkFormat colorFormat,
     pass.m_device      = device;
     pass.m_colorFormat = colorFormat;
     pass.m_depthFormat = depthFormat;
+    pass.m_samples     = samples;
     VK_TRY(vkCreateRenderPass(device, &info, nullptr, &pass.m_handle));
 
     LOG_DEBUG("render pass ready (colour {}, depth {})", static_cast<u32_t>(colorFormat),
@@ -134,6 +151,7 @@ RenderPass& RenderPass::operator=(RenderPass&& other) noexcept {
     m_handle           = other.m_handle;
     m_colorFormat      = other.m_colorFormat;
     m_depthFormat      = other.m_depthFormat;
+    m_samples          = other.m_samples;
     other.m_device     = VK_NULL_HANDLE;
     other.m_handle     = VK_NULL_HANDLE;
     return *this;

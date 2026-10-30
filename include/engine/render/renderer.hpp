@@ -63,14 +63,34 @@ public:
         /// Three gives a 7x7 ring, which at 128 samples and 2 m is about 1.8 km across: enough that the
         /// edge is past the far plane at ground level and the ring is never visibly square.
         u32_t ringRadius = 3;
-        /// Coarsest level the ring may switch to. Each level doubles the sample spacing and so quadruples
-        /// the area one tile covers.
-        u32_t maxLevel = 4;
+        /// Rings of detail beyond the finest (`--max-level`, "Detail rings" in the panel): each a level
+        /// coarser, twice the spacing and twice as far. 0 is the finest ring alone.
+        u32_t maxLevel = 0;
         /// Levels finer than the distance heuristic picks; 0 is the heuristic. For close inspection.
         u32_t detail = 0;
-        /// Tiles evaluated per frame while the camera moves. The bound is what keeps a frame from
-        /// stalling; a hole at the edge of the ring for a few frames is the better failure.
+        /// Tiles evaluated per frame while the camera moves, at least; then more while `streamMilliseconds`
+        /// of the frame are not spent. The time bound is what keeps a frame from stalling (a tile of a heavy
+        /// script takes milliseconds) and lets a light one fill its ring at once; a hole at the edge of the
+        /// ring for a few frames is the better failure.
         u32_t tilesPerFrame = 2;
+        f32_t streamMilliseconds = 4.0f;
+        /// Re-run the script when the camera's focus moves a quarter of the ring away from where it was
+        /// last run, so a script that builds only round `params.bounds` keeps up. Off by default: any
+        /// other script would re-run for nothing.
+        b8_t follow = false;
+        /// How much wider than the script built it the map is drawn: x and z are multiplied by it, the
+        /// heights and the water level are not, so distances grow and the sea stays at 0. The tiles are
+        /// still evaluated at the script's own positions.
+        f32_t mapScale = 1.0f;
+        /// Metres a second the camera moves along +x by itself (`--drift`): a benchmark of streaming in
+        /// motion, reproducible without a hand on the mouse. 0 leaves it still.
+        f32_t drift = 0.0f;
+        /// Degrees of yaw the camera turns a frame by itself (`--spin`): a turn that is the same every run,
+        /// for comparing frames. 0 leaves it still.
+        f32_t spin = 0.0f;
+        /// Tiles outside the view are not drawn; off (`--no-cull`) every resident tile is, to check that
+        /// culling never hides one that shows.
+        b8_t cull = true;
         /// Samples per side of one tile. Tiles are the unit of evaluation and of culling.
         u32_t sectionSize = 128;
         /// Vertices per side of the drawn grid. At most `sectionSize`; lower trades detail for
@@ -145,7 +165,7 @@ private:
     void UpdatePanels();
     void UpdateReload();
     /// Evaluates at most `budget` missing tiles of the ring, and evicts what left it.
-    void StreamTiles(u32_t budget);
+    void StreamTiles(u32_t budget, f64_t deadline = 1e300);
 #ifdef IS_ENGINE
     /// Records this frame's tiles inside the window layer's render pass.
     void Record(const WindowLayer::FrameContext& frame);

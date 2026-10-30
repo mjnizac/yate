@@ -208,8 +208,25 @@ decide how much world one tile covers. `--ring` is how many tiles are kept on ea
 3 is a 7x7 ring of 49 tiles: at 128 samples and 2 m that is about 1.8 km across and takes roughly 45 ms
 to evaluate for the sample script.
 
-The ring follows the camera and switches to a coarser sample spacing as it pulls away, up to
-`--max-level` doublings. `--tiles-per-frame` bounds how much streaming one frame may pay for.
+The ring follows the camera and switches to a coarser sample spacing as it pulls away. `--max-level` adds
+that many rings of detail beyond it (a clipmap), each a level coarser, twice the spacing and twice as far;
+0 is the finest ring alone. Tiles stream in nearest and faced first: at least `--tiles-per-frame` a frame,
+then more while `--stream-ms` (4) of the frame are not spent. The panel's "View" section changes the
+resolution, the detail rings, the tiles each way and the map scale while the viewer runs.
+
+`--follow` re-runs the script when the camera's focus has moved a quarter of the ring away, with
+`params.bounds` round it, for a world built only where it is looked at (`assets/scripts/lands/infinite_world.lua`);
+the old tiles stay on screen until the new ones replace them. `--map-scale <f>` draws the map `f` times
+wider in x and z, heights and the water level unchanged. The viewer waits for the vertical blank by default;
+`--no-vsync` draws as fast as it can, to measure.
+
+To measure: `--drift <m/s>` moves the camera along +x by itself and `--spin <deg>` turns it that much a
+frame, both the same every run; `--no-cull` draws every resident tile, to check that the culling never
+hides one that shows. The viewer logs its frame times and streaming stats when it closes.
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/lands/infinite_world.lua --seed 1 --water --water-opacity 0.45 --follow --param budget=4 --resolution 128 --max-level 1 --ring 4
+```
 
 `--frames <n>` presents that many frames and exits. That is what makes the viewer runnable from a script
 or a test, and it is how `test_viewer` drives it:

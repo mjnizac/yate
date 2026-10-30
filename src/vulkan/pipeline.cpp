@@ -296,7 +296,8 @@ namespace {
 Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass renderPass,
                                                   std::string_view vertexSpirv,
                                                   std::string_view fragmentSpirv,
-                                                  VkPipelineCache cache, PipelineKind kind) {
+                                                  VkPipelineCache cache, PipelineKind kind,
+                                                  VkSampleCountFlagBits samples) {
     Result<VkShaderModule> vertex = LoadModule(device, vertexSpirv);
     if (!vertex) {
         return std::unexpected(vertex.error());
@@ -380,7 +381,7 @@ Result<GraphicsPipeline> GraphicsPipeline::Create(VkDevice device, VkRenderPass 
         .lineWidth   = 1.0f};
     const VkPipelineMultisampleStateCreateInfo multisample{
         .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+        .rasterizationSamples = samples};
 
     // `GREATER_OR_EQUAL`, not `LESS`: the projection is reversed-depth, so near is 1 and far is 0. A
     // float depth buffer keeps most of its precision near zero, and reversing the range puts that

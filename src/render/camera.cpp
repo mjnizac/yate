@@ -44,7 +44,7 @@ Vec3 Camera::Focus() const noexcept { return m_mode == CameraMode::Orbit ? m_tar
 
 Mat4 Camera::View() const noexcept {
     const Vec3 eye = Position();
-    return LookAt(eye, eye + Forward(), Vec3{0.0f, 1.0f, 0.0f});
+    return LookTo(eye, Forward(), Vec3{0.0f, 1.0f, 0.0f});
 }
 
 Mat4 Camera::Projection(f32_t aspect) const noexcept {
@@ -69,6 +69,8 @@ void Camera::SetView(Vec3 target, f32_t yawRadians, f32_t pitchRadians, f32_t di
     m_target   = target;
     m_yaw      = yawRadians;
     m_pitch    = std::clamp(pitchRadians, -1.55f, 1.55f);
+    m_yawGoal   = m_yaw;
+    m_pitchGoal = m_pitch;
     m_distance = std::clamp(distance, kMinDistance, kMaxDistance);
     // The same scaling `Frame` applies, for the same reasons.
     SetClipPlanes(std::max(m_distance * 0.001f, 0.05f), std::max(m_distance * 20.0f, 1000.0f));
@@ -104,17 +106,36 @@ f32_t Camera::ViewDistance(f32_t groundHeight) const noexcept {
 }
 
 void Camera::Turn(f32_t deltaYawPixels, f32_t deltaPitchPixels) noexcept {
-    m_yaw -= deltaYawPixels * kTurnPerPixel;
-    m_pitch = std::clamp(m_pitch - deltaPitchPixels * kTurnPerPixel, -kPitchLimit, kPitchLimit);
+    m_yawGoal -= deltaYawPixels * kTurnPerPixel;
+    m_pitchGoal = std::clamp(m_pitchGoal - deltaPitchPixels * kTurnPerPixel, -kPitchLimit, kPitchLimit);
+}
+
+void Camera::Update(f32_t deltaSeconds) noexcept {
+    // A fixed share of what is left a frame would ease faster at a higher frame rate; this is the same
+    // 40 ms whatever the rate.
+    const f32_t keep = std::exp(-std::max(deltaSeconds, 0.0f) / 0.04f);
+    m_yaw   = m_yawGoal + (m_yaw - m_yawGoal) * keep;
+    m_pitch = m_pitchGoal + (m_pitch - m_pitchGoal) * keep;
 }
 
 void Camera::Zoom(f32_t ticks) noexcept {
-    const f32_t factor = std::pow(kZoomPerTick, -ticks);
     if (m_mode == CameraMode::Orbit) {
-        m_distance = std::clamp(m_distance * factor, kMinDistance, kMaxDistance);
+        // Wheel up comes closer.
+        m_distance = std::clamp(m_distance * std::pow(kZoomPerTick, -ticks), kMinDistance, kMaxDistance);
         SetClipPlanes(std::max(m_distance * 0.001f, 0.05f), std::max(m_distance * 20.0f, 1000.0f));
     } else {
-        m_speed = std::clamp(m_speed * factor, kMinSpeed, kMaxSpeed);
+        // Wheel up goes faster, the way a throttle does.
+        m_speed = std::clamp(m_speed * std::pow(kZoomPerTick, ticks), kMinSpeed, kMaxSpeed);
+    }
+}
+
+void Camera::ScaleGround(f32_t ratio) noexcept {
+    // What the camera is about moves with the ground; orientation, distance and height stay.
+    const Vec3 eye = Position();
+    if (m_mode == CameraMode::Orbit) {
+        m_target = Vec3{m_target.x * ratio, m_target.y, m_target.z * ratio};
+    } else {
+        m_target = Vec3{eye.x * ratio, eye.y, eye.z * ratio};
     }
 }
 

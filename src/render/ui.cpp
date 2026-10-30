@@ -19,7 +19,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -73,7 +75,7 @@ struct Ui::State {
 Ui::~Ui() { Shutdown(); }
 
 Status Ui::Initialize(vulkan::Context& context, const vulkan::Window& window,
-                      VkRenderPass renderPass, u32_t imageCount) {
+                      VkRenderPass renderPass, u32_t imageCount, VkSampleCountFlagBits samples) {
     Shutdown();
 
     void* storage = memory::General().Allocate(sizeof(State), alignof(State));
@@ -118,7 +120,7 @@ Status Ui::Initialize(vulkan::Context& context, const vulkan::Window& window,
     vulkanInfo.RenderPass     = renderPass;
     vulkanInfo.MinImageCount  = imageCount;
     vulkanInfo.ImageCount     = imageCount;
-    vulkanInfo.MSAASamples    = VK_SAMPLE_COUNT_1_BIT;
+    vulkanInfo.MSAASamples    = samples;
     vulkanInfo.PipelineCache  = context.Pipelines().Handle();
     vulkanInfo.CheckVkResultFn = CheckVulkanResult;
     if (!ImGui_ImplVulkan_Init(&vulkanInfo)) {
@@ -180,6 +182,26 @@ b8_t Ui::Draw(Panels& panels) {
         ImGui::TextUnformatted(panels.cameraMode);
         ImGui::Text("eye %.0f, %.0f, %.0f", static_cast<f64_t>(panels.eye[0]),
                     static_cast<f64_t>(panels.eye[1]), static_cast<f64_t>(panels.eye[2]));
+
+        // The view. The finest spacing reaches the script (it sees the spacing), so it reloads; the rings,
+        // the tiles and the map's horizontal scale are the viewer's own and take effect at once.
+        ImGui::Separator();
+        // Folded by default, so the panel covers no more of the terrain than it did.
+        if (ImGui::CollapsingHeader("View")) {
+            // Powers of two only: a level's lattice is then a subset of the finer one's, as for the levels.
+            i32_t exponent = static_cast<i32_t>(std::lround(std::log2(std::max(panels.resolution, 0.125f))));
+            std::array<char, 32> spacing{};
+            std::snprintf(spacing.data(), spacing.size(), "%g m", std::exp2(static_cast<f64_t>(exponent)));
+            if (ImGui::SliderInt("Resolution", &exponent, -3, 14, spacing.data(), ImGuiSliderFlags_AlwaysClamp)) {
+                panels.resolution = static_cast<f32_t>(std::exp2(static_cast<f64_t>(exponent)));
+                changed           = true;
+            }
+            // Rings of detail beyond the finest, each a level coarser and twice as far: no reload.
+            ImGui::SliderInt("Detail rings", &panels.maxLevel, 0, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SliderInt("Tiles each way", &panels.ringRadius, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SliderFloat("Map scale", &panels.mapScale, 0.25f, 16.0f, "x%.2f",
+                               ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+        }
 
         // Water is a property of the viewer, not of the script, so its controls are always here and
         // changing one never asks for a reload.

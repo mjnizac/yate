@@ -70,6 +70,8 @@ struct ImageDesc {
     VkImageUsageFlags  usage  = 0;
     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     VramCategory       category = VramCategory::Viewer;
+    /// Samples a pixel: above 1 for a multisampled render target.
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
 };
 
 struct BufferDesc {

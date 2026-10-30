@@ -271,7 +271,8 @@ public:
                                                         std::string_view vertexSpirv,
                                                         std::string_view fragmentSpirv,
                                                         VkPipelineCache  cache,
-                                                        PipelineKind kind = PipelineKind::Terrain);
+                                                        PipelineKind kind = PipelineKind::Terrain,
+                                                        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 
     [[nodiscard]] VkPipeline       Handle() const noexcept { return m_pipeline; }
     [[nodiscard]] VkPipelineLayout Layout() const noexcept { return m_layout; }

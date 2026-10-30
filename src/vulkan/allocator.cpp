@@ -258,7 +258,7 @@ Result<Image> Allocator::CreateImage(const ImageDesc& desc) {
                                  .extent                = {desc.width, desc.height, 1},
                                  .mipLevels             = 1,
                                  .arrayLayers           = 1,
-                                 .samples               = VK_SAMPLE_COUNT_1_BIT,
+                                 .samples               = desc.samples,
                                  .tiling                = VK_IMAGE_TILING_OPTIMAL,
                                  .usage                 = desc.usage,
                                  .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,

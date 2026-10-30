@@ -34,12 +34,16 @@ public:
     ENGINE_NO_COPY(RenderPass);
 
     [[nodiscard]] static Result<RenderPass> Create(VkDevice device, VkFormat colorFormat,
-                                                 VkFormat depthFormat);
+                                                 VkFormat depthFormat,
+                                                 VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 
     [[nodiscard]] VkRenderPass Handle() const noexcept { return m_handle; }
     [[nodiscard]] VkFormat     ColorFormat() const noexcept { return m_colorFormat; }
     [[nodiscard]] VkFormat     DepthFormat() const noexcept { return m_depthFormat; }
     [[nodiscard]] b8_t         IsValid() const noexcept { return m_handle != VK_NULL_HANDLE; }
+    /// Samples a pixel. Above 1 the colour is drawn into a multisampled image (attachment 0) and resolved
+    /// into the swapchain image (attachment 2) at the end of the pass.
+    [[nodiscard]] VkSampleCountFlagBits Samples() const noexcept { return m_samples; }
 
 private:
     void Release() noexcept;
@@ -48,6 +52,7 @@ private:
     VkRenderPass m_handle      = VK_NULL_HANDLE;
     VkFormat     m_colorFormat = VK_FORMAT_UNDEFINED;
     VkFormat     m_depthFormat = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
 };
 
 } // namespace engine::vulkan

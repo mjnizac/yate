@@ -32,7 +32,8 @@ public:
 
     /// `renderPass` is the pass the panels are drawn in, so they must be recorded inside it.
     [[nodiscard]] Status Initialize(vulkan::Context& context, const vulkan::Window& window,
-                                   VkRenderPass renderPass, u32_t imageCount);
+                                   VkRenderPass renderPass, u32_t imageCount,
+                                   VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
     void                 Shutdown();
 
     [[nodiscard]] b8_t IsValid() const noexcept;
@@ -61,6 +62,14 @@ public:
         f32_t                waterLevel   = 0.0f;
         std::array<f32_t, 3> waterColour{};
         f32_t                waterOpacity = 0.75f;
+        /// The view, edited in place: metres per sample at the finest level and the coarsest level the
+        /// ring may switch to (a change re-runs the script, which sees the spacing), the tiles kept each
+        /// side of the camera, and how much wider than the script built the map is drawn (heights and
+        /// the water level unchanged).
+        f32_t resolution = 1.0f;
+        i32_t maxLevel   = 0;
+        i32_t ringRadius = 3;
+        f32_t mapScale   = 1.0f;
         /// Edited in place when the user drags a value. Null hides the section.
         terrain::Params* params = nullptr;
     };

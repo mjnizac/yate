@@ -29,7 +29,7 @@ void PrintUsage() {
                "  --script <file>        terrain script to preview and watch (required)\n"
                "  --seed <n>             random seed (default 0)\n"
                "  --ring <n>             tiles kept on each side of the camera (default 3)\n"
-               "  --max-level <n>        coarsest level the ring may use (default 4)\n"
+               "  --max-level <n>        rings of detail beyond the finest, each a level coarser (default 0)\n"
                "  --detail <n>           use n levels finer than the distance calls for (default 0)\n"
                "  --tiles-per-frame <n>  tiles evaluated per frame while moving (default 2)\n"
                "  --resolution <meters>  meters per sample (default 2.0)\n"
@@ -41,6 +41,14 @@ void PrintUsage() {
                "  --view yaw,pitch,dist  start the orbit camera here: degrees, degrees, metres\n"
                "  --target x,y,z         the point the camera orbits (default 0,0,0)\n"
                "  --water                draw water at the water level (off by default)\n"
+               "  --follow               re-run the script as the camera moves, with params.bounds round\n"
+               "                         it: for a world built only where it is looked at\n"
+               "  --map-scale <f>        draw the map f times wider, heights and water level unchanged\n"
+               "  --drift <m/s>          move the camera along +x by itself, to measure streaming in motion\n"
+               "  --stream-ms <ms>       milliseconds of a frame tiles may take beyond the bound (default 4)\n"
+               "  --spin <deg>           turn the camera that many degrees a frame by itself, to compare frames\n"
+               "  --no-vsync             draw as fast as possible, not once a vertical blank (to measure)\n"
+               "  --no-cull              draw every resident tile, culled or not (to check the culling)\n"
                "  --water-level <m>      height of the water surface (default 0)\n"
                "  --water-color r,g,b    water colour, each 0 to 1 (default 0.10,0.28,0.38)\n"
                "  --water-opacity <f>    0 to 1, how much the water replaces the terrain (default 0.75)\n"
@@ -202,6 +210,8 @@ template <typename T>
 [[nodiscard]] Result<Options> ParseArguments(int argc, char** argv) {
     Options options;
     options.window.title = "YATE terrain viewer";
+    // Evenly paced motion by default; `--no-vsync` draws as fast as it can, for measuring.
+    options.window.vsync = true;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument = argv[i];
@@ -209,9 +219,22 @@ template <typename T>
             PrintUsage();
             ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "usage requested");
         }
-        // The only option that is a switch rather than a pair: water is off unless asked for.
+        // The options that are switches rather than pairs: water is off unless asked for, and so is
+        // following the camera.
         if (argument == "--water") {
             options.viewer.water.enabled = true;
+            continue;
+        }
+        if (argument == "--no-cull") {
+            options.viewer.cull = false;
+            continue;
+        }
+        if (argument == "--no-vsync") {
+            options.window.vsync = false;
+            continue;
+        }
+        if (argument == "--follow") {
+            options.viewer.follow = true;
             continue;
         }
         if (i + 1 >= argc) {
@@ -239,6 +262,32 @@ template <typename T>
             if (Status ok = ParseInto(argument, value, options.viewer.maxLevel, 16); !ok) {
                 return std::unexpected(ok.error());
             }
+        } else if (argument == "--spin") {
+            char*       end     = nullptr;
+            const f64_t degrees = std::strtod(std::string(value).c_str(), &end);
+            if (end == nullptr || *end != 0) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "--spin needs degrees a frame, got {}", value);
+            }
+            options.viewer.spin = static_cast<f32_t>(degrees);
+        } else if (argument == "--stream-ms") {
+            Result<f64_t> milliseconds = cli::ParsePositive(argument, value);
+            if (!milliseconds) {
+                return std::unexpected(milliseconds.error());
+            }
+            options.viewer.streamMilliseconds = static_cast<f32_t>(*milliseconds);
+        } else if (argument == "--drift") {
+            char*       end   = nullptr;
+            const f64_t speed = std::strtod(std::string(value).c_str(), &end);
+            if (end == nullptr || *end != 0) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "--drift needs metres a second, got {}", value);
+            }
+            options.viewer.drift = static_cast<f32_t>(speed);
+        } else if (argument == "--map-scale") {
+            Result<f64_t> scale = cli::ParsePositive(argument, value);
+            if (!scale) {
+                return std::unexpected(scale.error());
+            }
+            options.viewer.mapScale = static_cast<f32_t>(*scale);
         } else if (argument == "--tiles-per-frame") {
             if (Status ok = ParseInto(argument, value, options.viewer.tilesPerFrame, 4096); !ok) {
                 return std::unexpected(ok.error());

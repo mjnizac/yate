@@ -82,11 +82,14 @@ struct Mat4 {
     return result;
 }
 
-/// Right-handed look-at.
-[[nodiscard]] inline Mat4 LookAt(Vec3 eye, Vec3 target, Vec3 up) noexcept {
-    const Vec3 forward = Normalize(target - eye);
-    const Vec3 right   = Normalize(Cross(forward, up));
-    const Vec3 trueUp  = Cross(right, forward);
+/// Right-handed look along `forward` (unit length) from `eye`.
+///
+/// The direction is taken as given, not as `target - eye`: far from the origin a float holds the eye only
+/// to a few centimetres (1/64 m past 131 km), so `eye + forward - eye` rounds the direction by up to half a
+/// degree, and a turning camera jumps between rounded directions: the whole view shudders.
+[[nodiscard]] inline Mat4 LookTo(Vec3 eye, Vec3 forward, Vec3 up) noexcept {
+    const Vec3 right  = Normalize(Cross(forward, up));
+    const Vec3 trueUp = Cross(right, forward);
 
     Mat4 result = Mat4::Identity();
     result.m[0][0] = right.x;
@@ -103,6 +106,11 @@ struct Mat4 {
     result.m[3][1] = -Dot(trueUp, eye);
     result.m[3][2] = Dot(forward, eye);
     return result;
+}
+
+/// Right-handed look-at.
+[[nodiscard]] inline Mat4 LookAt(Vec3 eye, Vec3 target, Vec3 up) noexcept {
+    return LookTo(eye, Normalize(target - eye), up);
 }
 
 /// Perspective projection for Vulkan: depth in [0, 1] and `y` down.
@@ -173,6 +181,13 @@ public:
     /// Puts the eye exactly here, keeping the orientation. Works in either mode.
     void PlaceAt(Vec3 eye) noexcept;
 
+    /// The ground was drawn `ratio` times wider in x and z: what the camera is about moves with it, so
+    /// the view stays on the same place. Orientation, distance and height are kept.
+    void ScaleGround(f32_t ratio) noexcept;
+
+    /// Turns by `radians` of yaw at once, orientation and goal both: a reproducible turn (`--spin`).
+    void Spin(f32_t radians) noexcept { m_yaw += radians; m_yawGoal += radians; }
+
     /// How far away the ground is, which is what a level-of-detail decision actually wants.
     ///
     /// Not the same as `Distance()`: that is the orbit radius and does not change when a flying camera
@@ -184,6 +199,12 @@ public:
     /// Turns by a pixel delta. Pitch is clamped just short of vertical, because at exactly vertical the
     /// up vector and the forward vector are parallel and the view matrix degenerates.
     void Turn(f32_t deltaYawPixels, f32_t deltaPitchPixels) noexcept;
+
+    /// Eases the orientation towards where `Turn` asked for, over about 40 ms. The pointer moves in whole
+    /// pixels at the mouse's own rate, a few hundred times a second, while the viewer draws a thousand
+    /// frames: turned straight away, most frames turned by nothing and one now and then by several
+    /// pixels' worth, and the view shook. Call once a frame.
+    void Update(f32_t deltaSeconds) noexcept;
 
     /// Orbit: moves closer or further. Fly: changes the movement speed, because there is no distance to
     /// change.
@@ -209,6 +230,9 @@ private:
     f32_t m_distance = 100.0f;
     f32_t m_yaw      = 0.6f;
     f32_t m_pitch    = -0.5f;
+    /// Where `Turn` has asked the orientation to go; `Update` eases `m_yaw` and `m_pitch` towards it.
+    f32_t m_yawGoal   = 0.6f;
+    f32_t m_pitchGoal = -0.5f;
     f32_t m_fov      = 1.0471975512f; // 60 degrees.
     f32_t m_near     = 0.5f;
     f32_t m_far      = 20000.0f;

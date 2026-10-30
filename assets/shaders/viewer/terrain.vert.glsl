@@ -50,7 +50,13 @@ void main() {
     uint verticesPerSide = max(pc.gridVertices, 2u);
     uint quadsPerSide    = verticesPerSide - 1u;
     uint vertex          = uint(gl_VertexIndex);
-    uvec2 gridCoord      = uvec2(vertex % verticesPerSide, vertex / verticesPerSide);
+    // The index buffer is for the grid with a skirt: one more vertex each side, standing on the edge
+    // vertex and dropped below it, so where two rings of detail meet (one twice the other's spacing) the
+    // gap between their edges is closed by a wall instead of showing the background.
+    uint  skirtSide = verticesPerSide + 2u;
+    ivec2 outer     = ivec2(int(vertex % skirtSide), int(vertex / skirtSide)) - ivec2(1);
+    bool  skirt     = any(lessThan(outer, ivec2(0))) || any(greaterThanEqual(outer, ivec2(int(verticesPerSide))));
+    uvec2 gridCoord = uvec2(clamp(outer, ivec2(0), ivec2(int(verticesPerSide) - 1)));
 
     // The rendered grid may be coarser than the data, so a grid vertex maps onto a sample rather than
     // being one. Integer arithmetic, so neighbouring tiles land on exactly the same samples at their
@@ -75,6 +81,13 @@ void main() {
     vec3 world = pc.tileOrigin
                  + vec3(float(sampleCoord.x) * pc.resolution, height,
                         float(sampleCoord.y) * pc.resolution);
+
+    // Eight samples deep: more than a coarser ring's chord can stray from the finer edge it meets.
+    // Only a tile with a coarser ring outside it has one (bit 27); elsewhere the skirt's vertices stay on
+    // the edge, and their triangles have no area.
+    if (skirt && (pc.samples & 0x08000000u) != 0u) {
+        world.y -= 8.0 * pc.resolution;
+    }
 
     vWorldPosition = world;
     vNormal        = normal;

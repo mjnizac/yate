@@ -57,7 +57,7 @@ public:
     ENGINE_NO_COPY(Swapchain);
 
     [[nodiscard]] static Result<Swapchain> Create(Context& context, VkSurfaceKHR surface,
-                                                u32_t width, u32_t height);
+                                                u32_t width, u32_t height, b8_t vsync = false);
 
     /// Rebuilds everything that depends on the surface size. The caller waits for the device to be idle
     /// first; a zero extent means the window is minimized and the caller should skip the frame instead.
@@ -122,6 +122,7 @@ private:
     VkExtent2D     m_extent{};
     VkFormat       m_format = VK_FORMAT_UNDEFINED;
     VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    b8_t             m_vsync       = false;
     b8_t             m_canCapture  = false;
 
     std::pmr::vector<VkImage>       m_images;
@@ -131,6 +132,10 @@ private:
     std::pmr::vector<VkFramebuffer> m_framebuffers;
 
     Image      m_depth;
+    /// The multisampled colour the frame is drawn into, resolved into the swapchain image; empty when
+    /// the device cannot do 4 samples and the frame is drawn straight into it.
+    Image      m_colour;
+    VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     RenderPass m_renderPass;
 
     std::array<FrameSync, kFramesInFlight> m_frames{};

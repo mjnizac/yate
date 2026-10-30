@@ -68,6 +68,10 @@ constexpr u32_t kLevelChangeFrames = 15;
 /// preview allocates nothing. 1024 samples at 2 m is a two-kilometre tile, which is well past what a
 /// preview wants to evaluate in one go anyway.
 constexpr u32_t kMaxPreviewSamples = 1024;
+/// Rings of detail round the camera beyond the finest, each a level coarser: 8 is 256 times the spacing.
+constexpr u32_t kMaxRings = 8;
+/// The finest level the distance may pick, as the ring of tiles always did; the rings go out from it.
+constexpr u32_t kMaxBase = 8;
 
 /// The water outputs a script may give, in the order the tile's height slot carries them after the height.
 constexpr std::array<std::string_view, 3> kWaterOutputs{"lakes", "rivers", "sea"};
@@ -82,6 +86,8 @@ constexpr u32_t kDrawRivers = 1u << 30;
 constexpr u32_t kDrawSea    = 1u << 29;
 /// Set when the script gives the sea as an output: the shaders read it in place of the global level.
 constexpr u32_t kSeaOutput  = 1u << 28;
+/// Set on a tile with a coarser ring outside its own: it hangs a skirt round its edge to close the gap.
+constexpr u32_t kSkirt      = 1u << 27;
 
 /// Which piece of terrain a tile holds.
 ///
@@ -108,6 +114,8 @@ struct Tile {
     /// Metres between samples at this tile's level.
     f32_t spacing = 1.0f;
     u32_t samples = 0;
+    /// The cache's generation it was evaluated in (see `TileCache`).
+    u64_t generation = 0;
 };
 
 /// Six frustum planes as `ax + by + cz + d >= 0` inside the volume.
@@ -339,6 +347,9 @@ struct Terrain {
 struct TileCache {
     std::pmr::vector<Tile> tiles{&memory::General().Resource()};
     u64_t                  evaluated = 0;
+    /// Bumped by a reload: tiles of an older generation are stale, drawn until a fresh one of the same
+    /// key replaces them, so a reload never empties the screen nor stops it while the ring is refilled.
+    u64_t generation = 0;
 
     void Release(vulkan::Context& context) {
         for (Tile& tile : tiles) {
@@ -348,19 +359,58 @@ struct TileCache {
         tiles.clear();
     }
 
+    /// Holds a fresh tile of this key (a stale one is still to be evaluated again).
     [[nodiscard]] b8_t Holds(const TileKey& key) const {
         for (const Tile& tile : tiles) {
-            if (tile.key == key) {
+            if (tile.key == key && tile.generation == generation) {
                 return true;
             }
         }
         return false;
+    }
+
+    /// Drops the stale tiles of this key, now that a fresh one is in.
+    void Retire(vulkan::Context& context, const TileKey& key) {
+        for (usize_t i = tiles.size(); i-- > 0;) {
+            if (tiles[i].key == key && tiles[i].generation != generation) {
+                context.Sections().Release(tiles[i].height);
+                context.Sections().Release(tiles[i].normals);
+                tiles.erase(tiles.begin() + static_cast<isize_t>(i));
+            }
+        }
     }
 };
 
 /// Sample spacing of a level. Doubling per level, so a level's lattice is a subset of the one below it.
 [[nodiscard]] f32_t SpacingOf(f64_t baseResolution, u32_t level) {
     return static_cast<f32_t>(baseResolution) * static_cast<f32_t>(1u << level);
+}
+
+/// Half the side of the ground the ring covers at `level`, in metres: its tiles each way and the one under
+/// the focus.
+[[nodiscard]] f32_t RingHalf(const ViewerLayer::Settings& settings, u32_t level) {
+    const f32_t tileSide = static_cast<f32_t>(settings.sectionSize - 1) * SpacingOf(settings.resolution, level);
+    return (static_cast<f32_t>(settings.ringRadius) + 0.5f) * tileSide;
+}
+
+/// A script following the camera that ran out of what it may make in one run says `pending` in its
+/// report (`Lands.World`'s budget): it is run again at once, and fills the world in a few pieces a run.
+[[nodiscard]] b8_t Unfinished(const LoadedGraph& loaded, const ViewerLayer::Settings& settings) {
+    return settings.follow && loaded.graph.Report().find("\"pending\":true") != std::string_view::npos;
+}
+
+/// What the camera is about, in the script's metres: the map is drawn `scale` times wider than that.
+[[nodiscard]] Vec3 WorldFocus(const Camera& camera, f32_t scale) noexcept {
+    const Vec3 focus = camera.Focus();
+    return Vec3{focus.x / scale, focus.y, focus.z / scale};
+}
+
+/// The matrix that draws the map `scale` times wider in x and z (heights unchanged).
+[[nodiscard]] Mat4 MapScale(f32_t scale) noexcept {
+    Mat4 result    = Mat4::Identity();
+    result.m[0][0] = scale;
+    result.m[2][2] = scale;
+    return result;
 }
 
 /// Level whose tiles are about the right size for what the camera can see.
@@ -459,13 +509,11 @@ struct TileCache {
     return built;
 }
 
-/// Evaluates one tile into freshly acquired slots.
-///
-/// Synchronous: submit and wait. A tile of the sample script takes about a millisecond, and the frame
-/// loop only ever does a couple per frame, so the cost is bounded and visible rather than hidden behind a
-/// queue nothing watches.
-[[nodiscard]] Result<Tile> EvaluateTile(vulkan::Context& context, terrain::KernelLibrary& kernels,
-                                        Terrain& built, const TileKey& key, u32_t seed) {
+/// Records one tile into `commands`, in freshly acquired slots: its section, then the copies of its
+/// outputs into the slots, then a barrier, so a next tile recorded after it may reuse the evaluator's
+/// buffers. Submitting is the caller's (`EvaluateTiles`).
+[[nodiscard]] Result<Tile> RecordTile(vulkan::Context& context, terrain::KernelLibrary& kernels,
+                                      Terrain& built, const TileKey& key, u32_t seed, VkCommandBuffer commands) {
 #ifdef TRACY_ENABLE
     ZoneScopedN("viewer: evaluate tile");
 #endif
@@ -519,16 +567,12 @@ struct TileCache {
     };
 
     vulkan::Queue&          queue    = context.ComputeQueue();
-    Result<VkCommandBuffer> commands = queue.BeginOneShot();
-    if (!commands) {
-        return fail(commands.error());
-    }
 
     const terrain::SectionJob job{.origin = {originX, 0, originZ},
                                   .extent = extent,
                                   .seed   = seed};
     if (Status recorded = terrain::RecordSection(queue, kernels, built.compiled, built.resources,
-                                                built.timers, *commands, job);
+                                                built.timers, commands, job);
         !recorded) {
         return fail(recorded.error());
     }
@@ -559,7 +603,7 @@ struct TileCache {
     }
     for (const CopyPlan& plan : copies) {
         if (plan.output == nullptr) {
-            vkCmdFillBuffer(*commands, plan.target->buffer, plan.target->offset + plan.offset,
+            vkCmdFillBuffer(commands, plan.target->buffer, plan.target->offset + plan.offset,
                             built.heightBytes, kNoWaterBits);
             continue;
         }
@@ -569,13 +613,13 @@ struct TileCache {
         const u64_t sourceStride =
             static_cast<u64_t>(samples + 2 * plan.halo) * components * sizeof(f32_t);
 
-        vulkan::ComputeToTransferBarrier(*commands, source.buffer, source.offset, source.size);
+        vulkan::ComputeToTransferBarrier(commands, source.buffer, source.offset, source.size);
 
         if (plan.halo == 0) {
             const VkBufferCopy copy{.srcOffset = source.offset,
                                     .dstOffset = plan.target->offset + plan.offset,
                                     .size      = rowBytes * samples};
-            vkCmdCopyBuffer(*commands, source.buffer, plan.target->buffer, 1, &copy);
+            vkCmdCopyBuffer(commands, source.buffer, plan.target->buffer, 1, &copy);
             continue;
         }
         // One region per interior row. `kMaxPreviewSamples` bounds the array so this allocates nothing.
@@ -587,9 +631,48 @@ struct TileCache {
                                         .dstOffset = plan.target->offset + plan.offset + row * rowBytes,
                                         .size      = rowBytes};
         }
-        vkCmdCopyBuffer(*commands, source.buffer, plan.target->buffer, samples, regions.data());
+        vkCmdCopyBuffer(commands, source.buffer, plan.target->buffer, samples, regions.data());
     }
 
+    // The next tile in this command buffer writes the buffers these copies read: it waits for them.
+    const VkMemoryBarrier reuse{.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                                .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                         &reuse, 0, nullptr, 0, nullptr);
+    return tile;
+}
+
+/// Evaluates `keys` into freshly acquired slots, appended to `out`, in one command buffer: one submit and
+/// one wait for the lot, not one each. A tile's own work is a fraction of a millisecond on the GPU; the
+/// round trip to submit it and wait was most of what it cost.
+[[nodiscard]] Status EvaluateTiles(vulkan::Context& context, terrain::KernelLibrary& kernels, Terrain& built,
+                                   std::span<const TileKey> keys, u32_t seed, std::pmr::vector<Tile>& out) {
+#ifdef TRACY_ENABLE
+    ZoneScopedN("viewer: evaluate tiles");
+#endif
+    const usize_t first = out.size();
+    const auto    fail  = [&](const Error& error) -> Status {
+        for (usize_t i = first; i < out.size(); ++i) {
+            context.Sections().Release(out[i].height);
+            context.Sections().Release(out[i].normals);
+        }
+        out.resize(first);
+        return std::unexpected(error);
+    };
+    vulkan::Queue&          queue    = context.ComputeQueue();
+    Result<VkCommandBuffer> commands = queue.BeginOneShot();
+    if (!commands) {
+        return std::unexpected(commands.error());
+    }
+    for (const TileKey& key : keys) {
+        Result<Tile> tile = RecordTile(context, kernels, built, key, seed, *commands);
+        if (!tile) {
+            (void)queue.EndAndSubmit(*commands);
+            return fail(tile.error());
+        }
+        out.push_back(*tile);
+    }
     Result<u64_t> submitted = queue.EndAndSubmit(*commands);
     if (!submitted) {
         return fail(submitted.error());
@@ -597,7 +680,7 @@ struct TileCache {
     if (Status waited = queue.WaitTimeline(*submitted, kGpuTimeoutNanoseconds); !waited) {
         return fail(waited.error());
     }
-    return tile;
+    return {};
 }
 
 /// A reload running on a worker thread.
@@ -679,6 +762,12 @@ struct ViewerLayer::State {
     f32_t frameMilliseconds = 0.0f;
 
     Terrain   terrain;
+    /// The coarser rings' terrains (index = level, 0 unused: that is `terrain`), compiled from the live
+    /// graph the first time a ring needs one and dropped at every reload.
+    std::array<Terrain, kMaxBase + kMaxRings + 1> rings;
+    /// Which of `current` and `pending` holds the graph on screen; a reload loads into the other.
+    LoadedGraph* live = nullptr;
+    LoadedGraph* building = nullptr;
     TileCache cache;
     /// Level the ring is at, and how long the ideal level has disagreed with it.
     u32_t level             = 0;
@@ -686,6 +775,12 @@ struct ViewerLayer::State {
     u32_t levelTarget       = 0;
     u32_t pendingLevel      = 0;
     u32_t disagreeingFrames = 0;
+    /// The ground the script was last given as `params.bounds`: the ring round the focus, at the level
+    /// it was loaded for. A focus that wanders a quarter of it away reloads, so a world built only round
+    /// its bounds (an unbounded one, say) keeps up with the camera.
+    f32_t boundsCentre[2] = {0.0f, 0.0f};
+    f32_t boundsHalf      = 0.0f;
+    f32_t pendingCentre[2] = {0.0f, 0.0f};
     /// Tiles missing from the ring at the end of the last streaming pass. Zero means the ring is
     /// complete, which is what a test can wait for.
     u32_t missingTiles = 0;
@@ -696,7 +791,22 @@ struct ViewerLayer::State {
     Reload reload;
 
     u64_t loadCount  = 0;
+    /// What a tile has been costing to evaluate, smoothed: how many fit in a frame's streaming time.
+    f64_t secondsPerTile = 0.002;
     u32_t tilesDrawn = 0;
+
+    /// What a run cost, logged when the viewer closes (`--frames` makes that a benchmark): frames and
+    /// their wall time once the loop runs, the tiles evaluated and the time spent on them, and how long
+    /// until the ring was first complete.
+    struct Stats {
+        f64_t started        = 0.0;
+        u64_t frames         = 0;
+        f64_t worstFrame     = 0.0;
+        f64_t lastFrame      = 0.0;
+        u64_t tiles          = 0;
+        f64_t tileSeconds    = 0.0;
+        f64_t completeAfter  = -1.0;
+    } stats;
 
     std::array<char, Error::kMaxFormat> lastError{};
     b8_t                                hasError = false;
@@ -717,15 +827,17 @@ namespace {
 /// got one answer here and a different one from the exporter, so the preview showed terrain the export
 /// would never produce. Since the spacing changes with the level, the script is re-run when the level
 /// changes; that is why this takes the spacing rather than reading it from the settings.
+/// `centre` and `half` are the ground the ring covers, given to the script as `params.bounds`.
 [[nodiscard]] Status LoadScript(LoadedGraph& loaded, std::string_view path, std::string_view shapes,
-                                u64_t seed, const terrain::Params& params, f64_t resolution) {
+                                u64_t seed, const terrain::Params& params, f64_t resolution,
+                                const f32_t (&centre)[2], f32_t half) {
     const lua::ScriptEnvironment environment{.seed       = seed,
-                                             .minX       = 0.0,
+                                             .minX       = centre[0] - half,
                                              .minY       = 0.0,
-                                             .minZ       = 0.0,
-                                             .maxX       = 0.0,
+                                             .minZ       = centre[1] - half,
+                                             .maxX       = centre[0] + half,
                                              .maxY       = 0.0,
-                                             .maxZ       = 0.0,
+                                             .maxZ       = centre[1] + half,
                                              .resolution = resolution,
                                              .params     = &params,
                                              .shapes     = shapes};
@@ -811,7 +923,8 @@ void ViewerLayer::OnAttach() {
 
     Result<vulkan::GraphicsPipeline> pipeline = vulkan::GraphicsPipeline::Create(
         m_state->context->Device(), m_state->swapchain->Pass().Handle(), "viewer/terrain.vert.spv",
-        "viewer/terrain.frag.spv", m_state->context->Pipelines().Handle());
+        "viewer/terrain.frag.spv", m_state->context->Pipelines().Handle(), vulkan::PipelineKind::Terrain,
+        m_state->swapchain->Pass().Samples());
     if (!pipeline) {
         LOG_ERROR("could not create the terrain pipeline: {}", pipeline.error().Format().data());
         App().AddExit(ExitCode::FailedToInitializeEngine);
@@ -828,7 +941,8 @@ void ViewerLayer::OnAttach() {
     } else if (Result<vulkan::GraphicsPipeline> wire = vulkan::GraphicsPipeline::Create(
             m_state->context->Device(), m_state->swapchain->Pass().Handle(),
             "viewer/terrain.vert.spv", "viewer/terrain.frag.spv",
-            m_state->context->Pipelines().Handle(), vulkan::PipelineKind::TerrainWire);
+            m_state->context->Pipelines().Handle(), vulkan::PipelineKind::TerrainWire,
+            m_state->swapchain->Pass().Samples());
                wire) {
         m_state->wirePipeline = std::move(*wire);
     } else {
@@ -838,7 +952,8 @@ void ViewerLayer::OnAttach() {
     if (Result<vulkan::GraphicsPipeline> sea = vulkan::GraphicsPipeline::Create(
             m_state->context->Device(), m_state->swapchain->Pass().Handle(),
             "viewer/water.vert.spv", "viewer/water.frag.spv",
-            m_state->context->Pipelines().Handle(), vulkan::PipelineKind::Sea);
+            m_state->context->Pipelines().Handle(), vulkan::PipelineKind::Sea,
+            m_state->swapchain->Pass().Samples());
         sea) {
         m_state->seaPipeline = std::move(*sea);
     } else {
@@ -847,7 +962,8 @@ void ViewerLayer::OnAttach() {
 
     {
         // One grid for every tile, so one index buffer. Host-visible: it is a few hundred kilobytes written once.
-        const u32_t vertices = std::min(m_state->settings.gridVertices, m_state->settings.sectionSize);
+        // A ring of skirt vertices round the grid (see `viewer/terrain.vert.glsl`), so two more a side.
+        const u32_t vertices = std::min(m_state->settings.gridVertices, m_state->settings.sectionSize) + 2;
         const u32_t quads    = vertices - 1;
         std::pmr::vector<u32_t> data(&memory::General().Resource());
         data.reserve(static_cast<usize_t>(quads) * quads * 6);
@@ -896,16 +1012,22 @@ void ViewerLayer::OnAttach() {
         m_state->camera.SetView(Vec3{view.target[0], view.target[1], view.target[2]},
                                 view.yaw * kDegrees, view.pitch * kDegrees, view.distance);
     }
-    m_state->level = IdealLevel(m_state->camera.ViewDistance(0.0f), m_state->settings.sectionSize,
-                                m_state->settings.resolution, m_state->settings.maxLevel,
-                                m_state->settings.detail);
+    // The script runs once, at the finest spacing; the rings, from the level the distance picks out,
+    // compile the same graph at theirs.
+    m_state->level       = IdealLevel(m_state->camera.ViewDistance(0.0f) / m_state->settings.mapScale,
+                                      m_state->settings.sectionSize, m_state->settings.resolution, kMaxBase,
+                                      m_state->settings.detail);
     m_state->levelTarget = m_state->level;
+    m_state->boundsCentre[0] = WorldFocus(m_state->camera, m_state->settings.mapScale).x;
+    m_state->boundsCentre[1] = WorldFocus(m_state->camera, m_state->settings.mapScale).z;
+    m_state->boundsHalf      = RingHalf(m_state->settings, m_state->level);
 
     // First load is synchronous: there is nothing to keep rendering yet, so there is no reason to defer
     // it and every reason to fail here rather than after the window has opened on an empty scene.
     if (Status loaded = LoadScript(m_state->current, m_state->settings.script, m_state->settings.shapes,
                                    m_state->settings.seed, m_state->params,
-                                   SpacingOf(m_state->settings.resolution, m_state->level));
+                                   SpacingOf(m_state->settings.resolution, 0),
+                                   m_state->boundsCentre, m_state->boundsHalf);
         !loaded) {
         detail::CopyBounded(m_state->lastError, std::string_view{loaded.error().Format().data()});
         m_state->hasError = true;
@@ -915,7 +1037,7 @@ void ViewerLayer::OnAttach() {
         return;
     }
     Result<Terrain> terrain = BuildTerrain(*m_state->context, m_state->current, m_state->settings,
-                                           m_state->level);
+                                           0);
     if (!terrain) {
         detail::CopyBounded(m_state->lastError, std::string_view{terrain.error().Format().data()});
         m_state->hasError = true;
@@ -925,11 +1047,16 @@ void ViewerLayer::OnAttach() {
         return;
     }
     m_state->terrain = std::move(*terrain);
+    m_state->live    = &m_state->current;
+    m_state->reloadRequested = Unfinished(*m_state->live, m_state->settings);
     ++m_state->loadCount;
 
     // The first ring is filled before the window opens, so the viewer never shows a hole it could have
     // avoided. After that, streaming is bounded per frame.
+    const f64_t fillStart = NowSeconds();
     StreamTiles(~0u);
+    m_state->stats.tiles       = m_state->cache.evaluated;
+    m_state->stats.tileSeconds = NowSeconds() - fillStart;
 
     m_state->lastModifiedSeconds =
         FileModifiedSeconds(m_state->settings.script) + FileModifiedSeconds(m_state->settings.shapes);
@@ -943,7 +1070,8 @@ void ViewerLayer::OnAttach() {
 
     if (Status ui = m_state->ui.Initialize(*m_state->context, *m_state->window,
                                            m_state->swapchain->Pass().Handle(),
-                                           static_cast<u32_t>(m_state->swapchain->ImageCount()));
+                                           static_cast<u32_t>(m_state->swapchain->ImageCount()),
+                                           m_state->swapchain->Pass().Samples());
         !ui) {
         // Not fatal: a viewer without panels still shows terrain, and losing the whole preview because
         // the UI backend failed would be the wrong trade.
@@ -968,6 +1096,15 @@ void ViewerLayer::OnDetach() {
         m_state->windowLayer->SetRecorder(nullptr, nullptr);
     }
     WaitForReload();
+    if (const State::Stats& stats = m_state->stats; stats.frames > 1) {
+        const f64_t wall = stats.lastFrame - stats.started;
+        LOG_INFO("viewer stats: {} frame(s) in {:.2f} s, {:.2f} ms a frame, worst {:.1f} ms; {} tile(s) in "
+                 "{:.3f} s, {:.2f} ms a tile; ring complete after {:.2f} s; {} tile(s) resident",
+                 stats.frames, wall, 1000.0 * wall / static_cast<f64_t>(stats.frames - 1),
+                 1000.0 * stats.worstFrame, stats.tiles, stats.tileSeconds,
+                 stats.tiles > 0 ? 1000.0 * stats.tileSeconds / static_cast<f64_t>(stats.tiles) : 0.0,
+                 stats.completeAfter, m_state->cache.tiles.size());
+    }
 
     if (m_state->context != nullptr) {
         if (Status idle = m_state->context->WaitIdle(); !idle) {
@@ -1006,9 +1143,39 @@ void ViewerLayer::OnUpdate() {
     if (m_state == nullptr || m_state->windowLayer == nullptr) {
         return;
     }
+    State::Stats& stats = m_state->stats;
+    const f64_t   now   = NowSeconds();
+    if (stats.frames == 0) {
+        stats.started = now;
+    } else {
+        stats.worstFrame = std::max(stats.worstFrame, now - stats.lastFrame);
+    }
+    stats.lastFrame = now;
+    ++stats.frames;
+
     UpdateInput();
+    if (m_state->settings.spin != 0.0f) {
+        m_state->camera.Spin(m_state->settings.spin * 3.14159265358979f / 180.0f);
+    }
+    if (m_state->settings.drift != 0.0f) {
+        const Vec3 eye = m_state->camera.Position();
+        const f32_t step = m_state->settings.drift * static_cast<f32_t>(m_state->windowLayer->DeltaSeconds());
+        m_state->camera.PlaceAt(Vec3{eye.x + step, eye.y, eye.z});
+    }
     UpdateLevel();
-    StreamTiles(m_state->settings.tilesPerFrame);
+    // The bound, then as many more as fit in `streamMilliseconds` of the frame: a light script fills a ring
+    // of hundreds at once, a heavy one never stalls a frame for it.
+    const u64_t before = m_state->cache.evaluated;
+    const f64_t streamStart = NowSeconds();
+    StreamTiles(m_state->settings.tilesPerFrame,
+                streamStart + 0.001 * static_cast<f64_t>(m_state->settings.streamMilliseconds));
+    if (m_state->cache.evaluated != before) {
+        stats.tiles += m_state->cache.evaluated - before;
+        stats.tileSeconds += NowSeconds() - streamStart;
+    }
+    if (stats.completeAfter < 0.0 && m_state->missingTiles == 0 && !m_state->reload.running.load()) {
+        stats.completeAfter = NowSeconds() - stats.started;
+    }
     UpdatePanels();
     UpdateReload();
 }
@@ -1045,6 +1212,7 @@ void ViewerLayer::UpdateInput() {
     if (!uiHasMouse && state.input.Held(MouseButton::Left)) {
         state.camera.Turn(state.input.CursorDeltaX(), state.input.CursorDeltaY());
     }
+    state.camera.Update(static_cast<f32_t>(delta));
     if (!uiHasMouse && state.input.Held(MouseButton::Middle)) {
         state.camera.Pan(state.input.CursorDeltaX(), state.input.CursorDeltaY());
     }
@@ -1120,6 +1288,10 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.waterLevel        = state.settings.water.level;
     panels.waterColour       = state.settings.water.colour;
     panels.waterOpacity      = state.settings.water.opacity;
+    panels.resolution        = static_cast<f32_t>(state.settings.resolution);
+    panels.maxLevel          = static_cast<i32_t>(state.settings.maxLevel);
+    panels.ringRadius        = static_cast<i32_t>(state.settings.ringRadius);
+    panels.mapScale          = state.settings.mapScale;
 
     // Editing a parameter reloads: the script is what turns a parameter into terrain, so there is no
     // shortcut that updates push constants instead. The spec's "only numeric parameters changed, so no
@@ -1135,6 +1307,14 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     state.settings.water.level   = panels.waterLevel;
     state.settings.water.colour  = panels.waterColour;
     state.settings.water.opacity = panels.waterOpacity;
+    state.settings.resolution    = panels.resolution;
+    state.settings.maxLevel      = static_cast<u32_t>(panels.maxLevel);
+    state.settings.ringRadius    = static_cast<u32_t>(panels.ringRadius);
+    if (panels.mapScale != state.settings.mapScale) {
+        // The camera keeps looking at the same ground: what it is about is moved with the map.
+        state.camera.ScaleGround(panels.mapScale / state.settings.mapScale);
+        state.settings.mapScale = panels.mapScale;
+    }
 
     state.ui.Record(commands);
 }
@@ -1158,7 +1338,7 @@ void ViewerLayer::UpdateReload() {
             state.levelTarget = state.level;
         } else {
             Result<Terrain> terrain =
-                BuildTerrain(*state.context, state.pending, state.settings, state.pendingLevel);
+                BuildTerrain(*state.context, *state.building, state.settings, 0);
             if (!terrain) {
                 detail::CopyBounded(state.lastError,
                                     std::string_view{terrain.error().Format().data()});
@@ -1174,16 +1354,37 @@ void ViewerLayer::UpdateReload() {
                     LOG_WARN("could not wait for the device before swapping the terrain: {}",
                              idle.error().Format().data());
                 }
-                state.cache.Release(*state.context);
+                // Following the camera, the old tiles stay on screen, stale, and the ring is refreshed
+                // within each frame's streaming time: a reload every few seconds must not stop the picture
+                // for the quarter of a second a whole ring takes. Any other reload is a deliberate act,
+                // refilled at once, since a half-built ring after it would look like a failure.
+                const b8_t gradual = state.settings.follow;
+                if (gradual) {
+                    ++state.cache.generation;
+                } else {
+                    state.cache.Release(*state.context);
+                }
                 state.terrain = std::move(*terrain);
-                state.level   = state.pendingLevel;
+                state.live    = state.building;
+                // The coarser rings are compiled again from the new graph when they are next needed.
+                for (Terrain& ring : state.rings) {
+                    ring = Terrain{};
+                }
+                state.boundsCentre[0] = state.pendingCentre[0];
+                state.boundsCentre[1] = state.pendingCentre[1];
+                state.boundsHalf      = RingHalf(state.settings, state.level);
                 ++state.loadCount;
                 state.hasError     = false;
                 state.lastError[0] = 0;
-                // Refilled immediately rather than over the next frames: a reload is a deliberate act
-                // and showing a half-built ring afterwards would look like a failure.
-                StreamTiles(~0u);
+                if (!gradual) {
+                    const u64_t refilled    = state.cache.evaluated;
+                    const f64_t refillStart = NowSeconds();
+                    StreamTiles(~0u);
+                    state.stats.tiles += state.cache.evaluated - refilled;
+                    state.stats.tileSeconds += NowSeconds() - refillStart;
+                }
                 LOG_INFO("script reloaded ({} load(s))", state.loadCount);
+                state.reloadRequested = state.reloadRequested || Unfinished(*state.live, state.settings);
             }
         }
     }
@@ -1214,17 +1415,22 @@ void ViewerLayer::UpdateReload() {
     state.reloadRequested     = false;
     state.pendingSinceSeconds = 0.0;
 
-    state.pendingLevel = state.levelTarget;
+    state.pendingLevel     = 0;
+    // Loaded into the graph not on screen, which keeps drawing until the new one is built.
+    state.building         = state.live == &state.current ? &state.pending : &state.current;
+    state.pendingCentre[0] = WorldFocus(state.camera, state.settings.mapScale).x;
+    state.pendingCentre[1] = WorldFocus(state.camera, state.settings.mapScale).z;
     state.reload.running.store(true);
     state.reload.failed = false;
     // The worker gets its own copy of the parameters: the panel may edit them on this thread meanwhile.
     state.reload.worker = std::thread([&state, params = state.params]() {
         platform::SetThreadName("engine-reload");
         // Emptied every time, so a script that fails halfway cannot leave half its nodes behind.
-        state.pending.Reset();
-        if (Status loaded = LoadScript(state.pending, state.settings.script, state.settings.shapes,
+        state.building->Reset();
+        if (Status loaded = LoadScript(*state.building, state.settings.script, state.settings.shapes,
                                        state.settings.seed, params,
-                                       SpacingOf(state.settings.resolution, state.pendingLevel));
+                                       SpacingOf(state.settings.resolution, 0),
+                                       state.pendingCentre, RingHalf(state.settings, state.pendingLevel));
             !loaded) {
             state.reload.error  = loaded.error();
             state.reload.failed = true;
@@ -1248,7 +1454,8 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
                              ? static_cast<f32_t>(frame.extent.width)
                                    / static_cast<f32_t>(frame.extent.height)
                              : 1.0f;
-    const Mat4    viewProjection = state.camera.ViewProjection(aspect);
+    // The camera works in the drawn map; the tiles and the frustum test in the script's metres.
+    const Mat4    viewProjection = state.camera.ViewProjection(aspect) * MapScale(state.settings.mapScale);
     const Frustum frustum        = FrustumOf(viewProjection);
 
     // Water is shaded by the terrain fragments themselves (see `terrain.frag.glsl`). A wireframe draws
@@ -1256,7 +1463,8 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     const ViewerLayer::Water& water = state.settings.water;
     const b8_t shadeWater           = water.enabled && !state.wireframe;
     const b8_t seaOutput            = state.terrain.waterOutputs[2] != kNoOutput;
-    const Vec3 eye                  = state.camera.Position();
+    const Vec3 drawnEye             = state.camera.Position();
+    const Vec3 eye{drawnEye.x / state.settings.mapScale, drawnEye.y, drawnEye.z / state.settings.mapScale};
 
     vulkan::TerrainPushConstants constants{};
     constants.viewProjection = viewProjection.m;
@@ -1282,7 +1490,7 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
                                            tile.origin[2]};
         const std::array<f32_t, 3> maximum{tile.origin[0] + side, state.terrain.heightMaximum,
                                            tile.origin[2] + side};
-        if (!frustum.Intersects(minimum, maximum)) {
+        if (state.settings.cull && !frustum.Intersects(minimum, maximum)) {
             continue;
         }
 
@@ -1293,9 +1501,12 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
         // and handled once, by the level that chooses the sample spacing.
         const u32_t gridVertices = std::min(state.settings.gridVertices, tile.samples);
         const u32_t quadsPerSide = gridVertices - 1;
-        const u32_t vertexCount  = quadsPerSide * quadsPerSide * 6;
+        // The grid and its skirt: one more quad a side.
+        const u32_t vertexCount  = (quadsPerSide + 2) * (quadsPerSide + 2) * 6;
 
         constants.resolution   = tile.spacing;
+        constants.samples      = (constants.samples & ~kSkirt)
+                            | (tile.key.level < state.level + std::min(state.settings.maxLevel, kMaxRings) ? kSkirt : 0u);
         constants.gridVertices = gridVertices;
         constants.tileOrigin   = tile.origin;
         constants.heights      = tile.height.address;
@@ -1355,7 +1566,7 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
 /// a hitch every time the camera crosses a tile border. `~0u` means "take as long as it needs", which is
 /// what a load and a reload use, because showing a half-built ring right after a deliberate act would
 /// look like a failure rather than like streaming.
-void ViewerLayer::StreamTiles(u32_t budget) {
+void ViewerLayer::StreamTiles(u32_t budget, f64_t deadline) {
 #ifdef TRACY_ENABLE
     ZoneScopedN("viewer: stream tiles");
 #endif
@@ -1364,28 +1575,54 @@ void ViewerLayer::StreamTiles(u32_t budget) {
         return;
     }
 
-    const i32_t radius   = static_cast<i32_t>(state.settings.ringRadius);
-    // `samples - 1`, matching the origins a key maps to: a tile covers that many intervals.
-    const f32_t tileSide = static_cast<f32_t>(state.terrain.samples - 1) * state.terrain.spacing;
+    // Rings of detail, a geometry clipmap of tiles: the coarsest level (`maxLevel`) covers the square of
+    // `ringRadius` tiles each way round the focus; below it, each level is drawn exactly over the children
+    // of the coarser level's middle (its tiles within `inner` of its centre), so the levels never overlap
+    // and the detail doubles towards the camera. A tile of level l covers four of level l - 1, since both
+    // the spacing and the side double. Every level evaluates the one graph the script built, at its own
+    // spacing, so moving between rings never re-runs the script.
+    const i32_t radius = static_cast<i32_t>(state.settings.ringRadius);
+    const i32_t inner  = std::max(radius / 2, 1);
+    // The finest level is the one the distance picks (`state.level`), the rings go out from it.
+    const u32_t base   = state.level;
+    const u32_t top    = base + std::min(state.settings.maxLevel, kMaxRings);
     // Centred on what the camera is about rather than on the eye: see `Camera::Focus`.
-    const Vec3 focus = state.camera.Focus();
+    const Vec3 focus = WorldFocus(state.camera, state.settings.mapScale);
+    const f32_t side0 = static_cast<f32_t>(state.terrain.samples - 1) * state.terrain.spacing;
 
-    // The tile the focus is over. Floor division, not truncation: truncating rounds towards zero and
-    // would make the ring jump by one tile every time it crossed an axis.
+    // The tile the focus is over at each level. Floor division, not truncation: truncating rounds
+    // towards zero and would make the ring jump by one tile every time it crossed an axis.
     const auto floorDiv = [](f32_t value, f32_t size) {
         return static_cast<i32_t>(std::floor(value / size));
     };
-    const i32_t centreX = floorDiv(focus.x, tileSide);
-    const i32_t centreZ = floorDiv(focus.z, tileSide);
+    std::array<std::array<i32_t, 2>, kMaxBase + kMaxRings + 1> centre{};
+    for (u32_t level = base; level <= top; ++level) {
+        const f32_t side = side0 * static_cast<f32_t>(1u << level);
+        centre[level]    = {floorDiv(focus.x, side), floorDiv(focus.z, side)};
+    }
+    const auto halve = [](i32_t value) { return value >= 0 ? value / 2 : -((1 - value) / 2); };
+    // Whether a tile is drawn: inside its level's area, and not in the middle a finer level covers.
+    const auto drawn = [&](const TileKey& key) {
+        if (key.level > top || key.level < base) {
+            return false;
+        }
+        const u32_t level = key.level;
+        b8_t inside;
+        if (level == top) {
+            inside = std::abs(key.x - centre[level][0]) <= radius && std::abs(key.z - centre[level][1]) <= radius;
+        } else {
+            inside = std::abs(halve(key.x) - centre[level + 1][0]) <= inner
+                     && std::abs(halve(key.z) - centre[level + 1][1]) <= inner;
+        }
+        const b8_t middle = level > base && std::abs(key.x - centre[level][0]) <= inner
+                            && std::abs(key.z - centre[level][1]) <= inner;
+        return inside && !middle;
+    };
 
     // Evict what is no longer wanted. Done before evaluating, so the slots come back to the pool in time
     // to be reused by the tiles that replace them.
     for (usize_t i = state.cache.tiles.size(); i-- > 0;) {
-        const Tile& tile = state.cache.tiles[i];
-        const b8_t  wanted = tile.key.level == state.level
-                            && std::abs(tile.key.x - centreX) <= radius
-                            && std::abs(tile.key.z - centreZ) <= radius;
-        if (wanted) {
+        if (drawn(state.cache.tiles[i].key)) {
             continue;
         }
         state.context->Sections().Release(state.cache.tiles[i].height);
@@ -1393,73 +1630,135 @@ void ViewerLayer::StreamTiles(u32_t budget) {
         state.cache.tiles.erase(state.cache.tiles.begin() + static_cast<isize_t>(i));
     }
 
-    // Evaluate what is missing, nearest first, so a hole appears at the edge of the view rather than
-    // under the camera.
+    // Evaluate what is missing, the finest level first and each nearest first, so a hole appears at the
+    // edge of the view rather than under the camera.
     u32_t missing = 0;
     u32_t spent   = 0;
-    for (i32_t ring = 0; ring <= radius; ++ring) {
-        for (i32_t z = centreZ - ring; z <= centreZ + ring; ++z) {
-            for (i32_t x = centreX - ring; x <= centreX + ring; ++x) {
-                // Only the new border of this ring; the inside was covered by a smaller one.
-                if (ring != 0 && std::abs(x - centreX) != ring && std::abs(z - centreZ) != ring) {
-                    continue;
+    // As many tiles as the bound, or as fit in what is left of the frame's time at what a tile has been costing.
+    const f64_t left    = deadline - NowSeconds();
+    const u32_t allowed = budget == ~0u ? ~0u
+                          : std::max(budget, static_cast<u32_t>(std::max(left, 0.0) / std::max(state.secondsPerTile, 1e-5)));
+    std::pmr::vector<TileKey> batch(&memory::General().Resource());
+    for (u32_t level = base; level <= top; ++level) {
+        Terrain* terrain = level == 0 ? &state.terrain : &state.rings[level];
+        if (!terrain->valid) {
+            Result<Terrain> built = BuildTerrain(*state.context, *state.live, state.settings, level);
+            if (!built) {
+                detail::CopyBounded(state.lastError, std::string_view{built.error().Format().data()});
+                state.hasError = true;
+                LOG_ERROR("could not prepare detail ring {}: {}", level, state.lastError.data());
+                state.missingTiles = missing + 1;
+                return;
+            }
+            *terrain = std::move(*built);
+        }
+        // The candidates: the level's own square at the top, else the children of the coarser middle.
+        i32_t x0, z0, x1, z1;
+        if (level == top) {
+            x0 = centre[level][0] - radius;
+            x1 = centre[level][0] + radius;
+            z0 = centre[level][1] - radius;
+            z1 = centre[level][1] + radius;
+        } else {
+            x0 = 2 * (centre[level + 1][0] - inner);
+            x1 = 2 * (centre[level + 1][0] + inner) + 1;
+            z0 = 2 * (centre[level + 1][1] - inner);
+            z1 = 2 * (centre[level + 1][1] + inner) + 1;
+        }
+        const i32_t reach = std::max({centre[level][0] - x0, x1 - centre[level][0], centre[level][1] - z0,
+                                      z1 - centre[level][1]});
+        for (i32_t ring = 0; ring <= reach; ++ring) {
+            for (i32_t z = centre[level][1] - ring; z <= centre[level][1] + ring; ++z) {
+                for (i32_t x = centre[level][0] - ring; x <= centre[level][0] + ring; ++x) {
+                    // Only the new border of this ring; the inside was covered by a smaller one.
+                    if (ring != 0 && std::abs(x - centre[level][0]) != ring && std::abs(z - centre[level][1]) != ring) {
+                        continue;
+                    }
+                    const TileKey key{.x = x, .z = z, .level = level};
+                    if (x < x0 || x > x1 || z < z0 || z > z1 || !drawn(key) || state.cache.Holds(key)) {
+                        continue;
+                    }
+                    batch.push_back(key);
                 }
-                const TileKey key{.x = x, .z = z, .level = state.level};
-                if (state.cache.Holds(key)) {
-                    continue;
-                }
-                if (spent >= budget) {
-                    ++missing;
-                    continue;
-                }
-                Result<Tile> tile = EvaluateTile(*state.context, *state.kernels, state.terrain, key,
-                                                 static_cast<u32_t>(state.settings.seed));
-                if (!tile) {
-                    detail::CopyBounded(state.lastError,
-                                        std::string_view{tile.error().Format().data()});
-                    state.hasError = true;
-                    LOG_ERROR("could not evaluate a tile: {}", state.lastError.data());
-                    // Giving up on the rest of this pass rather than failing the same way N more times.
-                    state.missingTiles = missing + 1;
-                    return;
-                }
-                state.cache.tiles.push_back(*tile);
-                ++state.cache.evaluated;
-                ++spent;
             }
         }
+        // What the camera faces first, then the rest, each still nearest first: turning round fills what
+        // comes into view before what went out of it. A tile within two of the focus counts as faced.
+        {
+            const f32_t side  = side0 * static_cast<f32_t>(1u << level);
+            const Vec3  ahead = state.camera.Forward();
+            const auto  faced = [&](const TileKey& key) {
+                const f32_t dx = (static_cast<f32_t>(key.x) + 0.5f) * side - focus.x;
+                const f32_t dz = (static_cast<f32_t>(key.z) + 0.5f) * side - focus.z;
+                const f32_t d  = std::sqrt(dx * dx + dz * dz);
+                return d < 2.0f * side || (dx * ahead.x + dz * ahead.z) > 0.2f * d * std::sqrt(ahead.x * ahead.x + ahead.z * ahead.z);
+            };
+            std::stable_partition(batch.begin(), batch.end(), faced);
+        }
+        // The bound, then what the frame's time allows: past it the rest waits for a next frame.
+        if (spent + batch.size() > allowed) {
+            const usize_t keep = allowed > spent ? allowed - spent : 0;
+            missing += static_cast<u32_t>(batch.size() - keep);
+            batch.resize(keep);
+        }
+        if (batch.empty()) {
+            continue;
+        }
+        const f64_t started = NowSeconds();
+        const usize_t fresh = state.cache.tiles.size();
+        if (Status evaluated = EvaluateTiles(*state.context, *state.kernels, *terrain, batch,
+                                             static_cast<u32_t>(state.settings.seed), state.cache.tiles);
+            !evaluated) {
+            detail::CopyBounded(state.lastError, std::string_view{evaluated.error().Format().data()});
+            state.hasError = true;
+            LOG_ERROR("could not evaluate a tile: {}", state.lastError.data());
+            // Giving up on the rest of this pass rather than failing the same way N more times.
+            state.missingTiles = missing + static_cast<u32_t>(batch.size());
+            return;
+        }
+        // What a tile costs, smoothed, for the next frame's share.
+        const f64_t each     = (NowSeconds() - started) / static_cast<f64_t>(batch.size());
+        state.secondsPerTile = 0.8 * state.secondsPerTile + 0.2 * each;
+        // The fresh tiles are of this generation, and take over from the stale ones of their keys.
+        for (usize_t i = fresh; i < state.cache.tiles.size(); ++i) {
+            state.cache.tiles[i].generation = state.cache.generation;
+        }
+        for (const TileKey& key : batch) {
+            state.cache.Retire(*state.context, key);
+        }
+        state.cache.evaluated += batch.size();
+        spent += static_cast<u32_t>(batch.size());
+        batch.clear();
     }
     state.missingTiles = missing;
 }
 
-/// Picks the level the ring should be at, with hysteresis.
+/// Picks the finest level, with hysteresis, and keeps the script's ground up with the camera.
 ///
-/// A level change evicts and re-evaluates every tile, so it must not happen because the camera drifted a
-/// metre across a threshold. The ideal level has to disagree for a while before it is acted on, which
-/// turns a boundary into a dead band without needing one.
+/// The finest ring's level follows the distance, as the ring of tiles always did, but a change no longer
+/// re-runs the script: every level compiles the one graph the script built at its own spacing (see
+/// `StreamTiles`). The ideal level has to disagree for a while before it is acted on, which turns a
+/// boundary into a dead band. With `--follow` the script is given the ground round the focus
+/// (`params.bounds`): a focus that wanders a quarter of it away re-runs the script there.
 void ViewerLayer::UpdateLevel() {
-    State&      state = *m_state;
+    State&      state  = *m_state;
     const f32_t ground = (state.terrain.heightMinimum + state.terrain.heightMaximum) * 0.5f;
-    const u32_t ideal   = IdealLevel(state.camera.ViewDistance(ground), state.settings.sectionSize,
-                                   state.settings.resolution, state.settings.maxLevel,
-                                   state.settings.detail);
+    const u32_t ideal  = IdealLevel(state.camera.ViewDistance(ground) / state.settings.mapScale,
+                                    state.settings.sectionSize, state.settings.resolution, kMaxBase,
+                                    state.settings.detail);
     if (ideal == state.level) {
         state.disagreeingFrames = 0;
-        return;
+    } else if (++state.disagreeingFrames >= kLevelChangeFrames) {
+        state.disagreeingFrames = 0;
+        state.level             = ideal;
+        state.levelTarget       = ideal;
     }
-    // A reload on the worker is building into `pending`; this would write the same graph from two threads.
-    if (state.reload.running.load()) {
-        return;
+    const Vec3 focus = WorldFocus(state.camera, state.settings.mapScale);
+    const b8_t away  = std::max(std::abs(focus.x - state.boundsCentre[0]), std::abs(focus.z - state.boundsCentre[1]))
+                      > 0.25f * state.boundsHalf;
+    if (state.settings.follow && away && !state.reload.running.load()) {
+        state.reloadRequested = true;
     }
-    if (++state.disagreeingFrames < kLevelChangeFrames) {
-        return;
-    }
-    state.disagreeingFrames = 0;
-
-    // The script sees the level's spacing, so a level change re-runs it, on the reload worker: the ring
-    // keeps drawing at the old level until the new terrain is built and swapped in (`UpdateReload`).
-    state.levelTarget    = ideal;
-    state.reloadRequested = true;
 }
 
 u32_t ViewerLayer::TilesDrawn() const noexcept {

@@ -232,7 +232,7 @@ Result<Application*> init(const AppInfo& info) {
         Result<vulkan::Swapchain>  swapchain =
             vulkan::Swapchain::Create(*g_runtime.vulkan, g_runtime.window->Surface(),
                                       size[0] != 0 ? size[0] : info.window.width,
-                                      size[1] != 0 ? size[1] : info.window.height);
+                                      size[1] != 0 ? size[1] : info.window.height, info.window.vsync);
         if (!swapchain) {
             return std::unexpected(FailInit("swapchain", swapchain.error()));
         }

@@ -31,7 +31,7 @@ constexpr u64_t kFrameTimeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
     return count != 0 ? formats[0] : VkSurfaceFormatKHR{};
 }
 
-/// `MAILBOX` when offered, `FIFO` otherwise.
+/// `MAILBOX` when offered, `FIFO` otherwise (and always `FIFO` with vsync, see `WindowDesc::vsync`).
 ///
 /// Mailbox replaces a queued image instead of blocking, so the viewer stays responsive while the camera
 /// moves without tearing. `FIFO` is the only mode the specification requires to exist, so it is the
@@ -58,7 +58,7 @@ constexpr u64_t kFrameTimeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
 } // namespace
 
 Result<Swapchain> Swapchain::Create(Context& context, VkSurfaceKHR surface, u32_t width,
-                                    u32_t height) {
+                                    u32_t height, b8_t vsync) {
     if (surface == VK_NULL_HANDLE) {
         ENGINE_FAIL(ErrorCode::InternalError, ErrorStage::Vulkan, "a swapchain needs a surface");
     }
@@ -67,6 +67,7 @@ Result<Swapchain> Swapchain::Create(Context& context, VkSurfaceKHR surface, u32_
     swapchain.m_context = &context;
     swapchain.m_device  = context.Device();
     swapchain.m_surface = surface;
+    swapchain.m_vsync   = vsync;
     swapchain.m_images = std::pmr::vector<VkImage>(&memory::General().Resource());
     swapchain.m_renderFinished = std::pmr::vector<VkSemaphore>(&memory::General().Resource());
     swapchain.m_views  = std::pmr::vector<VkImageView>(&memory::General().Resource());
@@ -151,7 +152,7 @@ Status Swapchain::CreateSizeDependent(u32_t width, u32_t height) {
                                                      modes.data()));
 
     const VkSurfaceFormatKHR surfaceFormat = PickSurfaceFormat(formats.data(), formatCount);
-    m_presentMode                          = PickPresentMode(modes.data(), modeCount);
+    m_presentMode = m_vsync ? VK_PRESENT_MODE_FIFO_KHR : PickPresentMode(modes.data(), modeCount);
     m_format                               = surfaceFormat.format;
     m_extent                               = extent;
 
@@ -227,22 +228,46 @@ Status Swapchain::CreateSizeDependent(u32_t width, u32_t height) {
     if (!depthFormat) {
         return std::unexpected(depthFormat.error());
     }
+    // Four samples a pixel where the device can: without them every triangle edge and every facet far
+    // away snaps from pixel to pixel as the camera turns, which reads as the ground trembling.
+    if (!m_renderPass.IsValid()) {
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+        const VkSampleCountFlags both = properties.limits.framebufferColorSampleCounts
+                                        & properties.limits.framebufferDepthSampleCounts;
+        m_samples = (both & VK_SAMPLE_COUNT_4_BIT) != 0 ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
+    }
     Result<Image> depth = m_context->Memory().CreateImage(
         ImageDesc{.width    = extent.width,
                   .height   = extent.height,
                   .format   = *depthFormat,
                   .usage    = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                   .aspect   = VK_IMAGE_ASPECT_DEPTH_BIT,
-                  .category = VramCategory::Viewer});
+                  .category = VramCategory::Viewer,
+                  .samples  = m_samples});
     if (!depth) {
         return std::unexpected(depth.error());
     }
     m_depth = std::move(*depth);
+    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
+        Result<Image> colour = m_context->Memory().CreateImage(
+            ImageDesc{.width    = extent.width,
+                      .height   = extent.height,
+                      .format   = m_format,
+                      .usage    = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                      .aspect   = VK_IMAGE_ASPECT_COLOR_BIT,
+                      .category = VramCategory::Viewer,
+                      .samples  = m_samples});
+        if (!colour) {
+            return std::unexpected(colour.error());
+        }
+        m_colour = std::move(*colour);
+    }
 
     // Created once and kept across resizes: a render pass depends on formats, not on extents, and the
     // graphics pipelines are built against this one handle.
     if (!m_renderPass.IsValid()) {
-        Result<RenderPass> pass = RenderPass::Create(m_device, m_format, *depthFormat);
+        Result<RenderPass> pass = RenderPass::Create(m_device, m_format, *depthFormat, m_samples);
         if (!pass) {
             return std::unexpected(pass.error());
         }
@@ -251,13 +276,15 @@ Status Swapchain::CreateSizeDependent(u32_t width, u32_t height) {
 
     m_framebuffers.resize(imageCount, VK_NULL_HANDLE);
     for (u32_t i = 0; i < imageCount; ++i) {
-        const std::array<VkImageView, 2> attachments{m_views[i], m_depth.view};
+        // Multisampled: the colour image, the depth, then the swapchain image it resolves into.
+        const std::array<VkImageView, 3> attachments{
+            m_samples != VK_SAMPLE_COUNT_1_BIT ? m_colour.view : m_views[i], m_depth.view, m_views[i]};
         const VkFramebufferCreateInfo    framebufferInfo{
             .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext           = nullptr,
             .flags           = 0,
             .renderPass      = m_renderPass.Handle(),
-            .attachmentCount = static_cast<u32_t>(attachments.size()),
+            .attachmentCount = m_samples != VK_SAMPLE_COUNT_1_BIT ? 3u : 2u,
             .pAttachments    = attachments.data(),
             .width           = extent.width,
             .height          = extent.height,
@@ -389,6 +416,9 @@ void Swapchain::ReleaseSizeDependent() noexcept {
     }
     m_renderFinished.clear();
     m_images.clear();
+    if (m_colour.IsValid() && m_context != nullptr) {
+        m_context->Memory().DestroyImage(m_colour);
+    }
     if (m_depth.IsValid() && m_context != nullptr) {
         m_context->Memory().DestroyImage(m_depth);
     }
@@ -437,12 +467,15 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     m_extent          = other.m_extent;
     m_format          = other.m_format;
     m_presentMode     = other.m_presentMode;
+    m_vsync           = other.m_vsync;
     m_canCapture      = other.m_canCapture;
     m_images          = std::move(other.m_images);
     m_renderFinished  = std::move(other.m_renderFinished);
     m_views           = std::move(other.m_views);
     m_framebuffers    = std::move(other.m_framebuffers);
     m_depth           = other.m_depth;
+    m_colour          = other.m_colour;
+    m_samples         = other.m_samples;
     m_renderPass      = std::move(other.m_renderPass);
     m_frames          = other.m_frames;
     m_commandPool     = other.m_commandPool;
@@ -455,6 +488,7 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
     other.m_handle      = VK_NULL_HANDLE;
     other.m_commandPool = VK_NULL_HANDLE;
     other.m_depth       = Image{};
+    other.m_colour      = Image{};
     other.m_frames      = {};
     return *this;
 }

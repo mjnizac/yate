@@ -49,6 +49,10 @@ struct WindowDesc {
     u32_t            width     = 1600;
     u32_t            height    = 900;
     b8_t             resizable = true;
+    /// Present one image a vertical blank (`FIFO`), so every image shown is one frame drawn and motion is
+    /// evenly paced. Off, images replace each other in a mailbox at whatever rate they are drawn, which
+    /// in a window goes through the compositor and is shown unevenly: a turning camera shudders.
+    b8_t             vsync     = false;
 };
 
 struct AppInfo {

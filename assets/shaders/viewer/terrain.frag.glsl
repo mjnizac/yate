@@ -106,6 +106,17 @@ void main() {
     if (dot(normal, normal) < 1e-6) {
         normal = vec3(0.0, 1.0, 0.0);
     }
+    // The triangle's own facing, from the screen derivatives of the position, mostly: the samples' normal
+    // interpolated across a triangle rounds every wall and edge into a curve, which is what made the
+    // ground look blurred. Facing up whichever way the triangle was wound.
+    vec3 facet = cross(dFdy(vWorldPosition), dFdx(vWorldPosition));
+    if (dot(facet, facet) > 1e-12) {
+        facet  = normalize(facet) * sign(facet.y + 1e-6);
+        // Faded out where a triangle is under a couple of pixels: there the facets alias, and turning the
+        // camera makes them flicker.
+        float pixels = pc.resolution / max(length(fwidth(vWorldPosition.xz)), 1e-3);
+        normal = normalize(mix(normal, facet, 0.7 * smoothstep(1.0, 3.0, pixels)));
+    }
 
     float slope  = 1.0 - clamp(normal.y, 0.0, 1.0);
     float height = vWorldPosition.y;
@@ -166,11 +177,19 @@ void main() {
     if ((pc.look & 0xFFu) == 2u) {
         float shore = 1.0 - smoothstep(4.0, 14.0, height);
         float gentle_shore = shore * (1.0 - smoothstep(0.08, 0.25, slope));
+        // At the water's edge grass never grows: the brow a beach ends in over the sea (8 to 14 m) and a
+        // low coast without one are sand up to the steepness of rock, or a green rim outlines the water.
+        gentle_shore = max(gentle_shore, (1.0 - smoothstep(12.0, 18.0, height)) * (1.0 - smoothstep(0.25, 0.45, slope)));
         vec3  beach = vec3(0.78, 0.70, 0.50);
         float wet   = 1.0 - smoothstep(-0.5, 2.5, height);
         beach       = mix(beach, beach * vec3(0.62, 0.60, 0.58), wet);
         albedo      = mix(albedo, beach, gentle_shore);
         albedo      = mix(albedo, kRockColor, shore * smoothstep(0.25, 0.45, slope));
+        // Under the sea the floor is sediment, never grass: sand on the shallows going to grey silt with
+        // depth, and rock on the walls between the strata.
+        vec3 seabed = mix(beach, vec3(0.34, 0.36, 0.35), smoothstep(5.0, 150.0, -height));
+        seabed      = mix(seabed, kRockColor * 0.8, smoothstep(0.25, 0.5, slope));
+        albedo      = mix(albedo, seabed, 1.0 - smoothstep(-2.0, 0.0, height));
     }
 
     // Elevation (`look = { palette = "elevation", snow = top }`): colour by height alone, from 0 m to
