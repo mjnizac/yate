@@ -27,6 +27,7 @@
 #include <engine/terrain/sampler.hpp>
 #include <engine/terrain/sha256.hpp>
 #include <engine/terrain/hydrology.hpp>
+#include <engine/terrain/raster.hpp>
 #include <engine/terrain/stream_power.hpp>
 #include <engine/terrain/wind.hpp>
 
@@ -1163,6 +1164,302 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
             out[i + 1] = height[i];
         }
         return out;
+    });
+
+    // Whole-raster passes for the land prelude (see raster.hpp), over lists of `n * n` entries, x fastest.
+    // A mask is read as Lua reads a condition (anything but false and nil is set). The lists go through the
+    // raw stack, not sol's proxies: they are hundreds of thousands of entries, read and written a few dozen
+    // times a map.
+    sol::table rasters = state.create_named_table("Raster");
+    const auto rasterSide = [](Args& args, const char* op, const SourceLocation& location) {
+        const f64_t n = args.Number("n", 0.0);
+        if (n != std::floor(n) || n < 1.0 || n > 4096.0) {
+            Fail(location, "{} expects n, the raster's side, as a whole number from 1 to 4096", op);
+        }
+        return static_cast<u32_t>(n);
+    };
+    const auto readList = [](lua_State* L, const sol::table& list, usize_t count, auto&& put) {
+        sol::stack::push(L, list);
+        const int at = lua_gettop(L);
+        for (usize_t i = 0; i < count; ++i) {
+            lua_rawgeti(L, at, static_cast<lua_Integer>(i + 1));
+            put(i, L);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    };
+    const auto writeList = [](lua_State* L, auto&& get, usize_t count) {
+        lua_createtable(L, static_cast<int>(count), 0);
+        for (usize_t i = 0; i < count; ++i) {
+            lua_pushnumber(L, get(i));
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        sol::table out(L, -1);
+        lua_pop(L, 1);
+        return out;
+    };
+    const auto readMask = [readList](lua_State* L, Args& args, const sol::table& table, const char* key,
+                                     usize_t count, const char* op, const SourceLocation& location) {
+        if (args.Length(key) != count) {
+            Fail(location, "{} expects '{}' to hold {} entries", op, key, count);
+        }
+        std::pmr::vector<u8_t> mask(count, 0, &memory::General().Resource());
+        readList(L, table[key], count, [&](usize_t i, lua_State* s) { mask[i] = lua_toboolean(s, -1) ? 1 : 0; });
+        return mask;
+    };
+    rasters.set_function("Distance", [rasterSide, readMask, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Distance", location);
+        const u32_t          n        = rasterSide(args, "Raster.Distance", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        const std::pmr::vector<u8_t> mask = readMask(lua, args, source, "mask", count, "Raster.Distance", location);
+        args.Finish();
+        std::pmr::vector<f64_t> out(count, 0.0, &memory::General().Resource());
+        terrain::raster::Distance(mask, n, out);
+        return writeList(lua, [&](usize_t i) { return out[i]; }, count);
+    });
+    // { parent = ..., area = ... } of the land's drainage (raster.hpp, `Drain`).
+    rasters.set_function("Drain", [rasterSide, readMask, readList, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Drain", location);
+        const u32_t          n        = rasterSide(args, "Raster.Drain", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        const std::pmr::vector<u8_t> land = readMask(lua, args, source, "land", count, "Raster.Drain", location);
+        if (args.Length("height") != count) {
+            Fail(location, "Raster.Drain expects 'height' to hold {} numbers", count);
+        }
+        args.Finish();
+        std::pmr::vector<f64_t> height(count, 0.0, &memory::General().Resource());
+        readList(lua, source["height"], count, [&](usize_t i, lua_State* s) { height[i] = lua_tonumber(s, -1); });
+        std::pmr::vector<f64_t> parent(count, 0.0, &memory::General().Resource());
+        std::pmr::vector<f64_t> area(count, 0.0, &memory::General().Resource());
+        terrain::raster::Drain(land, height, n, parent, area);
+        sol::state_view view(lua);
+        sol::table      out = view.create_table();
+        out["parent"] = writeList(lua, [&](usize_t i) { return parent[i]; }, count);
+        out["area"]   = writeList(lua, [&](usize_t i) { return area[i]; }, count);
+        return out;
+    });
+    // { corners = ..., weights = ..., height = ..., found = ... } of an `n` raster over a template's lattice
+    // (raster.hpp, `Triangles`). `diag` is read entry by entry, as a condition: the prelude leaves holes in it.
+    rasters.set_function("Triangles", [rasterSide, readList, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Triangles", location);
+        const u32_t          n        = rasterSide(args, "Raster.Triangles", location);
+        const u32_t          nx       = args.Count("nx", 1, 2, 4096);
+        const u32_t          nz       = args.Count("nz", 1, 2, 4096);
+        const f64_t          spacing  = args.Number("spacing", 1.0);
+        const f64_t          units    = args.Number("units", 1.0);
+        const usize_t        points   = static_cast<usize_t>(nx) * nz;
+        const auto           numbers  = [&](const char* key) {
+            if (args.Length(key) != points) {
+                Fail(location, "Raster.Triangles expects '{}' to hold {} numbers", key, points);
+            }
+            std::pmr::vector<f64_t> list(points, 0.0, &memory::General().Resource());
+            readList(lua, source[key], points, [&](usize_t i, lua_State* s) { list[i] = lua_tonumber(s, -1); });
+            return list;
+        };
+        const std::pmr::vector<f64_t> px = numbers("px"), pz = numbers("pz"), h = numbers("h");
+        if (!args.Has("diag")) {
+            Fail(location, "Raster.Triangles needs 'diag', the quads' diagonals");
+        }
+        args.Finish();
+        std::pmr::vector<u8_t> diag(points, 0, &memory::General().Resource());
+        readList(lua, source["diag"], points, [&](usize_t i, lua_State* s) { diag[i] = lua_toboolean(s, -1) ? 1 : 0; });
+        const usize_t           count = static_cast<usize_t>(n) * n;
+        std::pmr::vector<f64_t> corners(3 * count, 0.0, &memory::General().Resource());
+        std::pmr::vector<f64_t> weights(3 * count, 0.0, &memory::General().Resource());
+        std::pmr::vector<f64_t> height(count, 0.0, &memory::General().Resource());
+        std::pmr::vector<u8_t>  found(count, 0, &memory::General().Resource());
+        terrain::raster::Triangles({px, pz, h, diag, nx, nz, spacing, units}, n, corners, weights, height, found);
+        sol::state_view view(lua);
+        sol::table      out = view.create_table();
+        out["corners"] = writeList(lua, [&](usize_t i) { return corners[i]; }, 3 * count);
+        out["weights"] = writeList(lua, [&](usize_t i) { return weights[i]; }, 3 * count);
+        out["height"]  = writeList(lua, [&](usize_t i) { return height[i]; }, count);
+        lua_State* L   = lua;
+        lua_createtable(L, static_cast<int>(count), 0);
+        for (usize_t i = 0; i < count; ++i) {
+            lua_pushboolean(L, found[i] != 0);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        out["found"] = sol::table(L, -1);
+        lua_pop(L, 1);
+        return out;
+    });
+    // { region = ..., masses = { { cells, x, z, edge }, ... }, waters = ... } (raster.hpp, `Label`).
+    rasters.set_function("Label", [rasterSide, readMask, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Label", location);
+        const u32_t          n        = rasterSide(args, "Raster.Label", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        const std::pmr::vector<u8_t> land = readMask(lua, args, source, "land", count, "Raster.Label", location);
+        args.Finish();
+        std::pmr::vector<f64_t>                region(count, 0.0, &memory::General().Resource());
+        std::pmr::vector<terrain::raster::Body> masses(&memory::General().Resource());
+        std::pmr::vector<terrain::raster::Body> waters(&memory::General().Resource());
+        terrain::raster::Label(land, n, region, masses, waters);
+        sol::state_view view(lua);
+        const auto      bodies = [&](const std::pmr::vector<terrain::raster::Body>& list) {
+            sol::table out = view.create_table(static_cast<int>(list.size()), 0);
+            for (usize_t i = 0; i < list.size(); ++i) {
+                out[i + 1] = view.create_table_with("cells", list[i].cells, "x", list[i].x, "z", list[i].z, "edge",
+                                                    list[i].edge);
+            }
+            return out;
+        };
+        sol::table out = view.create_table();
+        out["region"] = writeList(lua, [&](usize_t i) { return region[i]; }, count);
+        out["masses"] = bodies(masses);
+        out["waters"] = bodies(waters);
+        return out;
+    });
+    rasters.set_function("Soften", [rasterSide, readList, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Soften", location);
+        const u32_t          n        = rasterSide(args, "Raster.Soften", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        if (args.Length("values") != count) {
+            Fail(location, "Raster.Soften expects 'values' to hold {} numbers", count);
+        }
+        args.Finish();
+        std::pmr::vector<f64_t> values(count, 0.0, &memory::General().Resource());
+        readList(lua, source["values"], count, [&](usize_t i, lua_State* s) { values[i] = lua_tonumber(s, -1); });
+        std::pmr::vector<f64_t> out(count, 0.0, &memory::General().Resource());
+        terrain::raster::Soften(values, n, out);
+        return writeList(lua, [&](usize_t i) { return out[i]; }, count);
+    });
+    rasters.set_function("Square", [rasterSide, readMask, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Square", location);
+        const u32_t          n        = rasterSide(args, "Raster.Square", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        std::pmr::vector<u8_t> mask = readMask(lua, args, source, "mask", count, "Raster.Square", location);
+        const u32_t            radius = args.Count("radius", 1, 0, 4096);
+        // `steps` erodes (`true`) or dilates (`false`) one after another: an opening and a closing in one call.
+        const usize_t steps = args.Length("steps");
+        sol::table    list  = source["steps"];
+        for (usize_t s = 1; s <= steps; ++s) {
+            terrain::raster::Square(mask, n, radius, list[s].get<bool>());
+        }
+        args.Finish();
+        lua_State* L = lua;
+        lua_createtable(L, static_cast<int>(count), 0);
+        for (usize_t i = 0; i < count; ++i) {
+            lua_pushboolean(L, mask[i] != 0);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        sol::table out(L, -1);
+        lua_pop(L, 1);
+        return out;
+    });
+    rasters.set_function("Box", [rasterSide, readList, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Box", location);
+        const u32_t          n        = rasterSide(args, "Raster.Box", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        const u32_t          radius   = args.Count("radius", 1, 0, 4096);
+        if (args.Length("values") != count) {
+            Fail(location, "Raster.Box expects 'values' to hold {} numbers", count);
+        }
+        args.Finish();
+        std::pmr::vector<f64_t> values(count, 0.0, &memory::General().Resource());
+        readList(lua, source["values"], count, [&](usize_t i, lua_State* s) { values[i] = lua_tonumber(s, -1); });
+        terrain::raster::Box(values, n, radius);
+        return writeList(lua, [&](usize_t i) { return values[i]; }, count);
+    });
+
+    rasters.set_function("Project", [rasterSide, readList, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Project", location);
+        const u32_t          n        = rasterSide(args, "Raster.Project", location);
+        const usize_t        count    = static_cast<usize_t>(n) * n;
+        const f64_t          cell     = args.Number("cell", 1.0);
+        const u32_t          reach    = args.Count("reach", 1, 1, 4096);
+        if (args.Length("sdf") != count || args.Length("at_coast") != count || !(cell > 0.0)) {
+            Fail(location, "Raster.Project expects 'sdf' and 'at_coast' of {} numbers and a cell above zero", count);
+        }
+        args.Finish();
+        std::pmr::vector<f64_t> sdf(count, 0.0, &memory::General().Resource());
+        std::pmr::vector<f64_t> atCoast(count, 0.0, &memory::General().Resource());
+        std::pmr::vector<f64_t> out(count, 0.0, &memory::General().Resource());
+        readList(lua, source["sdf"], count, [&](usize_t i, lua_State* s) { sdf[i] = lua_tonumber(s, -1); });
+        readList(lua, source["at_coast"], count, [&](usize_t i, lua_State* s) { atCoast[i] = lua_tonumber(s, -1); });
+        terrain::raster::Project(sdf, n, cell, reach, atCoast, out);
+        return writeList(lua, [&](usize_t i) { return out[i]; }, count);
+    });
+
+    // A raster read at another raster's pixels: `from` and `to` are { n, x0, z0, cell }.
+    rasters.set_function("Resample", [readList, writeList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Resample", location);
+        const auto placement = [&](const char* key) {
+            const usize_t length = args.Length(key);
+            sol::table    list   = source[key];
+            if (length != 4) {
+                Fail(location, "Raster.Resample expects '{}' as {{ n, x0, z0, cell }}", key);
+            }
+            terrain::raster::Placement p;
+            p.n    = static_cast<u32_t>(list[1].get<f64_t>());
+            p.x0   = list[2].get<f64_t>();
+            p.z0   = list[3].get<f64_t>();
+            p.cell = list[4].get<f64_t>();
+            if (p.n < 1 || p.n > 8192 || !(p.cell > 0.0)) {
+                Fail(location, "Raster.Resample expects '{}' with n from 1 to 8192 and a cell above zero", key);
+            }
+            return p;
+        };
+        const terrain::raster::Placement from = placement("from");
+        const terrain::raster::Placement to   = placement("to");
+        const b8_t   nearest = args.Boolean("nearest", false);
+        const f64_t  outside = args.Number("outside", 0.0);
+        const usize_t count  = static_cast<usize_t>(from.n) * from.n;
+        if (args.Length("values") != count) {
+            Fail(location, "Raster.Resample expects 'values' to hold {} numbers", count);
+        }
+        args.Finish();
+        std::pmr::vector<f64_t> values(count, 0.0, &memory::General().Resource());
+        readList(lua, source["values"], count, [&](usize_t i, lua_State* s) { values[i] = lua_tonumber(s, -1); });
+        std::pmr::vector<f64_t> out(static_cast<usize_t>(to.n) * to.n, 0.0, &memory::General().Resource());
+        terrain::raster::Resample(values, from, to, nearest, outside, out);
+        return writeList(lua, [&](usize_t i) { return out[i]; }, out.size());
+    });
+
+    // A list of numbers kept for the rest of the process under a key the script makes of everything that
+    // went into it (see raster.hpp), and given back to the next run that asks for the same key.
+    rasters.set_function("Keep", [readList](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        const sol::table     source   = table;
+        Args                 args(std::move(table), "Raster.Keep", location);
+        const std::string    key      = args.Text("key", "");
+        const usize_t        count    = args.Length("numbers");
+        args.Finish();
+        if (key.empty()) {
+            Fail(location, "Raster.Keep needs a 'key'");
+        }
+        std::pmr::vector<f64_t> numbers(count, 0.0, &memory::General().Resource());
+        readList(lua, source["numbers"], count, [&](usize_t i, lua_State* s) { numbers[i] = lua_tonumber(s, -1); });
+        terrain::raster::Keep(key, numbers);
+    });
+    rasters.set_function("Recall", [writeList](sol::this_state lua, sol::table table) -> sol::object {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Raster.Recall", location);
+        const std::string    key      = args.Text("key", "");
+        args.Finish();
+        std::pmr::vector<f64_t> numbers(&memory::General().Resource());
+        if (!terrain::raster::Recall(key, numbers)) {
+            return sol::make_object(lua, sol::lua_nil);
+        }
+        return writeList(lua, [&](usize_t i) { return numbers[i]; }, numbers.size());
     });
 
     // Rivers and lakes of a whole grid on the CPU (see hydrology.hpp): the grid made to drain, its drainage

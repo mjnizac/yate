@@ -6,6 +6,7 @@
 #include <engine/memory/general.hpp>
 #include <engine/platform.hpp>
 #include <engine/terrain/kernels.hpp>
+#include <engine/terrain/raster.hpp>
 #include <engine/terrain/stream_power.hpp>
 #include <engine/terrain/wind.hpp>
 #include <engine/vulkan/context.hpp>
@@ -318,6 +319,7 @@ Status shutdown(Application* application) {
     }
     if (g_runtime.memoryReady) {
         terrain::ReleaseStreamPowerCache();
+        terrain::raster::ReleaseKept();
         terrain::ReleaseWindCache();
         memory::Shutdown();
         g_runtime.memoryReady = false;
