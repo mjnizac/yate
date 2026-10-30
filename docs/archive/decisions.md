@@ -1319,3 +1319,66 @@ iteration to the op's state halo, which equals the producer's halo only when the
 widest consumer. `height = Hydraulic(n)` with `normals = Gradient(Thermal(n))` gave different floats at
 section 128 and 512; with the first iteration reading the producer with its own halo they are identical.
 In the viewer it showed as holes and arches in the walls.
+
+## Closed work moved out of todo.md (2026-10-30)
+
+Items that were marked done in `docs/todo.md` and the "Done" notes of the outlines task, kept here whole when the todo became open work only.
+
+- [x] **Drainage made valid by breaching as well as filling.** `Hydrology.Drain` (Lindsay's hybrid,
+      decided per depression), and `Water.Drain` in the prelude. `Erosion.StreamPower` still only fills
+      inside, and cuts straight D8 spokes across what it fills: breach the grid with `Hydrology.Drain`
+      before it (`assets/scripts/terrains/lakes_rivers.lua`) until it routes flats itself.
+- [x] **Rivers and lakes**: `Water.Drain` and `Water.Apply` give `lakes` and `rivers` outputs, drawn by
+      the viewer's water with Sea, Lakes and Rivers toggles.
+- [x] **Rivers and lakes as designed elements**: `Water.Network` (drawn, from `--shapes` or generated,
+      kinds of valley and basin, lakes at any level, the sea only where it reaches the edge).
+- [x] **Water that rose and ran dry along its channel** (phase 1 of the water plan): confluences resolved as
+      a tree without raising a level, a tributary's water giving way to its river's, floodplains filled
+      before channels are cut, detail kept out of the water, duplicates dropped; `net:audit` measures it.
+- [x] **Water plan, phase 2**: sine-generated meanders with Kinoshita skew, cut banks and point bars,
+      width from drainage summed at confluences, falls with plunge pools and rapids, deltas and estuaries.
+- [x] **Water plan, phase 3**: lake outlines from contours, outlets at the lowest shore point, cirque
+      headwalls and moraine dams, paternoster lakes, shore kinds, a lobed delta fan.
+- [x] **Water plan, phase 4**: levels sampled on the course, falls found on them; the fused op.
+- [x] **Generation over an unbounded world**: `generate.world_cell` snaps the analysis to fixed world
+      cells plus a ring, `count` per cell; two exports touching the same cells get the same rivers
+      (`test_water`).
+- [x] **The graph's 1024 nodes capped a script at about twenty rivers and lakes**: the fused `Water` op
+      carves each in one node, its channel measured exactly on its course; `test_water` holds 35 elements.
+- [x] **Lakes found by the generator had star-shaped outlines**: now the contour of their level.
+- [x] **`make_noise`, the hash and `smooth` were written three times**: the hash and `smooth` live in
+      `05_common.lua` (`engine.lattice_hash`, `engine.hasher`, `engine.smooth`); each macro keeps its own
+      value noise, which differs on purpose (periodic for dunes, its own lacunarity for lands).
+- [x] **Phase 1, islands**: the `Lands` op and `Shapes.Set` (a list of shapes with ids in one node, through
+      bins), `Lands.Compose` (areas, profiles per element with no assumed shape, lagoons, seamounts, guyots,
+      active margins, edits by id, the report in metadata, bounded maps and `frame.world_cell`), island
+      presets in `Lands.Island`, `terrain_metrics --by-id`, `dev.sh lands` and `lands-check`, 9 new goldens.
+- [x] **Phase 2, archipelagos**: `scatter` elements (dart throwing in a bounded map, stable as the count
+      grows; hash-priority Poisson per world cell in the unbounded one), patterns (uniform, cluster, line,
+      arc, ring, grid, centers), `land_fraction` by rescaling the scatters, classes by area in the report,
+      water scatters, atolls with their lagoons; the presets of `Lands.Archipelago`; 10 new goldens.
+- [x] **The margin creased on the medial axis** between two coasts: the sea floor is now built on the
+      distance with the land joined by a smooth minimum (the `margin` mode), and trenches join as a 4-norm.
+- [x] **Phase 3, continents and other lands**: `ridge` elements (crest pieces meeting in saddles, spurs every
+      `spacing`) and relief elements, land profiles joined by their maximum, water bodies classed in the
+      report, `frame.edge_margin` and percentages, the land presets of `Lands.Continent` (the grid-built
+      macro retired), the references measured into bands in `test_compose`; 11 new goldens.
+      * Done (2026-10-29): `Lands.Template`, a faithful port of Azgaar's fourteen templates (his steps and
+        numbers, a jittered grid of 10 000 cells, whole-number heights), whose land share over six seeds falls
+        in the spread of his own generator (measured on azgaar.github.io); on it a broad bend, fjords walked
+        inland, a fractal fray by his roughness field and a sub-cell warp, the exact distance; `land_fraction`
+        by quantile; masses and water bodies in the report. The presets with a template draw it by default
+        (`outline = "shapes"` for the compositions). Coast dimension 1.15 to 1.47, in or above the
+        references' band; hypsometric integral 0.19 to 0.39 on most. The plan's discard of grid growth
+        (section 5.2) is reversed for bounded maps.
+      * Done (2026-10-29): fjords follow the drainage (a priority flood from the coast, the area drained
+        summed down it, the valleys of the largest basins drowned upstream with their tributaries), 10 systems
+        a map round two or three fjord coasts, after the fray; the land they take is given back as a rim on
+        the coast, so the shares stay; each path carved at the mean of five of its pixels (no 45 degree
+        stair), the walls frayed by a sixth of the coast's noise, the valley cut into the ground along it and
+        past its head.
+      * Done (2026-10-29): every template map has the unbounded world's ocean floor at its own scale
+        (`ocean_floor`, `ocean_compose`; `ocean = false` turns it off): stairs, drowned land, guyots, ridges,
+        trenches and canyons, faded to the far floor at the map's rim. 1.5 s more a map (its drowned land is
+        made at two pixels a cell); `test_compose` measures without it but in one case, about 4 min in Debug
+        (timeout 300).

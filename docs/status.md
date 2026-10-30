@@ -19,73 +19,40 @@ way is in `docs/design.md` (standing decisions) and `docs/archive/decisions.md` 
 
 ## What exists
 
-Two executables over one engine: `terrain_export` (Headless) writes 16-bit PNG heightmaps, 16-bit RGB
-vector maps and raw `f32` volumes with a metadata sidecar; `terrain_viewer` (Graphics) draws the same
-graph as a GPU-displaced grid with an orbit camera (`--view`, `--target`), a ring of streamed tiles with
-rings of detail beyond it (`--max-level`), hot reload, `--screenshot`, and the analytic sea level (`--water`,
-off by default). It streams nearest and faced tiles first within a time bound, re-runs a script round the
-camera (`--follow`), scales the map's width (`--map-scale`), draws with 4x MSAA and facet normals, waits for
-the vertical blank, and builds its view from the camera's direction (the eye far from the origin no longer
-rounds it: no shudder when turning).
+Detail of each call is in `docs/lua_reference.md`; why each piece is the way it is, in `docs/design.md`.
 
-Nineteen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular, with an optional
-`position`), `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`,
-`ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies`, `Grid`, `Water` and `Lands` (a list
-of shapes in one node), plus
-`Erosion.StreamPower`, a whole-grid simulation on the CPU. The script API is
-`Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`, `Erosion.*`,
-`Geometry.*`, and the Lua prelude's `Shapes.*`, `Landforms.*`, `Ranges.*` (the alpine macro) and `Dunes.*`
-(the dune macro), documented with pictures in
-`docs/lua_reference.md`.
-
-Five reference terrains built from shapes in `assets/scripts/shapes/` (volcanic island, mountain range,
-canyon, mesas, coast), with previews in `docs/images/shapes/`. The shape layer is `Geometry.*` (C++ ops), plus
-`Shapes.*` and `Landforms.*`, which are Lua in `assets/lua/prelude/` that the engine loads before every
-script.
-
-Dune fields from `Dunes.Field`, the dune macro (`terrains/dunes.lua`, `terrains/star_dunes.lua`), in
-three styles: `"procedural"` (default, analytic, no repetition, about 0.6 s), `"simulated"`
-(`Erosion.Wind`, periodic) and `"star"`; previews in `docs/images/dunes/`.
-
-Islands and any other land and sea from `Lands.Compose` (`assets/scripts/lands/`): simple shapes first,
-detail after. A list of elements (land, water, sea-floor forms) with ids, combined in order in the `Lands`
-op (`Shapes.Set`), each land element raised by its own profile (dome, cone, plateau, rim, caldera, tilt,
-flat: nothing assumed), the coast, shore and margin from the one signed distance, seamounts, guyots and
-trenches, lagoons, edits by id, and the resolved elements reported to the export's metadata
-(`tools/dev.sh lands`, `lands-check`). Bounded maps or the unbounded world (`frame.world_cell`). Island
-presets in `Lands.Island` (`high_island`, `low_island`, `volcano`, `caldera`, `rim_island`, `mesa_island`,
-`atoll`); scripts run in about 0.1 s against 6 s for the grid-built island. Archipelagos from `scatter`
-elements (Poisson in a bounded map, hash-priority Poisson per world cell in the unbounded one; patterns
-uniform, cluster, line, arc, ring, grid, centers; `land_fraction`; classes by area) and the presets of
-`Lands.Archipelago` (`scattered`, `cluster`, `hotspot`, `arc`, `atolls`, `shattered`, `chain`).
-Ranges from one `ridge` element (crest pieces meeting in saddles, spurs on alternate sides) and other relief
-elements that change no coast; water bodies classed in the report (`sea`, `lake`, `ocean` or the role);
-`frame.edge_margin` and positions as percentages. `Lands.Continent` builds the land presets as compositions
-(`continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`, `peninsula`, `isthmus`, `fractious`,
-`taklamakan`, `all_land`, `lakeland`, `ocean_only`); the grid-built macro is retired. Golden datasets `lands_*`
-(33); previews in `docs/images/lands/`. Outlines like the references come from `Lands.Template`, a port of Azgaar's
-heightmap templates (his steps on a jittered grid of 10 000 cells, his share of land) bent and frayed by his
-roughness field, with fjords where the land drains (dendritic, round two or three fjord coasts, their valleys
-cut into the ground), beaches and an ocean floor of stairs and drowned land (guyots, ridges, trenches,
-canyons): the presets with a template (volcano, high_island, low_island, atoll, scattered, shattered,
-continent, pangea, old_world, mediterranean, peninsula, isthmus, fractious, taklamakan) draw it by default,
-`outline = "shapes"` builds the compositions. `Lands.World` is the unbounded world from the templates
-(islands in 96 km cells, continents in cells four times that, made incrementally within a `budget` for the
-viewer's `--follow`; `assets/scripts/lands/infinite_world.lua`). The raster passes it needs (distance,
-morphology, blur, beach projection, resampling, the triangles, the drainage, the labels, a keep across runs)
-are C++ (`Raster.*`). The plan is in `docs/archive/lands_plan.md` (archived): phases 1
-(islands), 2 (archipelagos) and 3 (continents and other lands) are done; the outlines (`docs/todo.md`) come
-before phase 4.
-
-Mountain ranges from `Ranges.Carve` in `assets/scripts/ranges/` (sierra, arc, parallel, knot) and
-`terrains/alpine.lua`, with previews in `docs/images/ranges/`.
-
-Nine sample terrains in `assets/scripts/terrains/` cover what that op set can express — alpine, mesa,
-cliffs, crater, island, badlands, riverlands, dunes, rolling — and `assets/scripts/gallery.lua` generates the
-reference's plates. `lakes_rivers.lua` drains its grid with `Water.Drain` (breach-and-fill, lakes, rivers)
-and the viewer draws its `lakes` and `rivers` outputs as water. `Water.Network` places rivers, lakes and
-the sea as analytic elements, drawn or generated, each kind shaping its valley or basin; `water_showcase.lua`
-shows every kind on one map.
+* **Executables.** `terrain_export` (Headless) writes 16-bit PNG heightmaps, 16-bit RGB vector maps and raw
+  `f32` volumes with a metadata sidecar. `terrain_viewer` (Graphics) draws the same graph as a GPU-displaced
+  grid: orbit camera (`--view`, `--target`), a ring of streamed tiles with rings of detail beyond it
+  (`--max-level`), `--follow`, `--map-scale`, 4x MSAA, vsync, hot reload, `--screenshot`, analytic sea level
+  (`--water`, off by default).
+* **Ops.** Nineteen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular), `Normals`, `Arith`,
+  `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`,
+  `Transform`, `Shape`, `Gullies`, `Grid`, `Water` and `Lands`; plus `Erosion.StreamPower`, a whole-grid CPU
+  simulation.
+* **Script API.** `Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`,
+  `Erosion.*`, `Geometry.*`, and the Lua prelude (`assets/lua/prelude/`, loaded before every script):
+  `Shapes.*`, `Landforms.*`, `Ranges.*`, `Dunes.*`, `Water.*`, `Lands.*`.
+* **Shapes.** Five reference terrains in `assets/scripts/shapes/` (volcanic island, mountain range, canyon,
+  mesas, coast), previews in `docs/images/shapes/`.
+* **Lands** (`Lands.Compose`, `assets/scripts/lands/`): elements with ids (land, water, sea-floor forms)
+  combined in one `Lands` op, each land raised by its own profile, coast, shore and margin from one signed
+  distance, edits by id, the resolved elements reported to the sidecar (`tools/dev.sh lands`, `lands-check`).
+  Bounded maps or the unbounded world (`frame.world_cell`, `Lands.World`). Presets: `Lands.Island`,
+  `Lands.Archipelago`, `Lands.Continent` (land presets as compositions). Outlines come from `Lands.Template`,
+  a port of Azgaar's heightmap templates, with drainage fjords, beaches and an ocean floor; the presets with
+  a template draw it by default, `outline = "shapes"` builds the compositions. The raster passes are C++
+  (`Raster.*`). 33 golden datasets `lands_*`, previews in `docs/images/lands/`. Phases 1 to 3 are done;
+  the outlines (`docs/todo.md`) come before phase 4 (`docs/roadmap.md`).
+* **Water.** `Water.Drain` (breach-and-fill, lakes, rivers) and `Water.Network` (rivers, lakes and the sea as
+  analytic elements, each kind shaping its valley or basin; `water_showcase.lua`); the viewer draws the
+  `lakes` and `rivers` outputs as water.
+* **Ranges and dunes.** `Ranges.Carve` (`assets/scripts/ranges/`: sierra, arc, parallel, knot) and
+  `terrains/alpine.lua`; `Dunes.Field` in three styles, `"procedural"` (default, about 0.6 s),
+  `"simulated"` (`Erosion.Wind`, periodic) and `"star"`; previews in `docs/images/ranges/` and
+  `docs/images/dunes/`.
+* **Sample terrains.** Nine in `assets/scripts/terrains/` (alpine, mesa, cliffs, crater, island, badlands,
+  riverlands, dunes, rolling); `assets/scripts/gallery.lua` generates the reference's plates.
 
 ## Verification
 
@@ -143,24 +110,19 @@ hidden behind the wait for deflate.
 
 Open, with the measurements, in `docs/todo.md`:
 
-* **Hydraulic erosion is only approximately resolution independent.** Iterations and rates are scaled to
-  the spacing (reference 2 m) and the amount of erosion agrees within a few metres, but the channels it
-  carves are at the scale of the cell and differ. Finer than 2 m the count is capped at 96.
-* **Hydraulic erosion leaves a one-sample-scale ripple**; a `Filters.Blur{ radius = 1 }` after it clears
-  it. Adding diagonal neighbours was tried and measured worse.
-* **`test_viewer` "distance picks the level"** failed in every Debug run and, from
-  2026-10-28, in most Release runs too: the test now waits for the tiles; Release passes, Debug not rechecked (todo).
-* **CI is red.** Windows has failed in "Tests that need no device" since milestone 11 and does not
-  reproduce locally; Linux has never built. Both need the log of the failing step.
-* **Water at the ring's edge** shows a plate where the surface stands above a lower floor (todo).
+* **Hydraulic erosion is only approximately resolution independent** (reference 2 m; channels at the scale
+  of the cell differ; finer than 2 m the count is capped at 96) and leaves a one-sample ripple that
+  `Filters.Blur{ radius = 1 }` clears.
+* **CI is red** on Windows ("Tests that need no device", not reproducible locally) and Linux has never built.
+* **`test_viewer` "distance picks the level"** passes in Release since it waits for the tiles; Debug not rechecked.
+* **Water at the ring's edge** shows a plate where the surface stands above a lower floor.
 * **One GPU, one vendor, one OS.**
 
-Vulkan 1.4 is the target on purpose (spec section 5), though no 1.4-only feature is used: the 1.4
-feature struct is queried and enabled and none of its members is required. Lowering the minimum to 1.3
-is one constant and the shader target environment, and it is a product decision rather than a defect.
+Vulkan 1.4 is the target on purpose (spec section 5), though no 1.4-only feature is used. Lowering the minimum
+to 1.3 is one constant and the shader target environment: a product decision rather than a defect.
 
 ## Next
 
-No milestone is in progress. Milestones 1 to 11 are done. `docs/todo.md` is the work queue. The op
-catalogue draft (`terrain_engine_spec_terrain_standard.md`) lives on the Desktop, outside the repository,
-and is not a repo document: nothing in the code depends on it.
+No milestone is in progress. Milestones 1 to 11 are done. `docs/todo.md` is the work queue. The op catalogue
+draft (`terrain_engine_spec_terrain_standard.md`) lives on the Desktop, outside the repository; nothing in the
+code depends on it.

@@ -216,11 +216,11 @@ docs_check() {
     local ops claimed
     ops="$(awk '/^enum class OpKind/ { on = 1; next } on && /^    Count/ { exit } on && /^    [A-Z][A-Za-z0-9]*( = 0)?,/ { n++ } END { print n }' \
         "$ROOT/include/engine/terrain/graph.hpp")"
-    claimed="$(grep -oiE '^[a-z-]+ ops' "$ROOT/docs/status.md" | head -1 | cut -d' ' -f1 | tr 'A-Z' 'a-z')"
+    claimed="$(grep -oiE '[a-z-]+ ops:' "$ROOT/docs/status.md" | head -1 | cut -d' ' -f1 | tr 'A-Z' 'a-z' || true)"
     [[ "${words[$ops]:-$ops}" == "$claimed" ]] || { echo "docs/status.md says '$claimed ops', OpKind has $ops"; failed=1; }
 
     hits="$(grep -nE '^- \[x\]' "$ROOT/docs/todo.md" || true)"
-    [[ -z "$hits" ]] || echo "warning: $(echo "$hits" | wc -l) finished tasks left in docs/todo.md (phase 3 moves them out)"
+    [[ -z "$hits" ]] || { echo "finished tasks left in docs/todo.md (they live in git):"; echo "$hits"; failed=1; }
 
     local script name
     while read -r script; do

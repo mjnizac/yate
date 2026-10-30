@@ -42,6 +42,12 @@ scheduling.
   interesting in three dimensions.
 - **More erosion models.** Hydraulic and thermal first (milestone 8). Anything further has to
   declare an honest effective influence radius, or sections stop being seamless.
+- **Vector displacement for real cliffs.** A heightfield cannot hold overhangs and stretches detail above
+  about 45 degrees. World Machine 4059/4065 added vector displacement maps that erosion, thermal weathering
+  and strata run on, converted back to a heightfield plus cliff meshes. The mappings already have `R2->R3`;
+  an offset output is the natural form.
+- **Later, if the open terrain work justifies it:** erosion by a hardness map, environmental layers for biomes
+  as outputs, more cells and threads for `StreamPower`.
 - **Distributed export.** Sections are already independent and deterministic, so splitting a job
   across machines is an orchestration problem. Worth doing only once single-machine throughput is
   measured and understood.
