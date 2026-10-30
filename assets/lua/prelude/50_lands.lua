@@ -26,7 +26,7 @@
 -- template where the preset has one (`Lands.Template`, whose outlines are like his maps' and the references'),
 -- else, or with `outline = "shapes"`, from its composition (`Lands.Preset` returns it, to change before
 -- building). The resolved elements go to the export's metadata (`engine.report`). The plan this follows is
--- `docs/lands_plan.md`.
+-- `docs/archive/lands_plan.md`.
 --
 -- Run by the engine after `46_network.lua`.
 

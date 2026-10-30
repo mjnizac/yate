@@ -74,7 +74,7 @@ it computed instead of an export of billions of sections. Every numeric option i
 trailing suffix, `nan`, `inf` and an overflow are errors that name the option and the text.
 `--png-level` and `--png-filter` trade encoding time against output size; the defaults are level 2 and
 the `up` filter, and `--png-level 1` is the setting for a job that wants throughput over size. With
-`none` or `up` the deflate stream is built in parallel (see `docs/decisions.md`); `all` uses one thread.
+`none` or `up` the deflate stream is built in parallel (see `docs/archive/decisions.md`); `all` uses one thread.
 Run `--help` for the rest.
 
 The sidecar's `outputs[].statistics` holds the min, max and mean of each output over its components and

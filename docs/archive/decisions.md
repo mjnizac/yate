@@ -1,3 +1,5 @@
+> Archive. History of how the engine got here, kept whole. Do not read it front to back: the standing conclusions are in `docs/design.md`; come here for the measurement or the story behind one of them (`tools/dev.sh headings docs/archive/decisions.md`).
+
 # Decisions and findings
 
 How the engine got to where it is: what each milestone built, what was measured, which optimisations

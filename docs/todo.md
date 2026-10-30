@@ -1,6 +1,6 @@
 # Open tasks
 
-Only what is still open. Finished work and the measurements behind it are in `docs/decisions.md`; the
+Only what is still open. Finished work is in `docs/design.md` and the measurements behind it in `docs/archive/decisions.md`; the
 full history is in the git log.
 
 ## Correctness
@@ -161,7 +161,7 @@ viewer screenshot. Each item is done when it is in `ctest`.
 
 ## Lands macro (`Lands.*`)
 
-The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail after.
+The plan is `docs/archive/lands_plan.md` (archived): shapes first, detail after.
 
 - [x] **Phase 1, islands**: the `Lands` op and `Shapes.Set` (a list of shapes with ids in one node, through
       bins), `Lands.Compose` (areas, profiles per element with no assumed shape, lagoons, seamounts, guyots,
@@ -226,7 +226,7 @@ The plan is `docs/lands_plan.md` (local, not versioned): shapes first, detail af
       nearly straight, spurs as straight capsules at even intervals; they need wander along the crest and
       spurs that descend and branch. The crest's flanks show a regular ripple in the hillshades, an artefact
       of how its pieces join, to find and remove.
-- [ ] **Phase 4, detail on the shapes** (`docs/lands_plan.md`): what remains of it once the outlines are done
+- [ ] **Phase 4, detail on the shapes** (`docs/archive/lands_plan.md`): what remains of it once the outlines are done
       (relief noise bound to the distance inland, erosion, the exact distance if erosion moves the coast,
       fetch).
 - [ ] **A lake's shore cliff stands above a low plain round it** (`all_land.lua`, `lake_b`: a ring 17 m deep):

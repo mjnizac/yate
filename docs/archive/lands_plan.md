@@ -1,3 +1,5 @@
+> Archivo. Plan original de `Lands.*` (fases 1 a 3 hechas); las fases 4 a 8 viven ahora en `docs/roadmap.md`. Se conserva entero por los algoritmos y el análisis de referencias; no leer de principio a fin (`tools/dev.sh headings docs/archive/lands_plan.md`).
+
 # Plan: islas, archipiélagos y continentes a partir de formas geométricas
 
 Plan para rehacer la generación de tierras de YATE (`Lands.*`) y, después, los componentes que dependen de
@@ -5,7 +7,7 @@ ella. Recoge el análisis de cuatro generadores de referencia, los criterios aco
 tiene y se reutiliza, los algoritmos elegidos (los de las referencias o uno más eficiente para esta
 arquitectura), la API, las fases con sus criterios de aceptación, el catálogo de ejemplos y la validación.
 
-Documento local, fuera de git (`.git/info/exclude`). Lo que quede vigente al cerrar cada fase se traslada a
+Documento versionado. Lo que quede vigente al cerrar cada fase se traslada a
 `docs/status.md`, `docs/todo.md` y `docs/lua_reference.md`, como siempre.
 
 Revisión 2: inventario de lo reutilizable, algoritmos detallados, op fusionado `Lands`, herramientas para

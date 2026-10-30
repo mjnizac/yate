@@ -10,7 +10,7 @@
 #   tools/dev.sh lands-check <script.lua> --bounds ... --expect count=N,area=MIN..MAX,land=MIN..MAX
 #   tools/dev.sh clean [DAYS]                                   removes out/ entries untouched for DAYS (7)
 #   tools/dev.sh lint                                           mechanical checks of the CLAUDE.md rules over src/ and include/
-#   tools/dev.sh headings [doc]                                 line numbers of a doc's headings (default docs/decisions.md)
+#   tools/dev.sh headings [doc]                                 line numbers of a doc's headings (default docs/archive/decisions.md)
 #   tools/dev.sh docs-check                                     the docs agree with the repo: paths, suites, op count, todo
 #
 # `review` exports the script as raw floats, measures it (out/review/<name>/metrics.json), writes a
@@ -187,7 +187,7 @@ lint() {
 }
 
 # Lines of the Markdown headings of a doc, `line: # heading`, to read a section by offset instead of the file.
-headings() { grep -nE '^#{1,4} ' "$ROOT/${1:-docs/decisions.md}"; }
+headings() { grep -nE '^#{1,4} ' "$ROOT/${1:-docs/archive/decisions.md}"; }
 
 # Checks that the docs agree with the repo: every path they quote exists, the suites and the op count in status.md
 # match ctest and OpKind, no finished task stays in todo.md. Scripts nothing refers to are only listed.

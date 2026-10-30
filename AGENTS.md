@@ -15,10 +15,14 @@ The export path is the product. The viewer is a tool for iterating on it.
 | [docs/lua_api.md](docs/lua_api.md) | Script API index |
 | [docs/lua_reference.md](docs/lua_reference.md) | Every op, parameter by parameter, with pictures |
 | [docs/status.md](docs/status.md) | Where the engine is right now |
-| [docs/decisions.md](docs/decisions.md) | Why it is the way it is, and what went wrong on the way |
+| [docs/design.md](docs/design.md) | The decisions that still hold, one bullet each, with where their story is |
+| [docs/archive/decisions.md](docs/archive/decisions.md) | The history: why it is the way it is, and what went wrong on the way |
 | [docs/roadmap.md](docs/roadmap.md) | Medium and long-term direction |
 | [docs/todo.md](docs/todo.md) | Concrete open tasks |
 
 Start with `docs/status.md`. It is short on purpose: current state, the numbers that matter and the
-known defects. Read `docs/decisions.md` only when you need to know *why* something is the way it is —
+known defects. Read `docs/design.md` before changing a subsystem; open `docs/archive/decisions.md` only for the story behind one of its bullets —
 it is the long history and it is not meant to be read front to back.
+
+`docs/archive/decisions.md`, `docs/lua_reference.md`, `docs/archive/lands_plan.md` and `docs/spec.md` run to hundreds or
+thousands of lines: grep for the heading or identifier and read only that section.

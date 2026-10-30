@@ -1,7 +1,7 @@
 # Status
 
 Where the engine is right now. The reasoning behind every decision, and every defect found along the
-way, is in `docs/decisions.md`; open work is in `docs/todo.md`.
+way is in `docs/design.md` (standing decisions) and `docs/archive/decisions.md` (the history); open work is in `docs/todo.md`.
 
 | # | Milestone | State |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ continent, pangea, old_world, mediterranean, peninsula, isthmus, fractious, takl
 (islands in 96 km cells, continents in cells four times that, made incrementally within a `budget` for the
 viewer's `--follow`; `assets/scripts/lands/infinite_world.lua`). The raster passes it needs (distance,
 morphology, blur, beach projection, resampling, the triangles, the drainage, the labels, a keep across runs)
-are C++ (`Raster.*`). The plan is in `docs/lands_plan.md` (local): phases 1
+are C++ (`Raster.*`). The plan is in `docs/archive/lands_plan.md` (archived): phases 1
 (islands), 2 (archipelagos) and 3 (continents and other lands) are done; the outlines (`docs/todo.md`) come
 before phase 4.
 

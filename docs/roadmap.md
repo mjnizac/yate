@@ -7,7 +7,7 @@ not another milestone but the work in `docs/todo.md`. CI has been written and ha
 that compare a result against something the engine did not produce itself exist now, and the
 correctness item that remains is the erosion iteration count, which is still per cell.
 
-The reason that ordering is not negotiable is in `docs/decisions.md`: every defect this project has
+The reason that ordering is not negotiable is in `docs/archive/decisions.md`: every defect this project has
 had reached acceptance with a green suite, because the suite only ever compared the engine against
 itself.
 
@@ -45,6 +45,27 @@ scheduling.
 - **Distributed export.** Sections are already independent and deterministic, so splitting a job
   across machines is an orchestration problem. Worth doing only once single-machine throughput is
   measured and understood.
+
+## Lands, phases 4 to 8
+
+Phases 1 to 3 (islands, archipelagos, continents) are done; the outlines in `docs/todo.md` come before
+these. The detail of each step, with the algorithms and their sources, is in `docs/archive/lands_plan.md`
+section 12 (`tools/dev.sh headings docs/archive/lands_plan.md`).
+
+- **4, detail on the shapes.** Three-band coast warp with a roughness field per element; relief noise whose
+  amplitude in metres follows the distance to the interior and fades on the summits; a `field` element
+  (noise threshold) for fully procedural coasts; `Erosion.Gullies` and `Erosion.StreamPower` through
+  `Terrain.Sample`; exact distance in C++ only if erosion moves the coast; fetch by ray marching.
+- **5, hydrology.** `Water.Network` and `Water.Drain` over the composed surface; closed, salt, dry and
+  frozen lakes by evaporation balance; inland seas as water bodies with a level; river width from flow;
+  drainage weighted by rainfall once phase 7 exists.
+- **6, whole ocean.** Margin per stretch of coast; sea-floor primitives as elements with ids (trench,
+  mid-ocean ridge, basin, submarine canyon, reef); seamounts and guyots by `scatter`; abyssal hills.
+- **7, climate and biomes.** More than the current output limit; temperature by latitude and lapse rate;
+  wind-driven rainfall with orographic shadow; humidity from fresh water; biomes by a Whittaker table.
+- **8, infrastructure.** `engine.memo` or `Terrain.Bake` if the viewer suffers; table-driven `check_args`
+  across the prelude; a golden-failure message with the box and the largest difference; `scatter` in a
+  shader if `region` falls short.
 
 ## Non-goals
 
