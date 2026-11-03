@@ -1851,6 +1851,32 @@ void TestDisplaceAgreesWithSampler() {
     CHECK(worst < 0.01f);
 }
 
+/// Cells read through a position field on the GPU and on the CPU sampler. A constant position makes the
+/// whole field one cell's value, which a kernel ignoring its position (the first version did, the flag
+/// sat in a word the iteration overwrites) cannot produce; the sampler must read the same value.
+void TestCellsPosition() {
+    test::Section("Cells follows its position field, on the GPU and in the sampler");
+    const Field diff = Export("cells_position", R"(
+    local c = Terrain.Coords{}
+    local fixed = Vec.Combine{ c.x * 0 + 1234.5, c.y * 0 - 678.25 }
+    local v = Noises.Cells{ frequency = 1 / 300, style = "F2-F1", metric = "quasi", lattice = "hex", position = fixed }
+    local s = Terrain.Sample{ value = v, origin = { -256, -256 }, size = { 8, 8 }, cell = 64 }
+    local result = v + Noises.Cells{ frequency = 1 / 300, style = "cell", position = fixed } * 100
+                   - Terrain.Grid{ values = s, size = { 8, 8 }, origin = { -256, -256 }, cell = 64 })");
+    CHECK(diff.Ok());
+    float lowest  = 1e9f;
+    float highest = -1e9f;
+    for (const float v : diff.values) {
+        lowest  = std::min(lowest, v);
+        highest = std::max(highest, v);
+    }
+    std::printf("     constant position: field in [%.6f, %.6f]\n", static_cast<double>(lowest),
+                static_cast<double>(highest));
+    // One value everywhere: the cell's random value times 100, the sampled F2-F1 cancelled.
+    CHECK(highest - lowest < 1e-4f);
+    CHECK(highest > 0.0f);
+}
+
 int main() {
     for (const char* path : {"out", kDirectory}) {
         REQUIRE_OK(engine::platform::MakeDirectory(path));
@@ -1874,6 +1900,7 @@ int main() {
     TestContinuity();
     TestWaterAgreesWithSampler();
     TestDisplaceAgreesWithSampler();
+    TestCellsPosition();
     TestShapeSets();
     TestSectionsAndInteraction();
     TestTerrainIndicators();

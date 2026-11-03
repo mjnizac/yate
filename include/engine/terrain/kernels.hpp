@@ -96,6 +96,11 @@ struct NoiseSample {
 [[nodiscard]] NoiseSample EvalNoise(const Graph::NoiseParams& params, u32_t seed,
                                     std::array<f32_t, 3> position);
 
+/// CPU reference for `Cells`: the value and the cell (site x, site z in metres, random value), at a
+/// position in metres. Mirrors cells.comp.glsl.
+[[nodiscard]] std::array<f32_t, 4> EvalCells(const Graph::CellsParams& params, u32_t seed, f32_t x,
+                                             f32_t z);
+
 /// Pipeline map keyed by `(op, variant, domain)`.
 ///
 /// Pipelines are created on first use and kept for the process. Changing a numeric parameter never

@@ -241,6 +241,18 @@ constexpr OpInfo kOps[] = {
      // Reads a neighbourhood; test_kernels compares it against a CPU bilinear read of its own.
      .hasReference   = false,
      .specFieldCount = 0},
+    {.kind           = OpKind::Cells,
+     .name           = "Cells",
+     .shader         = "ops/cells.comp.spv",
+     .nodeClass      = NodeClass::Pointwise,
+     // The optional position field.
+     .maxInputs      = 1,
+     .maxChannels    = 2,
+     .channelNames   = {"value", "cell"},
+     .resolutionWord = 6,
+     // Depends on world position; EvalCells is its reference, compared in test_noise.
+     .hasReference   = false,
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -882,6 +894,7 @@ b8_t EvalPointwise(const Graph::Node& node,
         case OpKind::Lands:
         case OpKind::Blur:
         case OpKind::Displace:
+        case OpKind::Cells:
         case OpKind::Count:
             // Both depend on world position, which a pointwise reference does not receive.
             return false;
@@ -918,6 +931,63 @@ NoiseSample EvalNoise(const Graph::NoiseParams& params, u32_t seed,
     result.gradient[0] = sample.gradient[0];
     result.gradient[1] = sample.gradient[1];
     return result;
+}
+
+std::array<f32_t, 4> EvalCells(const Graph::CellsParams& params, u32_t seed, f32_t x, f32_t z) {
+    const auto metric = [&](f32_t dx, f32_t dy) {
+        const f32_t ax = std::fabs(dx);
+        const f32_t ay = std::fabs(dy);
+        switch (params.metric) {
+            case 1: return ax + ay;
+            case 2: return std::max(ax, ay);
+            case 3: return std::max(ax, ay) + 0.41421356f * std::min(ax, ay);
+            default: return std::sqrt(dx * dx + dy * dy);
+        }
+    };
+    const f32_t px      = x * params.frequency;
+    const f32_t py      = z * params.frequency;
+    const f32_t rowStep = params.hex ? 0.8660254f : 1.0f;
+    const i32_t bx      = static_cast<i32_t>(std::floor(px));
+    const i32_t by      = static_cast<i32_t>(std::floor(py / rowStep));
+    std::array<f32_t, 4> d{1e9f, 1e9f, 1e9f, 1e9f};
+    f32_t sx      = 0.0f;
+    f32_t sy      = 0.0f;
+    u32_t nearest = 0;
+    for (i32_t j = -2; j <= 2; ++j) {
+        for (i32_t i = -2; i <= 2; ++i) {
+            const i32_t lx    = bx + i;
+            const i32_t ly    = by + j;
+            const u32_t h     = HashLattice2(lx, ly, seed);
+            const f32_t rx    = HashToUnit(h) - 0.5f;
+            const f32_t ry    = HashToUnit(HashMix(h ^ kHashPhi)) - 0.5f;
+            const f32_t shift = params.hex && (ly & 1) != 0 ? 0.5f : 0.0f;
+            const f32_t qx    = static_cast<f32_t>(lx) + 0.5f + shift + params.jitter * rx;
+            const f32_t qy    = (static_cast<f32_t>(ly) + 0.5f + params.jitter * ry) * rowStep;
+            const f32_t dd    = metric(px - qx, py - qy);
+            // The same strict insertion as the shader, so ties break alike.
+            for (usize_t k = 0; k < 4; ++k) {
+                if (dd < d[k]) {
+                    for (usize_t m = 3; m > k; --m) {
+                        d[m] = d[m - 1];
+                    }
+                    d[k] = dd;
+                    if (k == 0) {
+                        sx      = qx;
+                        sy      = qy;
+                        nearest = h;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    const f32_t cell = HashToUnit(HashMix(nearest ^ 0x85EBCA6Bu));
+    constexpr std::array<std::array<u8_t, 2>, 6> kDifferences{
+        {{1, 0}, {2, 1}, {2, 0}, {3, 2}, {3, 1}, {3, 0}}};
+    const f32_t value = params.style <= 3 ? d[params.style]
+                      : params.style <= 9 ? d[kDifferences[params.style - 4][0]] - d[kDifferences[params.style - 4][1]]
+                                          : cell;
+    return {value * params.amplitude + params.offset, sx / params.frequency, sy / params.frequency, cell};
 }
 
 // --- KernelLibrary --------------------------------------------------------------------------------

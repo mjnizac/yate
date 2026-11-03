@@ -89,6 +89,7 @@ numbers drift, and this one is the index.
 | `Curves.Clamp`, `Remap`, `Power`, `Smoothstep` | the input's mapping | pointwise; `Remap` assumes a `[-1, 1]` input and `Power` only means what you want on a field in `[-1, 1]` |
 | `Filters.Blur` | the input's mapping | radius in **samples**, not metres; its radius becomes halo |
 | `Filters.Expand`, `Filters.Shrink` | the input's mapping | the same window taking its largest or smallest value: grows or shrinks a mask, dilates or erodes a height; `falloff = "cone"` or `"round"` with a `slope` is the constant-slope (Linear Slope) or rounded (Gaussian) expander |
+| `Noises.Cells` | `R2->R1` value, `.cell` `R2->R3` | one octave of Voronoi: F1..F4 and their differences, or a random value per cell; four metrics, jitter, square or hex lattice; `.cell` is the nearest site in metres and its random value, Crystallize through `position` |
 | `Filters.Displace` | `R2->R1` | a finished field read where `by` (`R2->R2`, metres) moves each sample, capped at `radius` samples; bends what a neighbourhood op made |
 | `Vec.Combine` | `Rn -> Rm` | a positional list of 2 to 4 scalars |
 | `Terrain.Transform` | `R2->R2` | moves, turns and scales a position field; what places a shape |

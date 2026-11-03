@@ -748,6 +748,40 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     noises.set_function("Cellular", [noise](sol::this_state lua, sol::table table) {
         return noise(lua, std::move(table), "Noises.Cellular", "cellular");
     });
+    // One octave of Voronoi cells with every World Machine style and metric; `.cell` is the nearest site
+    // in metres and a random value per cell, so `position = c.cell.xz`-style reads crystallize a field.
+    noises.set_function("Cells", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Noises.Cells", location);
+        constexpr std::array<std::string_view, 11> kStyles = {
+            "F1", "F2", "F3", "F4", "F2-F1", "F3-F2", "F3-F1", "F4-F3", "F4-F2", "F4-F1", "cell"};
+        constexpr std::array<std::string_view, 4> kMetrics = {"euclidean", "manhattan", "chebyshev",
+                                                              "quasi"};
+        const std::string style   = args.Text("style", "F1");
+        const std::string metric  = args.Text("metric", "euclidean");
+        const std::string lattice = args.Text("lattice", "square");
+        const auto        s       = std::find(kStyles.begin(), kStyles.end(), style);
+        const auto        m       = std::find(kMetrics.begin(), kMetrics.end(), metric);
+        if (s == kStyles.end() || m == kMetrics.end() || (lattice != "square" && lattice != "hex")) {
+            Fail(location, "Noises.Cells expects style F1..F4, F2-F1, F3-F2, F3-F1, F4-F3, F4-F2, F4-F1 or "
+                           "cell, metric euclidean, manhattan, chebyshev or quasi, and lattice square or "
+                           "hex; got '{}', '{}', '{}'", style, metric, lattice);
+        }
+        Graph::CellsParams params;
+        params.style     = static_cast<u32_t>(s - kStyles.begin());
+        params.metric    = static_cast<u32_t>(m - kMetrics.begin());
+        params.hex       = lattice == "hex";
+        params.frequency = args.Float("frequency", 0.002);
+        params.jitter    = args.Float("jitter", 1.0);
+        params.amplitude = args.Float("amplitude", 1.0);
+        params.offset    = args.Float("offset", 0.0);
+        params.seedSalt  = args.Count("seed", 0, 0, ~0u);
+        if (args.Has("position")) {
+            params.position = args.Input("position");
+        }
+        args.Finish();
+        return Handle{Unwrap(graph.AddCells(params, location))};
+    });
 
     // --- Terrain --------------------------------------------------------------------------------
 

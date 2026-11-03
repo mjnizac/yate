@@ -1007,6 +1007,44 @@ Result<Value> Graph::AddHydraulicErosion(Value input, const HydraulicParams& par
     return Append(node, location);
 }
 
+Result<Value> Graph::AddCells(const CellsParams& params, SourceLocation location) {
+    if (!(params.frequency > 0.0f) || params.style > 10 || params.metric > 3
+        || !(params.jitter >= 0.0f && params.jitter <= 1.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Cells expects a frequency above 0 and a jitter in [0, 1], got {} and {}", params.frequency,
+            params.jitter));
+    }
+    const b8_t warped = params.position.IsValid();
+    if (warped) {
+        if (Status checked = CheckValue(params.position, "Cells position", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(params.position.mapping == Mapping{Domain::R2, 2})) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "Cells expects an R2->R2 position, got {}", ToString(params.position.mapping)));
+        }
+    }
+    Node node;
+    node.kind         = OpKind::Cells;
+    node.nodeClass    = NodeClass::Pointwise;
+    node.inputCount   = warped ? 1 : 0;
+    node.inputs[0]    = params.position;
+    node.channelCount = 2;
+    node.channels[0]  = Mapping{Domain::R2, 1};
+    node.channels[1]  = Mapping{Domain::R2, 3};
+    std::memcpy(&node.params[0], &params.frequency, sizeof(f32_t));
+    node.params[1] = params.style;
+    // The lattice and the warp share the metric's word: words 8 and 9 belong to the iteration.
+    node.params[2] = params.metric | (params.hex ? 0x100u : 0u) | (warped ? 0x200u : 0u);
+    std::memcpy(&node.params[3], &params.jitter, sizeof(f32_t));
+    std::memcpy(&node.params[4], &params.amplitude, sizeof(f32_t));
+    std::memcpy(&node.params[5], &params.offset, sizeof(f32_t));
+    node.params[7] = params.seedSalt;
+    return Append(node, location);
+}
+
 Result<Value> Graph::AddCombine(const Value* components, u8_t count, SourceLocation location) {
     if (components == nullptr || count < 2 || count > kMaxComponents) {
         return std::unexpected(MakeScriptError(

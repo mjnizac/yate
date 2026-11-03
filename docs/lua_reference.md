@@ -295,6 +295,36 @@ return {
 }
 ```
 
+### `Noises.Cells`
+
+One octave of Worley / Voronoi cells with every style World Machine's Voronoi device has. Pointwise and
+R2 only. `Noises.Cellular` stays the fractal F2 - F1 / F3 - F1 with a gradient; `Cells` is the device.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `frequency` | `0.002` | cells per metre |
+| `style` | `"F1"` | `F1`..`F4` (distance to the n-th nearest site, in cells), `F2-F1`, `F3-F2`, `F3-F1`, `F4-F3`, `F4-F2`, `F4-F1`, or `cell`: a random value in [0, 1) per cell, a flat plate (WM's Cellular F1) |
+| `metric` | `"euclidean"` | `euclidean`, `manhattan`, `chebyshev` (WM's Chessboard), `quasi` (Quasi-Euclidean) |
+| `jitter` | `1.0` | how far each site strays from its lattice cell's centre, [0, 1]: 0 is a regular grid |
+| `lattice` | `"square"` | `square` or `hex` (rows half a cell apart: hexagons at `jitter = 0`) |
+| `amplitude`, `offset` | `1`, `0` | value times amplitude plus offset |
+| `seed`, `position` | | as the noises |
+
+Channel 1, `.cell`, is `R2 -> R3`: the nearest site's x and z in metres, and the cell's random value.
+Feeding the site to another generator's `position` makes it constant over each cell, which is World
+Machine's Crystallize, and exact at any cell size:
+
+```lua
+local c      = Noises.Cells{ frequency = 1 / 3, lattice = "hex", jitter = 0.25 }
+local site   = Vec.Combine{ c.cell.x, c.cell.y }
+-- Basalt columns: each the height of the slope at its centre, plus a random step of up to 0.8 m.
+local column = Noises.fBm{ frequency = 1 / 400, amplitude = 30, position = site }.value + c.cell.z * 0.8
+```
+
+The forum's recipes: Cellular F1 with Quasi-Euclidean for stepped plates on a mountain (thread 7148),
+F4-F1 driving a displacement for broken cliffs (7148), F2-F1 multiplied into a gradient for coastal
+headlands (6012).
+
 ### `Terrain.Const`
 
 | Key | Default | Meaning |

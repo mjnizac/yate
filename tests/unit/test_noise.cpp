@@ -277,6 +277,94 @@ void CheckNormalization(NoiseKind kind, Domain domain, const char* label) {
 
 } // namespace
 
+/// Dispatches cells.comp over one R2 section and compares both channels with `EvalCells`. A sample may
+/// sit on a cell border where the two sides legitimately pick different sites, so the criterion is the
+/// fraction of samples that differ, as for the noise above.
+void CheckCells(Context& context) {
+    const SectionExtent extent{.x = 64, .y = 1, .z = 64};
+    const Mapping       valueMapping{Domain::R2, 1};
+    const Mapping       cellMapping{Domain::R2, 3};
+    const u64_t         samples = SampleCount(valueMapping, extent, kHalo);
+    const std::array<i32_t, 3> origin{97, 0, -53};
+    Result<ComputePipeline> pipeline =
+        ComputePipeline::Create(context.Device(), "ops/cells.comp.spv",
+                                WorkgroupSpecialization(static_cast<u32_t>(Domain::R2)),
+                                context.Pipelines().Handle());
+    REQUIRE_OK_VOID(pipeline);
+    for (u32_t style = 0; style <= 10; ++style) {
+        Graph::CellsParams params;
+        params.frequency = 0.07f;
+        params.style     = style;
+        params.metric    = style % 4;
+        params.jitter    = style == 3 ? 0.0f : 0.8f;
+        params.hex       = style % 3 == 1;
+        params.amplitude = 2.0f;
+        params.offset    = -0.5f;
+
+        Result<SectionSlot> valueSlot =
+            context.Sections().Acquire(ClassOf(valueMapping, extent, kHalo), ValueSize(valueMapping, extent, kHalo));
+        REQUIRE_OK_VOID(valueSlot);
+        Result<SectionSlot> cellSlot =
+            context.Sections().Acquire(ClassOf(cellMapping, extent, kHalo), ValueSize(cellMapping, extent, kHalo));
+        REQUIRE_OK_VOID(cellSlot);
+        KernelPushConstants constants{};
+        constants.origin = origin;
+        constants.extent = {extent.x, extent.y, extent.z};
+        constants.halo   = kHalo;
+        constants.SetDomain(static_cast<u32_t>(Domain::R2));
+        constants.SetChannelMask(0x3);
+        constants.seed       = kSeed;
+        constants.outputs[0] = valueSlot->address;
+        constants.outputs[1] = cellSlot->address;
+        PackFloat(constants, 0, params.frequency);
+        constants.params[1] = params.style;
+        constants.params[2] = params.metric | (params.hex ? 0x100u : 0u);
+        PackFloat(constants, 3, params.jitter);
+        PackFloat(constants, 4, params.amplitude);
+        PackFloat(constants, 5, params.offset);
+        PackFloat(constants, 6, kResolution);
+
+        Result<test::Readback> values = test::RunKernel(context, *pipeline, *valueSlot, constants,
+                                                        ValueSize(valueMapping, extent, kHalo));
+        REQUIRE_OK_VOID(values);
+        std::pmr::vector<f32_t> value(samples, &memory::General().Resource());
+        std::memcpy(value.data(), values->data, static_cast<usize_t>(samples * sizeof(f32_t)));
+        context.Readback().ReleaseOldest();
+        Result<test::Readback> cells = test::RunKernel(context, *pipeline, *cellSlot, constants,
+                                                       ValueSize(cellMapping, extent, kHalo));
+        REQUIRE_OK_VOID(cells);
+
+        const u32_t n = extent.x + 2 * kHalo;
+        u64_t divergent = 0;
+        f32_t lowest = 1e9f;
+        f32_t highest = -1e9f;
+        for (u32_t z = 0; z < n; ++z) {
+            for (u32_t x = 0; x < n; ++x) {
+                const usize_t at = static_cast<usize_t>(z) * n + x;
+                const std::array<f32_t, 3> world = WorldPosition(Domain::R2, origin, x, 0, z);
+                const std::array<f32_t, 4> cpu   = terrain::EvalCells(params, kSeed, world[0], world[2]);
+                b8_t off = std::fabs(value[at] - cpu[0]) > 1e-4f;
+                for (usize_t c = 0; c < 3; ++c) {
+                    off = off || std::fabs(cells->data[at * 3 + c] - cpu[c + 1]) > 1e-3f;
+                }
+                divergent += off ? 1 : 0;
+                lowest  = std::min(lowest, value[at]);
+                highest = std::max(highest, value[at]);
+            }
+        }
+        context.Readback().ReleaseOldest();
+        std::printf("     style %2u metric %u%s: %llu of %llu divergent, value in [%.3f, %.3f]\n", style,
+                    params.metric, params.hex ? " hex" : "", static_cast<unsigned long long>(divergent),
+                    static_cast<unsigned long long>(samples), static_cast<f64_t>(lowest),
+                    static_cast<f64_t>(highest));
+        CHECK(divergent * 200 < samples);
+        // Every style varies over a section 4.5 cells across.
+        CHECK(highest - lowest > 0.05f);
+        context.Sections().Release(*cellSlot);
+        context.Sections().Release(*valueSlot);
+    }
+}
+
 int main() {
     const Result<Application*> application =
         engine::init(AppInfo{.mode = RunMode::Headless, .name = "test_noise"});
@@ -501,6 +589,9 @@ int main() {
             context.Sections().Release(*valueSlot);
         }
         }
+
+        test::Section("Cells: the kernel matches EvalCells for every style, metric and lattice");
+        CheckCells(context);
 
         CHECK_EQ(context.Sections().UsedBytes(), VkDeviceSize{0});
         return 0;

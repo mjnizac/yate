@@ -561,6 +561,28 @@ private:
                 }
                 return {};
             }
+            case OpKind::Cells: {
+                Graph::CellsParams params;
+                params.frequency = Word(node, 0);
+                params.style     = node.params[1];
+                params.metric    = node.params[2] & 0xFFu;
+                params.jitter    = Word(node, 3);
+                params.amplitude = Word(node, 4);
+                params.offset    = Word(node, 5);
+                params.hex       = (node.params[2] & 0x100u) != 0u;
+                const u32_t seed = m_seed ^ (node.params[7] * kHashPhi);
+                const b8_t  warped = node.inputCount == 1;
+                for (usize_t p = 0; p < positions.size(); ++p) {
+                    const std::array<f32_t, 4> c =
+                        EvalCells(params, seed, warped ? input(0, p)[0] : positions[p][0],
+                                  warped ? input(0, p)[1] : positions[p][1]);
+                    own[p][0][0] = c[0];
+                    own[p][1][0] = c[1];
+                    own[p][1][1] = c[2];
+                    own[p][1][2] = c[3];
+                }
+                return {};
+            }
             case OpKind::Water:
                 for (usize_t p = 0; p < positions.size(); ++p) {
                     const std::array<f32_t, 2> w = EvalWater(m_graph, node, input(0, p)[0], input(0, p)[1], input(1, p)[0]);

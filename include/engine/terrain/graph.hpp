@@ -102,6 +102,10 @@ enum class OpKind : u16_t {
     /// A field read at its own sample moved by an offset field (metres, bilinear between the taps), the
     /// offset capped at a declared radius. Neighbourhood: World Machine's Displacement.
     Displace,
+    /// Worley / Voronoi cells, one octave, from a position: World Machine's Voronoi. Channel 0 is the
+    /// value (an F-distance, a difference of two, or the cell's random value), channel 1 the nearest
+    /// site in metres and the cell's random value. Pointwise.
+    Cells,
     Count,
 };
 
@@ -338,6 +342,28 @@ public:
 
     /// Returns the value channel. `Channel(value, 1)` selects the analytic gradient.
     [[nodiscard]] Result<Value> AddNoise(const NoiseParams& params, SourceLocation location);
+
+    struct CellsParams {
+        /// Cells per metre, strictly positive.
+        f32_t frequency = 0.002f;
+        /// 0 F1, 1 F2, 2 F3, 3 F4, 4 F2-F1, 5 F3-F2, 6 F3-F1, 7 F4-F3, 8 F4-F2, 9 F4-F1, 10 the
+        /// cell's random value in [0, 1).
+        u32_t style = 0;
+        /// 0 Euclidean, 1 Manhattan, 2 Chebyshev, 3 quasi-Euclidean.
+        u32_t metric = 0;
+        /// How far each site strays from its lattice cell's centre, in [0, 1]: 0 is a regular grid.
+        f32_t jitter    = 1.0f;
+        f32_t amplitude = 1.0f;
+        f32_t offset    = 0.0f;
+        u32_t seedSalt  = 0;
+        /// Hexagonal lattice instead of square.
+        b8_t  hex = false;
+        /// Optional `R2 -> R2` position in metres; invalid means the sample's own.
+        Value position{};
+    };
+
+    /// Voronoi cells. Returns the value channel; channel 1 is the cell (site x, site z, random).
+    [[nodiscard]] Result<Value> AddCells(const CellsParams& params, SourceLocation location);
 
     /// `gradient` must be `R2 -> R2`. Produces `R2 -> R3`.
     [[nodiscard]] Result<Value> AddNormals(Value gradient, f32_t verticalScale,
