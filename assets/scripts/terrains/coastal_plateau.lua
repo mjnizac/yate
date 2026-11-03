@@ -17,12 +17,13 @@
 --      cells (planar faces, sharp breaks); strata ledges on the walls only.
 --   3. Faces: the expander (an octagon over the cliff band only, wider on the headlands), which turns
 --      every rounded outline into straight faces; then talus aprons at 35 degrees against the wall's foot.
---   4. Displacement: the outline read through a broad warp (applied to the forms: displacing the expanded
---      field needs a GPU displacement op the engine does not have yet).
+--   4. Displacement: the outline read through a broad warp, then the finished field displaced
+--      (`Filters.Displace`), which bends the expander's straight faces into arcs.
 --
 -- Parameters: `seed`, `stage` (1 to 4), `top`, `shelf`, `floor` (metres, sea at 0), `shelf_width`,
 -- `columns` (metres the blocks break out), `expand` (the expander's half-window, metres), `shape` (its window:
--- square, octagon, diamond or disk), `displace` (the displacement's amplitude, metres).
+-- square, octagon, diamond or disk), `displace` (the outline warp's amplitude, metres), `bend` (the
+-- displacement of the faces, metres).
 
 local function main(params)
     local seed       = params.seed or 0
@@ -34,12 +35,11 @@ local function main(params)
     local columns    = params.columns or 6.0
     local expand     = params.expand or 20.0
     local displace   = params.displace or 40.0
+    local bend       = params.bend or 10.0
     local rise       = top - shelf
 
-    -- 4. Displacement, applied to the forms: the outline read through a broad warp. Displacing after the
-    -- expander needs the expanded field resampled, and `Terrain.Sample` (the CPU path) passes neighbourhood
-    -- ops through untouched, so the expander was silently lost; until there is a GPU displacement op the
-    -- faces keep the expander's directions and the outline bends instead.
+    -- 4. Displacement, first of the forms: the outline read through a broad warp (longer than a
+    -- displacement's reach at fine spacings); the faces are bent at the end.
     local position = stage >= 4 and Shapes.Warp{ amplitude = displace, frequency = 1 / 700, octaves = 1, seed = seed }
                      or Terrain.Coords{}
 
@@ -113,6 +113,16 @@ local function main(params)
         local spread = Noises.fBm{ frequency = 1 / 180, octaves = 2, amplitude = 7.0, offset = 13.0, seed = seed + 7 }
         local wedge = Curves.Clamp{ input = (spread.value + u) * math.tan(math.rad(35.0)), min = 0.0, max = rise * 0.35 }
         h = Combine.Max{ a = h, b = sea + wedge }
+    end
+
+    -- 4. The faces bent: the finished field read `bend` metres away along a smooth warp, so the expander's
+    -- straight runs curve into arcs and its corners swing, as World Machine's Displacement after an Expander.
+    if stage >= 4 and bend > 0 then
+        local spacing = params.resolution
+        local by = Vec.Combine{
+            Noises.fBm{ frequency = 1 / 160, octaves = 2, amplitude = bend, seed = seed + 8 }.value,
+            Noises.fBm{ frequency = 1 / 160, octaves = 2, amplitude = bend, seed = seed + 9 }.value }
+        h =Filters.Displace{ input = h, by = by, radius = math.min(32, math.max(1, math.ceil(bend * 1.5 / spacing))) }
     end
 
     return {
