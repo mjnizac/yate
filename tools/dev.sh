@@ -88,8 +88,7 @@ review() {
             args+=(--shot "$shot=$out/view_$i.png"); i=$((i + 1))
         done
         "$bin/terrain_viewer" --script "$script" --seed "$seed" --target "$target" --ring 5 \
-            --log-level warn "${params[@]}" "${args[@]}" 2>/dev/null \
-            || echo "dev.sh review: terrain_viewer exited with $? (it crashes on shutdown after the shots)" >&2
+            --log-level warn "${params[@]}" "${args[@]}"
     fi
     grep -o '"timings_ms": {[^}]*}' "$out/metadata.json" | grep -o '"total": [0-9.]*\|"script": [0-9.]*' \
         | tr '\n' ' '
