@@ -1,0 +1,12 @@
+{
+  "family": "cliffs",
+  "note": "Real height fields come from tools/dev.sh dem (AWS Terrain Tiles, open data from USGS 3DEP and others); only the hillshade (sun 180,35) is kept here, the heights are regenerated with the command. kind as in alpine/refs.json.",
+  "images": [
+    { "file": "book_cliffs_hillshade.png", "kind": "shaded", "dem": "tools/dev.sh dem 39.68,-110.74 --zoom 13 --tiles 3 --out out/dem/book_cliffs",
+      "size_m": 11295, "height_m": 760,
+      "note": "Book Cliffs front north of Price, Utah: a south-facing escarpment dissected into dendritic ridges and ravines (no sheer wall), over a pediment plain cut by inverted gravel channels. North is up.",
+      "measured": { "resolution_m": 14.7, "heights_m": { "p10": 1879, "p50": 2087, "p90": 2536, "p99": 2639 },
+                    "slope_p50": 16.5, "slope_p999": 59.6, "steep45": 0.0216, "talus_share": 0.1623,
+                    "local_relief_m": 234, "hypsometric_integral": 0.425, "drainage_density": 1.96, "spectral_slope": 4.18 } }
+  ]
+}
