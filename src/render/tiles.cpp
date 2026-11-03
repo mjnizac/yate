@@ -23,6 +23,14 @@ using terrain::Value;
 
 constexpr u64_t kGpuTimeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
 
+/// Most dispatches recorded into one command buffer before it is submitted and waited on.
+///
+/// Each dispatch opens a Tracy GPU zone, two timestamps in a pool of 64K that Tracy only recycles from
+/// results the GPU has finished. A whole ring recorded at once wrapped the pool onto timestamps nobody had
+/// reset, and Tracy's collection then wrote twice its result buffer: a heap overrun that crashed the
+/// viewer on shutdown. This keeps what is outstanding at a chunk plus a tile, far inside both bounds.
+constexpr usize_t kMaxDispatchesPerSubmit = 4096;
+
 /// Largest tile side the preview accepts.
 ///
 /// Set by the row-by-row interior copy: one `VkBufferCopy` per row, in a fixed-size array so building a
@@ -368,9 +376,10 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
     return built;
 }
 
-/// Evaluates `keys` into freshly acquired slots, appended to `out`, in one command buffer: one submit and
-/// one wait for the lot, not one each. A tile's own work is a fraction of a millisecond on the GPU; the
-/// round trip to submit it and wait was most of what it cost.
+/// Evaluates `keys` into freshly acquired slots, appended to `out`, in as few command buffers as
+/// `kMaxDispatchesPerSubmit` allows: one submit and one wait per chunk, not one per tile. A tile's own
+/// work is a fraction of a millisecond on the GPU; the round trip to submit it and wait was most of what
+/// it cost.
 [[nodiscard]] Status EvaluateTiles(vulkan::Context& context, terrain::KernelLibrary& kernels, Terrain& built,
                                    std::span<const TileKey> keys, u32_t seed, std::pmr::vector<Tile>& out) {
 #ifdef TRACY_ENABLE
@@ -386,11 +395,31 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
         return std::unexpected(error);
     };
     vulkan::Queue&          queue    = context.ComputeQueue();
+    const auto submitAndWait = [&](VkCommandBuffer buffer) -> Status {
+        Result<u64_t> submitted = queue.EndAndSubmit(buffer);
+        if (!submitted) {
+            return std::unexpected(submitted.error());
+        }
+        return queue.WaitTimeline(*submitted, kGpuTimeoutNanoseconds);
+    };
     Result<VkCommandBuffer> commands = queue.BeginOneShot();
     if (!commands) {
         return std::unexpected(commands.error());
     }
+    const usize_t dispatches = built.compiled.dispatches.size();
+    usize_t       recorded   = 0;
     for (const TileKey& key : keys) {
+        if (recorded > 0 && recorded + dispatches > kMaxDispatchesPerSubmit) {
+            if (Status done = submitAndWait(*commands); !done) {
+                return fail(done.error());
+            }
+            commands = queue.BeginOneShot();
+            if (!commands) {
+                return fail(commands.error());
+            }
+            recorded = 0;
+        }
+        recorded += dispatches;
         Result<Tile> tile = RecordTile(context, kernels, built, key, seed, *commands);
         if (!tile) {
             (void)queue.EndAndSubmit(*commands);
@@ -398,12 +427,8 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
         }
         out.push_back(*tile);
     }
-    Result<u64_t> submitted = queue.EndAndSubmit(*commands);
-    if (!submitted) {
-        return fail(submitted.error());
-    }
-    if (Status waited = queue.WaitTimeline(*submitted, kGpuTimeoutNanoseconds); !waited) {
-        return fail(waited.error());
+    if (Status done = submitAndWait(*commands); !done) {
+        return fail(done.error());
     }
     return {};
 }
