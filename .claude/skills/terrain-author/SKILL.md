@@ -64,6 +64,32 @@ axis/diagonal power over about 1.5 means a grid artefact, and a spectral slope a
 means too little fine relief (below it, too much noise). Compare a reference only on scale-free numbers
 unless its size and height are known, and check it is a heightmap and not shaded relief.
 
+## 4b. Compare and diagnose with a sheet
+
+The user judges similarity; finding the cause is Claude's job, never the user's. One command lays the stages
+(or the values of one knob) next to the reference in one image, `out/sweep/<script>/sheet.png`, a column per
+value and a row per image (hillshade, then each `--shot`):
+
+```bash
+tools/dev.sh sweep <script> --vary stage=1,2,3,4 --ref <reference.png> --bounds ... --res <m> --sun az,el --target x,y,z --shot yaw,pitch,dist
+```
+
+Read the sheet, then ask the user plain questions about parts, not about processes: "is the wall line
+right?", "is the foot of the wall right?", "is the face texture right?". Map each answer to the first stage
+where the defect appears:
+
+| Symptom | Stage |
+| --- | --- |
+| Outline of the wall in plan, height ratios, re-entrants, tiers, silhouette | 1 forms |
+| Faces too smooth, or bedding, blocks, buttresses or joints wrong | 2 structure |
+| Foot of the wall, gullies, chutes, scree fans, drainage, rounded edges | 3 erosion |
+| Grain, noise, speckle at the finest scale | 4 detail |
+
+Confirm the cause with the label numbers between neighbouring stages (the stage where pits or spikes jump is
+the culprit), change one variable in that stage, then `--vary` that variable over 3 to 5 values and let the
+user pick a column. Never tune a later stage while an earlier one is wrong. A reference rendered from a
+heightmap is compared with the same sun; a photo only roughly, and say so.
+
 Land and sea (islands, archipelagos, continents, coasts) are built with `Lands.Compose`: the request-to-element
 table and the checks are in `lands.md`, next to this file.
 
