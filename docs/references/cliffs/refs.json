@@ -1,24 +1,54 @@
 {
   "family": "cliffs",
-  "note": "Real height fields come from tools/dev.sh dem (AWS Terrain Tiles, open data from USGS 3DEP and others); only their hillshade (sun 180,35) is kept here, the heights are regenerated with the command. Photos give the look; a photo's dimensions come from the dem of the same place. kind as in alpine/refs.json.",
-  "images": [
-    { "file": "book_cliffs_hillshade.png", "kind": "shaded", "dem": "tools/dev.sh dem 39.68,-110.74 --zoom 13 --tiles 3 --out out/dem/book_cliffs",
-      "size_m": 11295, "height_m": 760,
+  "note": "Images are not versioned (docs/references/.gitignore); this file says where each comes from, so the folder can be rebuilt. Photos: 1600 px renditions from Wikimedia Commons (source is the file page) or USGS. Several views per cliff, each from another angle, so the forms read without guessing: far (whole escarpment), aerial or above (plan outline), front (wall face), side or along the base (profile and foot). CC BY and CC BY-SA need the credit given. Real height fields come from tools/dev.sh dem; only their hillshade is kept here.",
+  "sets": {
+    "book_cliffs": {
       "note": "Book Cliffs front north of Price, Utah: a south-facing escarpment dissected into dendritic ridges and ravines (no sheer wall), over a pediment plain cut by inverted gravel channels. North is up.",
-      "measured": { "resolution_m": 14.7, "heights_m": { "p10": 1879, "p50": 2087, "p90": 2536, "p99": 2639 },
-                    "slope_p50": 16.5, "slope_p999": 59.6, "steep45": 0.0216, "talus_share": 0.1623,
-                    "local_relief_m": 234, "hypsometric_integral": 0.425, "drainage_density": 1.96, "spectral_slope": 4.18 } },
-    { "file": "vermilion_cliffs.jpg", "kind": "photo", "license": "public domain (USGS)",
-      "source": "https://www.usgs.gov/media/images/pipe-spring-a-view-looking-west-along-vermilion-cliffs",
-      "note": "Vermilion Cliffs near Pipe Spring, Arizona: a short vertical cap rock over a long straight debris slope strewn with fallen blocks, a mesa behind." },
-    { "file": "seven_sisters.jpg", "kind": "photo", "license": "CC BY-SA 2.0, Stephen Dawson (credit required)",
-      "source": "https://commons.wikimedia.org/wiki/File:Seven_Sisters.jpg",
-      "note": "Seven Sisters, East Sussex: white chalk sea cliffs, flat vertical faces where rolling downs and their dry valleys are cut off by the sea, a shingle beach at the foot." },
-    { "file": "el_capitan.jpg", "kind": "photo", "license": "public domain (C. E. Watkins, 1870s; via USGS)",
-      "source": "https://www.usgs.gov/media/images/a-photo-a-cliff-el-capitan",
-      "note": "El Capitan, Yosemite: a smooth granite wall about 900 m high over a forested talus foot. Small stereo card in a frame: shapes only." },
-    { "file": "na_pali.jpg", "kind": "photo", "license": "public domain (USGS)",
-      "source": "https://www.usgs.gov/media/images/coast-cliffs-known-napali",
-      "note": "Na Pali coast, Kauai: steep vegetated sea cliffs with layered lava benches and fluted ridges; mostly hidden by trees in the foreground." }
-  ]
+      "images": [
+        { "file": "book_cliffs_hillshade.png", "kind": "shaded", "view": "above", "dem": "tools/dev.sh dem 39.68,-110.74 --zoom 13 --tiles 3 --out out/dem/book_cliffs",
+          "size_m": 11295, "height_m": 760,
+          "measured": { "resolution_m": 14.7, "heights_m": { "p10": 1879, "p50": 2087, "p90": 2536, "p99": 2639 },
+                        "slope_p50": 16.5, "slope_p999": 59.6, "steep45": 0.0216, "talus_share": 0.1623,
+                        "local_relief_m": 234, "hypsometric_integral": 0.425, "drainage_density": 1.96, "spectral_slope": 4.18 } }
+      ]
+    },
+    "vermilion": {
+      "note": "Vermilion Cliffs, Arizona: a long straight escarpment, layered walls in steps with a vertical cap rock, over long debris slopes and a flat plain.",
+      "images": [
+        { "file": "vermilion/far_escarpment.jpg", "kind": "photo", "view": "far", "license": "CC BY-SA 4.0", "credit": "Gillfoto", "source": "https://commons.wikimedia.org/wiki/File:Vermilion_Cliffs_600.jpg" },
+        { "file": "vermilion/aerial.png", "kind": "photo", "view": "aerial", "license": "CC BY 2.0", "credit": "Kevin Gill", "source": "https://commons.wikimedia.org/wiki/File:Vermilion_Cliffs_(22922679354).png" },
+        { "file": "vermilion/front_wall.jpg", "kind": "photo", "view": "front", "license": "CC BY-SA 2.0", "credit": "Kaibab National Forest", "source": "https://commons.wikimedia.org/wiki/File:Vermilion_Cliffs_(8026871222).jpg" },
+        { "file": "vermilion/close_layers.jpg", "kind": "photo", "view": "close", "license": "CC BY-SA 4.0", "credit": "Ray Redstone", "source": "https://commons.wikimedia.org/wiki/File:Close_Up_View_Of_The_Vermilion_Cliffs_In_Arizona.jpg" },
+        { "file": "vermilion/debris_slope_usgs.jpg", "kind": "photo", "view": "along the base", "license": "public domain (USGS)", "source": "https://www.usgs.gov/media/images/pipe-spring-a-view-looking-west-along-vermilion-cliffs" }
+      ]
+    },
+    "seven_sisters": {
+      "note": "Seven Sisters, East Sussex: white chalk sea cliffs with flat vertical faces where rolling downs and their dry valleys are cut off by the sea, a shingle beach at the foot.",
+      "images": [
+        { "file": "seven_sisters/oblique_line.jpg", "kind": "photo", "view": "far", "license": "CC BY 3.0", "credit": "qwesy qwesy", "source": "https://commons.wikimedia.org/wiki/File:Seven_Sisters_Cliffs_-_panoramio.jpg" },
+        { "file": "seven_sisters/from_above.jpg", "kind": "photo", "view": "above", "license": "CC BY 2.0", "credit": "Dan Taylor", "source": "https://commons.wikimedia.org/wiki/File:Four_of_the_Seven_Sisters_cliffs,_Sussex.jpg" },
+        { "file": "seven_sisters/edge_profile.jpg", "kind": "photo", "view": "side", "license": "CC BY-SA 4.0", "credit": "kallerna", "source": "https://commons.wikimedia.org/wiki/File:Seven_Sisters_2.jpg" },
+        { "file": "seven_sisters/along_base.jpg", "kind": "photo", "view": "along the base", "license": "CC BY-SA 4.0", "credit": "kallerna", "source": "https://commons.wikimedia.org/wiki/File:Seven_Sisters_4.jpg" },
+        { "file": "seven_sisters/coastguard_cottages.jpg", "kind": "photo", "view": "far", "license": "CC BY-SA 2.0", "credit": "Stephen Dawson", "source": "https://commons.wikimedia.org/wiki/File:Seven_Sisters.jpg" }
+      ]
+    },
+    "el_capitan": {
+      "note": "El Capitan, Yosemite: a smooth granite wall about 900 m high, its foot buried in talus and forest, on the side of a U-shaped glacial valley.",
+      "images": [
+        { "file": "el_capitan/valley_wide.jpg", "kind": "photo", "view": "far", "license": "CC BY-SA 3.0", "credit": "Diliff", "source": "https://commons.wikimedia.org/wiki/File:Tunnel_View,_Yosemite_Valley,_Yosemite_NP_-_Diliff.jpg" },
+        { "file": "el_capitan/side_profile.jpg", "kind": "photo", "view": "side", "license": "CC0", "credit": "EF5", "source": "https://commons.wikimedia.org/wiki/File:El_Capitan,_seen_from_the_%E2%80%9CTunnel_View%E2%80%9D_overlook_02.jpg" },
+        { "file": "el_capitan/front_wall.jpg", "kind": "photo", "view": "front", "license": "CC BY 4.0", "credit": "Jarek Tuszynski", "source": "https://commons.wikimedia.org/wiki/File:Yosemite_Valley_-_El_Capitan_from_the_medows_-_2.JPG" },
+        { "file": "el_capitan/close_face.jpg", "kind": "photo", "view": "close", "license": "CC BY-SA 3.0", "credit": "Mike Murphy", "source": "https://commons.wikimedia.org/wiki/File:Yosemite_El_Capitan.jpg" }
+      ]
+    },
+    "na_pali": {
+      "note": "Na Pali coast, Kauai: sea cliffs of stacked lava beds cut into sharp vertical flutes and knife ridges, hanging valleys, narrow beaches.",
+      "images": [
+        { "file": "na_pali/aerial.jpg", "kind": "photo", "view": "aerial", "license": "public domain", "credit": "Bgabel", "source": "https://commons.wikimedia.org/wiki/File:Haw-kauai-nordk%C3%BCste.jpg" },
+        { "file": "na_pali/front_flutes.jpg", "kind": "photo", "view": "front", "license": "CC BY-SA 3.0", "credit": "Rwminix", "source": "https://commons.wikimedia.org/wiki/File:NaPali_Coast_from_Pride_of_America3.JPG" },
+        { "file": "na_pali/side_flutes.jpeg", "kind": "photo", "view": "side", "license": "CC BY-SA 4.0", "credit": "unnamed Commons author", "source": "https://commons.wikimedia.org/wiki/File:Na_Pali_coast_Kalalau_Valley_cliff.jpeg" },
+        { "file": "na_pali/sea_wall.jpg", "kind": "photo", "view": "front, from the sea", "license": "CC BY 2.0", "credit": "dronepicr", "source": "https://commons.wikimedia.org/wiki/File:Milolii_valley_Na_Pali_coast_Kauai_Hawaii_(45554347574).jpg" }
+      ]
+    }
+  }
 }
