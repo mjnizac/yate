@@ -113,10 +113,10 @@ Detail of each call is in `docs/lua_reference.md`; why each piece is the way it 
   grid: orbit camera (`--view`, `--target`), a ring of streamed tiles with rings of detail beyond it
   (`--max-level`), `--follow`, `--map-scale`, 4x MSAA, vsync, hot reload, `--screenshot`, analytic sea level
   (`--water`, off by default).
-* **Ops.** Nineteen ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular), `Normals`, `Arith`,
+* **Ops.** Twenty ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular), `Normals`, `Arith`,
   `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`,
-  `Transform`, `Shape`, `Gullies`, `Grid`, `Water` and `Lands`; plus `Erosion.StreamPower`, a whole-grid CPU
-  simulation.
+  `Transform`, `Shape`, `Gullies`, `Grid`, `Water`, `Lands` and `Displace`; plus `Erosion.StreamPower`, a
+  whole-grid CPU simulation.
 * **Script API.** `Noises.*`, `Terrain.*`, `Masks.*`, `Combine.*`, `Curves.*`, `Filters.*`, `Vec`,
   `Erosion.*`, `Geometry.*`, and the Lua prelude (`assets/lua/prelude/`, loaded before every script):
   `Shapes.*`, `Landforms.*`, `Ranges.*`, `Dunes.*`, `Water.*`, `Lands.*`.

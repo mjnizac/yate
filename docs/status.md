@@ -22,9 +22,9 @@ verified: `docs/architecture.md`. Why it is built that way: `docs/design.md`. Op
 No milestone is in progress. `docs/todo.md` is the work queue; its first priority is the Lands outlines
 (section 2), after the items that block trust in the suite (section 1).
 
-Nineteen ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`,
-`Gradient`, `ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies`, `Grid`, `Water` and `Lands`;
-plus `Erosion.StreamPower`, a whole-grid CPU simulation.
+Twenty ops: `Const`, `Coords`, `Noise`, `Normals`, `Arith`, `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`,
+`Gradient`, `ThermalErosion`, `HydraulicErosion`, `Transform`, `Shape`, `Gullies`, `Grid`, `Water`, `Lands`
+and `Displace`; plus `Erosion.StreamPower`, a whole-grid CPU simulation.
 
 `ctest` has 21 suites, all passing in Debug and Release on the last run: `test_allocators`, `test_mapping`,
 `test_errors`, `test_compiler`, `test_lua_errors`, `test_output_files`, `test_lands`, `test_relief`,

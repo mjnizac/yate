@@ -1046,6 +1046,17 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     };
     filters.set_function("Expand", morphology("Filters.Expand", terrain::BlurMode::Maximum));
     filters.set_function("Shrink", morphology("Filters.Shrink", terrain::BlurMode::Minimum));
+    // A finished field read where `by` (metres along x and z) moves each sample, the move capped at
+    // `radius` samples: World Machine's Displacement, bending what an expander or a blur already made.
+    filters.set_function("Displace", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Filters.Displace", location);
+        const Value          input  = args.Input("input");
+        const Value          by     = args.Input("by");
+        const u32_t          radius = args.Count("radius", 8, 1, terrain::kMaxBlurRadius);
+        args.Finish();
+        return Handle{Unwrap(graph.AddDisplace(input, by, radius, location))};
+    });
 
     // --- Erosion --------------------------------------------------------------------------------
     //

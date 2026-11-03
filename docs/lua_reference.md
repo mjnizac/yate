@@ -139,13 +139,15 @@ Arithmetic is generic when both sides match, and broadcasts an `Rn->R1` over an 
 
 ## 2. What a graph costs
 
-Three ops read their neighbours: `Filters.Blur`, `Terrain.Gradient` and the two erosions. Their radius
-propagates **backwards** to everything that feeds them, so every op upstream computes a border beyond
-its own section. That border is the halo, and it is the main thing that decides what a script costs.
+Four ops read their neighbours: `Filters.Blur`, `Filters.Displace`, `Terrain.Gradient` and the two
+erosions. Their radius propagates **backwards** to everything that feeds them, so every op upstream
+computes a border beyond its own section. That border is the halo, and it is the main thing that decides
+what a script costs.
 
 | Op | Radius it adds |
 | --- | --- |
 | `Filters.Blur`, `Expand`, `Shrink` | `radius` |
+| `Filters.Displace` | `radius + 1` |
 | `Terrain.Gradient` | 1 |
 | `Erosion.Thermal` | `iterations`, scaled to the spacing (see §9) |
 | `Erosion.Hydraulic` | `iterations`, scaled to the spacing |
@@ -583,6 +585,24 @@ diamond into faces at 45 degrees, a disk into rounded shoulders. The window is r
 square, so a shape costs what the square does. The map lets the expander act only where it is wanted
 (big blocks on headlands, none on a plateau top) without a blend afterwards.
 `terrains/coastal_plateau.lua` uses an octagon with a map for its cliff faces.
+
+### `Filters.Displace`
+
+A finished field read at each sample moved by an offset: World Machine's Displacement. A warp of the
+position (`position = Shapes.Warp{}` on a shape or a noise) bends a field *before* it is built, so a
+neighbourhood op after it keeps its straight lines; `Displace` bends the field *after*, an expander's faces
+included.
+
+| Key | Default | Valid | Meaning |
+| --- | --- | --- | --- |
+| `input` | required | | `R2 -> R1` |
+| `by` | required | | `R2 -> R2`, the move in **metres** along x and z (a `Shapes.Warp` minus `Terrain.Coords`, a noise's `gradient` times a length) |
+| `radius` | `8` | 1 … 32 | the longest move in **samples**; longer ones are shortened to it, direction kept |
+
+The field is read bilinearly between samples. It adds `radius + 1` to the halo, so keep `radius` at the
+largest move the offset actually makes: `math.ceil(D / params.resolution)` for a move of `D` metres.
+`Terrain.Sample` evaluates it exactly, reading the field again at the moved positions.
+`terrains/coastal_plateau.lua` bends its expanded cliff faces with it.
 
 ---
 

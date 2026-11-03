@@ -791,6 +791,39 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location,
     return Append(node, location);
 }
 
+Result<Value> Graph::AddDisplace(Value input, Value offset, u32_t radius, SourceLocation location) {
+    if (Status checked = CheckValue(input, "Displace input", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (Status checked = CheckValue(offset, "Displace offset", location); !checked) {
+        return std::unexpected(checked.error());
+    }
+    if (!(input.mapping == Mapping{Domain::R2, 1}) || !(offset.mapping == Mapping{Domain::R2, 2})) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Displace expects an R2->R1 input and an R2->R2 offset, got {} and {}",
+            ToString(input.mapping), ToString(offset.mapping)));
+    }
+    if (radius == 0 || radius > kMaxBlurRadius) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "Displace radius must be between 1 and {}, got {}", kMaxBlurRadius, radius));
+    }
+
+    Node node;
+    node.kind      = OpKind::Displace;
+    node.nodeClass = NodeClass::Neighborhood;
+    // One more than the radius: the bilinear read of an offset of `radius` samples takes the next tap.
+    node.radius       = radius + 1;
+    node.inputCount   = 2;
+    node.inputs[0]    = input;
+    node.inputs[1]    = offset;
+    node.channelCount = 1;
+    node.channels[0]  = input.mapping;
+    node.params[1]    = radius;
+    return Append(node, location);
+}
+
 /// Shared by both erosion builders: an iteration count that is also a halo, and a height field.
 [[nodiscard]] Status CheckErosionInput(OpKind kind, Value input, u32_t iterations,
                                        SourceLocation location) {

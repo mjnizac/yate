@@ -272,6 +272,15 @@ return main
 )",
                  3, {"Filters.Expand", "radius_map", "R2->R1", "R2->R2"});
 
+    CheckFailure("displace_by_not_vector", R"(local function main()
+    local n = Noises.fBm{ frequency = 0.01 }
+    return { height = { value = Filters.Displace{ input = n.value, by = n.value, radius = 2 },
+                        range = { 0, 1 } } }
+end
+return main
+)",
+                 3, {"Displace", "offset", "R2->R2", "R2->R1"}, ErrorStage::Validation);
+
     CheckFailure("inverted_slope_range", R"(local function main()
     local n = Noises.fBm{ frequency = 0.01 }
     local mask = Masks.Slope{ input = n.gradient, min = 0.9, max = 0.2 }

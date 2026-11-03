@@ -225,6 +225,18 @@ constexpr OpInfo kOps[] = {
      .resolutionWord = kMaxNodeParams,
      .hasReference   = false, // Reads the grid buffer, as Grid does.
      .specFieldCount = 0},
+    {.kind           = OpKind::Displace,
+     .name           = "Displace",
+     .shader         = "ops/displace.comp.spv",
+     .nodeClass      = NodeClass::Neighborhood,
+     // The field and the offset.
+     .maxInputs      = 2,
+     .maxChannels    = 1,
+     // The offset is in metres and the taps are samples.
+     .resolutionWord = 0,
+     // Reads a neighbourhood; test_kernels compares it against a CPU bilinear read of its own.
+     .hasReference   = false,
+     .specFieldCount = 0},
 };
 static_assert(ArrayCount(kOps) == static_cast<usize_t>(OpKind::Count));
 
@@ -865,6 +877,7 @@ b8_t EvalPointwise(const Graph::Node& node,
         case OpKind::Water:
         case OpKind::Lands:
         case OpKind::Blur:
+        case OpKind::Displace:
         case OpKind::Count:
             // Both depend on world position, which a pointwise reference does not receive.
             return false;

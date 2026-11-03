@@ -203,6 +203,9 @@ Milestone state is in `docs/status.md`, open work in `docs/todo.md`, and the pro
   (archive: "## Shapes, and what the audit changed")
 - **`Filters.Expand` and `Filters.Shrink` are modes of Blur** (largest or smallest value in the window), not
   new ops. (archive: "## Cliffs after a World Machine escarpment")
+- **`Filters.Displace` is an op, not a warp.** A warp moves the position a field is built from, so a
+  neighbourhood op downstream (an expander) undoes the bend; and `Terrain.Sample` passes those ops through,
+  so displacing through it silently drops them. Bending a finished field needs its neighbours on the GPU.
 - **`Masks.Slope` must read a smooth field.** The analytic gradient of an fBm is dominated by its finest
   octave, so the mask flickered from sample to sample; feeding it 3 octaves instead of 6 dropped mean slope
   from 38.0 to 13.6 degrees with relief untouched at 528 m. (archive: "### The sample script was asking for

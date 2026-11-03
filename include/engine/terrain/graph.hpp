@@ -99,6 +99,9 @@ enum class OpKind : u16_t {
     /// `lands.comp.glsl`): channel 0 is the signed distance to the coast, channel 1 the nearest land
     /// element's id. Pointwise.
     Lands,
+    /// A field read at its own sample moved by an offset field (metres, bilinear between the taps), the
+    /// offset capped at a declared radius. Neighbourhood: World Machine's Displacement.
+    Displace,
     Count,
 };
 
@@ -454,6 +457,12 @@ public:
                                         BlurMode mode = BlurMode::Average,
                                         BlurShape shape = BlurShape::Square,
                                         std::optional<Value> radiusMap = std::nullopt);
+
+    /// `input` (an `R2 -> R1` field) read at each sample moved by `offset` (an `R2 -> R2` field, in
+    /// metres along x and z), bilinearly; offsets longer than `radius` samples are shortened to it, which
+    /// is the reach that halo propagation gives the input (`radius + 1`, for the bilinear taps).
+    [[nodiscard]] Result<Value> AddDisplace(Value input, Value offset, u32_t radius,
+                                            SourceLocation location);
 
     struct ThermalParams {
         /// Iterations to run. Also the influence radius, and therefore the halo.

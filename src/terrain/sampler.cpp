@@ -494,6 +494,10 @@ public:
             if (node.kind == OpKind::Gradient) {
                 continue; // evaluated on its own, at shifted positions
             }
+            if (node.kind == OpKind::Displace) {
+                needed[node.inputs[1].node] = 1; // the field is evaluated on its own, at the moved positions
+                continue;
+            }
             for (u8_t i = 0; i < node.inputCount; ++i) {
                 needed[node.inputs[i].node] = 1;
             }
@@ -594,6 +598,26 @@ private:
                     for (usize_t p = 0; p < positions.size(); ++p) {
                         own[p][0][axis] = (ahead[p] - behind[p]) / (2.0f * m_spacing);
                     }
+                }
+                return {};
+            }
+            case OpKind::Displace: {
+                // The field evaluated again where the offset moves each position, the move capped as the
+                // kernel caps it; exact where the kernel interpolates between samples.
+                const f32_t reach = static_cast<f32_t>(node.params[1]) * m_spacing;
+                std::pmr::vector<std::array<f32_t, 2>> moved(positions.size(), &memory::General().Resource());
+                std::pmr::vector<f32_t>                read(positions.size(), &memory::General().Resource());
+                for (usize_t p = 0; p < positions.size(); ++p) {
+                    const std::array<f32_t, kMaxComponents>& move = input(1, p);
+                    const f32_t length = std::hypot(move[0], move[1]);
+                    const f32_t scale  = length > reach ? reach / length : 1.0f;
+                    moved[p] = {positions[p][0] + move[0] * scale, positions[p][1] + move[1] * scale};
+                }
+                if (Status ran = Run(node.inputs[0], moved, read); !ran) {
+                    return ran;
+                }
+                for (usize_t p = 0; p < positions.size(); ++p) {
+                    own[p][0][0] = read[p];
                 }
                 return {};
             }

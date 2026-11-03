@@ -19,6 +19,7 @@
 #include <engine/terrain/mapping.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <optional>
@@ -460,6 +461,135 @@ void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain d
     return ok;
 }
 
+/// Dispatches Displace on an R2 field and an offset of up to 1.5 times its radius (so the cap is
+/// reached), both with the halo that halo propagation gives them, and compares against a bilinear read on the
+/// CPU written as the kernel writes it.
+[[nodiscard]] b8_t CheckDisplace(Context& context, u32_t radius, u32_t outputHalo, f32_t spacing,
+                                 const char* label) {
+    const Mapping scalarMapping{Domain::R2, 1};
+    const Mapping offsetMapping{Domain::R2, 2};
+    const u32_t   inputHalo = outputHalo + radius + 1;
+    const u32_t   nIn       = kExtent.x + 2 * inputHalo;
+    const u32_t   nOut      = kExtent.x + 2 * outputHalo;
+    const u64_t   outputBytes = ValueSize(scalarMapping, kExtent, outputHalo);
+
+    std::pmr::vector<f32_t> field(static_cast<usize_t>(SampleCount(scalarMapping, kExtent, inputHalo)),
+                                  &memory::General().Resource());
+    std::pmr::vector<f32_t> offset(field.size() * 2, &memory::General().Resource());
+    for (usize_t i = 0; i < field.size(); ++i) {
+        field[i] = SampleValue(7, i);
+    }
+    for (usize_t i = 0; i < offset.size(); ++i) {
+        offset[i] = SampleValue(13, i) * spacing * 1.5f * static_cast<f32_t>(radius);
+    }
+
+    std::array<SectionSlot, 3> slots{};
+    const Mapping              mappings[3] = {scalarMapping, offsetMapping, scalarMapping};
+    const u32_t                halos[3]    = {inputHalo, inputHalo, outputHalo};
+    usize_t                    acquired    = 0;
+    b8_t                       ok          = true;
+    for (; ok && acquired < 3; ++acquired) {
+        Result<SectionSlot> slot = context.Sections().Acquire(
+            ClassOf(mappings[acquired], kExtent, halos[acquired]),
+            ValueSize(mappings[acquired], kExtent, halos[acquired]));
+        if (!slot) {
+            std::printf("FAIL %s: %s\n", label, slot.error().Format().data());
+            ok = false;
+            break;
+        }
+        slots[acquired] = *slot;
+    }
+    for (usize_t i = 0; ok && i < 2; ++i) {
+        const f32_t* data = i == 0 ? field.data() : offset.data();
+        if (Status uploaded = test::UploadToSlot(context, slots[i], data,
+                                                 ValueSize(mappings[i], kExtent, inputHalo));
+            !uploaded) {
+            std::printf("FAIL %s: %s\n", label, uploaded.error().Format().data());
+            ok = false;
+        }
+    }
+
+    Result<ComputePipeline> pipeline = ComputePipeline::Create(
+        context.Device(), OpInfoOf(OpKind::Displace).shader,
+        WorkgroupSpecialization(static_cast<u32_t>(Domain::R2)), context.Pipelines().Handle());
+    if (ok && !pipeline) {
+        std::printf("FAIL %s: %s\n", label, pipeline.error().Format().data());
+        ok = false;
+    }
+    if (ok) {
+        KernelPushConstants constants{};
+        constants.origin = {11, 0, -7};
+        constants.extent = {kExtent.x, kExtent.y, kExtent.z};
+        constants.halo   = outputHalo;
+        constants.SetDomain(static_cast<u32_t>(Domain::R2));
+        constants.SetChannelMask(1);
+        constants.inputHalos = (inputHalo & 0xFFu) | ((inputHalo & 0xFFu) << 8);
+        constants.inputs[0]  = slots[0].address;
+        constants.inputs[1]  = slots[1].address;
+        constants.outputs[0] = slots[2].address;
+        constants.params[0]  = std::bit_cast<u32_t>(spacing);
+        constants.params[1]  = radius;
+
+        Result<test::Readback> readback =
+            test::RunKernel(context, *pipeline, slots[2], constants, outputBytes);
+        if (!readback) {
+            std::printf("FAIL %s: %s\n", label, readback.error().Format().data());
+            ok = false;
+        } else {
+            const i32_t delta      = static_cast<i32_t>(inputHalo - outputHalo);
+            const u32_t nOutZ      = kExtent.z + 2 * outputHalo;
+            u64_t       mismatches = 0;
+            f64_t       worst      = 0.0;
+            for (u32_t z = 0; z < nOutZ; ++z) {
+                for (u32_t x = 0; x < nOut; ++x) {
+                    const i32_t  ix   = static_cast<i32_t>(x) + delta;
+                    const i32_t  iz   = static_cast<i32_t>(z) + delta;
+                    const usize_t at  = static_cast<usize_t>(iz) * nIn + static_cast<usize_t>(ix);
+                    f32_t        mx   = offset[at * 2] / spacing;
+                    f32_t        mz   = offset[at * 2 + 1] / spacing;
+                    const f32_t  len  = std::sqrt(mx * mx + mz * mz);
+                    const f32_t  cap  = static_cast<f32_t>(radius);
+                    if (len > cap) {
+                        mx *= cap / len;
+                        mz *= cap / len;
+                    }
+                    const i32_t bx = static_cast<i32_t>(std::floor(mx));
+                    const i32_t bz = static_cast<i32_t>(std::floor(mz));
+                    const auto  tap = [&](i32_t dx, i32_t dz) {
+                        return field[static_cast<usize_t>(iz + bz + dz) * nIn
+                                     + static_cast<usize_t>(ix + bx + dx)];
+                    };
+                    const f32_t fx   = mx - static_cast<f32_t>(bx);
+                    const f32_t fz   = mz - static_cast<f32_t>(bz);
+                    const f32_t near = std::lerp(tap(0, 0), tap(1, 0), fx);
+                    const f32_t far  = std::lerp(tap(0, 1), tap(1, 1), fx);
+                    const f32_t want = std::lerp(near, far, fz);
+                    const f32_t got  = readback->data[static_cast<usize_t>(z) * nOut + x];
+                    const f64_t error = std::fabs(static_cast<f64_t>(got) - static_cast<f64_t>(want));
+                    worst = std::max(worst, error);
+                    if (error > kTolerance) {
+                        if (mismatches == 0) {
+                            std::printf("     %s: sample (%u, %u) gpu %.9g cpu %.9g\n", label, x, z,
+                                        static_cast<f64_t>(got), static_cast<f64_t>(want));
+                        }
+                        ++mismatches;
+                    }
+                }
+            }
+            context.Readback().ReleaseOldest();
+            std::printf("     %-22s radius %u, halos in %u out %u, worst %.3g\n", label, radius,
+                        inputHalo, outputHalo, worst);
+            CHECK_EQ(mismatches, u64_t{0});
+            ok = mismatches == 0;
+        }
+    }
+
+    for (usize_t i = acquired; i-- > 0;) {
+        context.Sections().Release(slots[i]);
+    }
+    return ok;
+}
+
 [[nodiscard]] SourceLocation At(u32_t line) {
     return SourceLocation{.file = "test_kernels", .line = line};
 }
@@ -630,6 +760,13 @@ int main() {
             }
             (void)CheckBlur(context, Domain::R2, 3, 2, 0, "Blur disk r3 map", 0, 3, true);
             (void)CheckBlur(context, Domain::R3, 2, 1, 0, "Expand R3 octagon map", 1, 1, true);
+        }
+
+        test::Section("Displace");
+        {
+            (void)CheckDisplace(context, 1, 0, 1.0f, "Displace r1");
+            (void)CheckDisplace(context, 4, 1, 2.0f, "Displace r4 h1 2m");
+            (void)CheckDisplace(context, 7, 2, 0.5f, "Displace r7 h2 0.5m");
         }
 
         test::Section("Transform");

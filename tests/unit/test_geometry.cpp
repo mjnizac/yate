@@ -1832,6 +1832,25 @@ void TestWaterAgreesWithSampler() {
     CHECK(worst < 0.01f);
 }
 
+/// Displace on the GPU against the sampler, which evaluates its field again at the moved positions: on a
+/// plane the bilinear read is exact, so they agree wherever the move is capped or not.
+void TestDisplaceAgreesWithSampler() {
+    test::Section("Displace draws what the CPU sampler reads");
+    const Field diff = Export("displace_agree", R"(
+    local c = Terrain.Coords{}
+    local n = Noises.fBm{ frequency = 1 / 50, amplitude = 6.0 }
+    local moved = Filters.Displace{ input = c.x * 0.5 + c.y * 0.25 + 10.0, by = n.gradient * 60.0, radius = 4 }
+    local s = Terrain.Sample{ value = moved, origin = { -256, -256 }, size = { 64, 64 }, cell = 8 }
+    local result = moved - Terrain.Grid{ values = s, size = { 64, 64 }, origin = { -256, -256 }, cell = 8 })");
+    CHECK(diff.Ok());
+    float worst = 0.0f;
+    for (const float v : diff.values) {
+        worst = std::max(worst, std::fabs(v));
+    }
+    std::printf("     worst difference %.4f m\n", static_cast<double>(worst));
+    CHECK(worst < 0.01f);
+}
+
 int main() {
     for (const char* path : {"out", kDirectory}) {
         REQUIRE_OK(engine::platform::MakeDirectory(path));
@@ -1854,6 +1873,7 @@ int main() {
     TestOriginAndResolution();
     TestContinuity();
     TestWaterAgreesWithSampler();
+    TestDisplaceAgreesWithSampler();
     TestShapeSets();
     TestSectionsAndInteraction();
     TestTerrainIndicators();
