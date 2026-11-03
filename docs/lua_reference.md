@@ -668,6 +668,23 @@ gives away, its neighbours receive.
 | `iterations` | `16` | ≥ 1 | passes, and the influence radius |
 | `talus` | `0.7` | ≥ 0 | slope (rise over run, `tan` of the angle) below which nothing moves |
 | `strength` | `0.25` | `(0, 0.5]` | fraction of the excess moved per iteration |
+| `mass_balance` | `0.5` | `[0, 1]` | World Machine's mass balance: 0.5 conserves material; 0 only wears (cells give, nothing receives: it carves); 1 only fills (cells receive, nothing gives: a constant-slope apron at the talus angle) |
+| `two_phase` | `false` | | rock and talus apart: rock steeper than `rock` breaks into talus in place, only talus moves; adds the `talus` channel, the talus depth |
+| `rock` | `1.0` | ≥ 0 | slope above which rock breaks, two-phase only |
+| `strength_map` | none | | an `Rn -> R1` field, clamped to [0, 1], that scales `strength` per sample (Talus Production) |
+
+The three come from World Machine's Thermal Weathering and the forum's uses of it:
+
+| Use | Settings |
+| --- | --- |
+| Carve valleys into a large range (thread 8043) | `mass_balance = 0`, a low `talus`, many iterations |
+| A constant-slope apron round any shape (thread 8039) | `mass_balance = 1`, `talus` the slope wanted |
+| Sheer planar rock faces over talus (thread 3610) | `two_phase = true`, `talus` just under `rock` |
+| Talus only below some cliffs | `strength_map` 1 there, 0 elsewhere |
+
+Measured on three blocks 20, 40 and 60 m high at 2 m: `mass_balance = 1, talus = 1` gives aprons of
+48–55 degrees (the axis-only scheme reads diagonals as steeper), where `Filters.Expand{ falloff =
+"cone", slope = 1 }` gives 45.0 on all three.
 
 | No erosion | 8 iterations | 32 | 96 |
 | --- | --- | --- | --- |

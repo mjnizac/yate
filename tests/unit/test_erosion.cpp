@@ -160,6 +160,116 @@ constexpr std::array<i32_t, 3> kOrigin{311, 0, -907};
     return false;
 }
 
+/// The same noise eroded with `thermal`; with `talus` set, channel 1 (the talus depth) is returned
+/// instead of the height. The strength map, when asked for, is a ramp from 0 at the window's left to
+/// beyond 1 at its right.
+[[nodiscard]] Result<Field> RunThermal(Context& context, KernelLibrary& kernels,
+                                       Graph::ThermalParams thermal, b8_t talus = false,
+                                       b8_t zeroMap = false) {
+    Graph graph;
+    Graph::NoiseParams noise;
+    noise.frequency = 0.04f;
+    noise.octaves   = 4;
+    noise.amplitude = 1.0f;
+    Result<Value> value = graph.AddNoise(noise, At(30));
+    if (!value) {
+        return std::unexpected(value.error());
+    }
+    if (zeroMap) {
+        Result<Value> zero = graph.AddConst(Mapping{Domain::R2, 1}, {0.0f}, At(31));
+        if (!zero) {
+            return std::unexpected(zero.error());
+        }
+        thermal.strengthMap = *zero;
+    }
+    Result<Value> eroded = graph.AddThermalErosion(*value, thermal, At(32));
+    if (!eroded) {
+        return std::unexpected(eroded.error());
+    }
+    Result<Value> wanted = talus ? graph.Channel(*eroded, 1) : Result<Value>(*eroded);
+    if (!wanted) {
+        return std::unexpected(wanted.error());
+    }
+    if (Status requested = graph.RequestOutput("height", *wanted, -1.0f, 1.0f); !requested) {
+        return std::unexpected(requested.error());
+    }
+    return Evaluate(context, kernels, graph, SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
+                    kExtent, 1, kExtent, 1.0f, kOrigin, kSeed);
+}
+
+void CheckMassBalance(Context& context, KernelLibrary& kernels, const Field& bare) {
+    Graph::ThermalParams thermal;
+    thermal.iterations = 16;
+    thermal.talus      = 0.01f;
+    thermal.strength   = 0.4f;
+
+    Result<Field> conserved = RunThermal(context, kernels, thermal);
+    REQUIRE_OK_VOID(conserved);
+    thermal.massBalance = 0.0f;
+    Result<Field> worn = RunThermal(context, kernels, thermal);
+    REQUIRE_OK_VOID(worn);
+    thermal.massBalance = 1.0f;
+    Result<Field> filled = RunThermal(context, kernels, thermal);
+    REQUIRE_OK_VOID(filled);
+    CHECK(!AnyNotFinite(*worn) && !AnyNotFinite(*filled));
+
+    // Wear only lowers and fill only raises, at every sample, and both change the field.
+    u64_t raised = 0;
+    u64_t lowered = 0;
+    for (usize_t i = 0; i < bare.samples.size(); ++i) {
+        raised += worn->samples[i] > bare.samples[i] ? 1 : 0;
+        lowered += filled->samples[i] < bare.samples[i] ? 1 : 0;
+    }
+    CHECK_EQ(raised, u64_t{0});
+    CHECK_EQ(lowered, u64_t{0});
+    std::printf("     total against the bare noise: worn %.4g, conserved %.4g, filled %.4g\n",
+                Total(*worn) - Total(bare), Total(*conserved) - Total(bare), Total(*filled) - Total(bare));
+    CHECK(Total(*worn) < Total(*conserved));
+    CHECK(Total(*filled) > Total(*conserved));
+}
+
+void CheckTwoPhase(Context& context, KernelLibrary& kernels, const Field& bare) {
+    Graph::ThermalParams thermal;
+    thermal.iterations = 24;
+    thermal.talus      = 0.05f;
+    thermal.rock       = 0.1f;
+    thermal.strength   = 0.4f;
+    thermal.twoPhase   = true;
+
+    Result<Field> surface = RunThermal(context, kernels, thermal);
+    REQUIRE_OK_VOID(surface);
+    Result<Field> talus = RunThermal(context, kernels, thermal, true);
+    REQUIRE_OK_VOID(talus);
+    CHECK(!AnyNotFinite(*surface) && !AnyNotFinite(*talus));
+
+    f64_t deepest  = 0.0;
+    u64_t negative = 0;
+    for (const f32_t t : talus->samples) {
+        deepest = std::max(deepest, static_cast<f64_t>(t));
+        negative += t < 0.0f ? 1 : 0;
+    }
+    std::printf("     two-phase: mean change %.4g, deepest talus %.4g, drift %.4g\n",
+                MeanDifference(bare, *surface), deepest,
+                std::fabs(Total(*surface) - Total(bare)) / Magnitude(bare));
+    CHECK_EQ(negative, u64_t{0});
+    CHECK(deepest > 1e-3);
+    CHECK(MeanDifference(bare, *surface) > 1e-4);
+    // At the default mass balance rock only turns into talus, so material is conserved up to the border.
+    CHECK(std::fabs(Total(*surface) - Total(bare)) < Magnitude(bare) * 0.01);
+
+    // A strength map of zero everywhere leaves the field as it was, bit for bit, in either scheme.
+    for (const b8_t twoPhase : {false, true}) {
+        thermal.twoPhase = twoPhase;
+        Result<Field> still = RunThermal(context, kernels, thermal, false, true);
+        REQUIRE_OK_VOID(still);
+        u64_t differing = 0;
+        for (usize_t i = 0; i < bare.samples.size(); ++i) {
+            differing += std::memcmp(&bare.samples[i], &still->samples[i], sizeof(f32_t)) != 0 ? 1 : 0;
+        }
+        CHECK_EQ(differing, u64_t{0});
+    }
+}
+
 /// The checks below each build a `Graph`, which keeps fixed-capacity storage for 1024 nodes and so is
 /// around 150 KiB. Six of them on one frame overflowed the default 1 MiB stack in Debug, so each one gets
 /// its own frame. `graph.hpp` has a static_assert pinning the size for the same reason.
@@ -510,6 +620,12 @@ int main() {
 
         test::Section("hydraulic erosion refuses an unstable configuration");
         CheckHydraulicBuilderRefusals(context, kernels);
+
+        test::Section("thermal mass balance: 0 only wears, 1 only fills, 0.5 is the default");
+        CheckMassBalance(context, kernels, *bare);
+
+        test::Section("thermal two-phase: talus channel, strength map");
+        CheckTwoPhase(context, kernels, *bare);
 
         test::CheckNoValidationErrors();
         return 0;

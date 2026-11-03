@@ -481,6 +481,16 @@ public:
         /// Fraction of the excess height moved per iteration, in (0, 0.5]. Above 0.5 the scheme
         /// oscillates instead of settling, because a cell can overshoot its neighbour.
         f32_t strength = 0.25f;
+        /// World Machine's mass balance, in [0, 1]: 0.5 conserves material, 0 only wears (carves),
+        /// 1 only deposits (fills to a constant slope).
+        f32_t massBalance = 0.5f;
+        /// Rock and talus tracked apart: rock steeper than `rock` breaks into talus, and only talus
+        /// moves. Adds channel 1, the talus depth.
+        b8_t  twoPhase = false;
+        /// Slope above which rock breaks, rise over run; two-phase only.
+        f32_t rock = 1.0f;
+        /// An `Rn -> R1` field, clamped to [0, 1], that scales the strength per sample.
+        std::optional<Value> strengthMap;
     };
 
     /// Thermal erosion of an `Rn -> R1` height field. Iterative: `iterations` dispatches over a

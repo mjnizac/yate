@@ -1083,6 +1083,12 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.iterations = args.Count("iterations", 16, 1, terrain::kMaxHalo);
         params.talus      = args.Float("talus", 0.7);
         params.strength   = args.Float("strength", 0.25);
+        params.massBalance = args.Float("mass_balance", 0.5);
+        params.twoPhase    = args.Boolean("two_phase", false);
+        params.rock        = args.Float("rock", 1.0);
+        if (args.Has("strength_map")) {
+            params.strengthMap = args.Input("strength_map");
+        }
         args.Finish();
         params.iterations = ScaleErosion(params.iterations, spacing, "Erosion.Thermal").iterations;
 

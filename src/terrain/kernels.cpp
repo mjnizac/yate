@@ -138,8 +138,11 @@ constexpr OpInfo kOps[] = {
      .name           = "ThermalErosion",
      .shader         = "ops/thermal_erosion.comp.spv",
      .nodeClass      = NodeClass::Iterative,
-     .maxInputs      = 1,
-     .maxChannels    = 1,
+     // The height and, optionally, the strength map.
+     .maxInputs      = 2,
+     // Channel 1 is the talus depth, in two-phase only.
+     .maxChannels    = 2,
+     .channelNames   = {"value", "talus"},
      // Word 2 carries the sample spacing, so the talus can be a slope (rise over run) rather than a
      // height difference per cell. With a per-cell talus the same script described different terrain
      // at every sample spacing: 8 m against 16 m differed by 8 m on average and 95 m at worst.

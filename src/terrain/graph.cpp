@@ -901,20 +901,46 @@ Result<Value> Graph::AddThermalErosion(Value input, const ThermalParams& params,
             "of settling",
             ToString(OpKind::ThermalErosion), params.strength));
     }
+    if (!(params.massBalance >= 0.0f && params.massBalance <= 1.0f) || !(params.rock >= 0.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "{} expects a mass balance in [0, 1] and a rock slope of at least 0, got {} and {}",
+            ToString(OpKind::ThermalErosion), params.massBalance, params.rock));
+    }
+    if (params.strengthMap.has_value()) {
+        if (Status checked = CheckValue(*params.strengthMap, "ThermalErosion strength map", location);
+            !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(params.strengthMap->mapping == Mapping{input.mapping.domain, 1})) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "{} expects the strength map to be {}, got {}", ToString(OpKind::ThermalErosion),
+                ToString(Mapping{input.mapping.domain, 1}), ToString(params.strengthMap->mapping)));
+        }
+    }
 
     Node node;
     node.kind         = OpKind::ThermalErosion;
     node.nodeClass    = NodeClass::Iterative;
     node.iterations   = params.iterations;
     node.radius       = params.iterations;
-    node.inputCount   = 1;
+    node.inputCount   = params.strengthMap.has_value() ? 2 : 1;
     node.inputs[0]    = input;
-    node.channelCount = 1;
+    if (params.strengthMap.has_value()) {
+        node.inputs[1] = *params.strengthMap;
+    }
+    node.channelCount = params.twoPhase ? 2 : 1;
     node.channels[0]  = input.mapping;
-    // The state is just the height, but it is stated rather than inferred: see Node::stateMapping.
-    node.stateMapping = input.mapping;
+    node.channels[1]  = input.mapping;
+    // The state is the height, or rock and talus in two-phase: see Node::stateMapping.
+    node.stateMapping = params.twoPhase ? Mapping{input.mapping.domain, 2} : input.mapping;
     std::memcpy(&node.params[0], &params.talus, sizeof(f32_t));
     std::memcpy(&node.params[1], &params.strength, sizeof(f32_t));
+    std::memcpy(&node.params[3], &params.massBalance, sizeof(f32_t));
+    node.params[4] = params.twoPhase ? 1u : 0u;
+    std::memcpy(&node.params[5], &params.rock, sizeof(f32_t));
+    node.params[6] = params.strengthMap.has_value() ? 1u : 0u;
     return Append(node, location);
 }
 
