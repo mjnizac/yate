@@ -30,9 +30,9 @@ pc;
 // Metres of water over which the terrain fades into the water colour. Short enough that a few metres of
 // depth already reads as water, long enough that a deep basin does not go flat.
 const float kExtinction = 30.0;
-// Half-width of the shoreline band in metres, and its colour.
-const float kShoreWidth = 1.5;
-const vec3  kShoreColor = vec3(0.86, 0.88, 0.84);
+// The least share of the water colour a submerged fragment takes, reached over the first 0.3 m of
+// water in front of it: the surface itself reads as water, so a shallow marsh or a shore is not lost.
+const float kSurfaceTint = 0.45;
 
 layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
@@ -218,6 +218,9 @@ void main() {
     // most of what makes a dune field legible.
     float ambient = (pc.look & 0xFFu) == 1u ? 0.28 : 0.4;
     float direct  = (pc.look & 0xFFu) == 1u ? 1.15 : 1.0;
+    // Snow in shade is still bright: it scatters the sky's light, so the faces turned from the sun read
+    // as blue-white snow and not as grey, and a range is snowy on both sides alike.
+    ambient = mix(ambient, 0.8, snow);
     vec3 lit = albedo * (kSunColor * sun * direct + kSkyColor * sky * ambient);
 
     // Water, computed from the eye and this fragment rather than drawn: alpha zero means none.
@@ -242,7 +245,7 @@ void main() {
         float end      = vWorldPosition.y < level ? 1.0 : crossing;
         float path     = max(end - begin, 0.0) * distance_;
 
-        float cover = water.a * (1.0 - exp(-path / kExtinction));
+        float cover = water.a * max(1.0 - exp(-path / kExtinction), kSurfaceTint * min(path / 0.3, 1.0));
         lit         = mix(lit, water.rgb, cover);
 
         // The surface is in front of this fragment only when the eye and the fragment are on opposite
@@ -250,14 +253,6 @@ void main() {
         if ((pc.eye.y - level) * (vWorldPosition.y - level) < 0.0) {
             lit = mix(lit, WaterSurface(lit, direction), water.a);
         }
-
-        // A pale band where the terrain meets the level. Its width follows the pixel footprint, so
-        // it stays a line at a distance instead of shimmering as it shrinks below a pixel.
-        float band = max(kShoreWidth, fwidth(vWorldPosition.y) * 1.5);
-        lit        = mix(lit, kShoreColor, water.a * 0.6
-                                               * (1.0 - smoothstep(0.0, band,
-                                                                   abs(vWorldPosition.y
-                                                                       - level))));
     }
 
     outColor = vec4(lit, 1.0);
