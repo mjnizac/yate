@@ -12,29 +12,8 @@
 namespace engine::terrain {
 
 const char* ToString(OpKind kind) noexcept {
-    switch (kind) {
-        case OpKind::Const: return "Const";
-        case OpKind::Coords: return "Coords";
-        case OpKind::Noise: return "Noise";
-        case OpKind::Normals: return "Normals";
-        case OpKind::Arith: return "Arith";
-        case OpKind::Curve: return "Curve";
-        case OpKind::Blend: return "Blend";
-        case OpKind::SlopeMask: return "SlopeMask";
-        case OpKind::Vector: return "Vector";
-        case OpKind::Blur: return "Blur";
-        case OpKind::Gradient: return "Gradient";
-        case OpKind::ThermalErosion: return "ThermalErosion";
-        case OpKind::HydraulicErosion: return "HydraulicErosion";
-        case OpKind::Transform: return "Transform";
-        case OpKind::Shape: return "Shape";
-        case OpKind::Gullies: return "Gullies";
-        case OpKind::Grid: return "Grid";
-        case OpKind::Water: return "Water";
-        case OpKind::Lands: return "Lands";
-        case OpKind::Count: break;
-    }
-    return "<unknown op>";
+    // The names live in the op registry, so a new op is named in one place.
+    return kind < OpKind::Count ? OpInfoOf(kind).name : "<unknown op>";
 }
 
 const char* ToString(NodeClass nodeClass) noexcept {
