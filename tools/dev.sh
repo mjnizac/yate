@@ -6,6 +6,7 @@
 #   tools/dev.sh review <script.lua> --bounds minx,minz,maxx,maxz [--res M] [--level L | --no-sea]
 #                       [--sun az,el] [--target x,y,z] [--shot yaw,pitch,dist]... [--param k=v]...
 #                       [--seed N] [--out DIR] [--type Release|Debug]
+#   tools/dev.sh sweep <script.lua> --vary key=v1,v2,... [--ref image]... [review options...]  one sheet.png
 #   tools/dev.sh lands <script.lua> --bounds minx,minz,maxx,maxz [--res M] [--param k=v]... [--out DIR]
 #   tools/dev.sh lands-check <script.lua> --bounds ... --expect count=N,area=MIN..MAX,land=MIN..MAX
 #   tools/dev.sh clean [DAYS]                                   removes out/ entries untouched for DAYS (7)
@@ -86,7 +87,8 @@ review() {
             args+=(--shot "$shot=$out/view_$i.png"); i=$((i + 1))
         done
         "$bin/terrain_viewer" --script "$script" --seed "$seed" --target "$target" --ring 5 \
-            --log-level warn "${params[@]}" "${args[@]}"
+            --log-level warn "${params[@]}" "${args[@]}" 2>/dev/null \
+            || echo "dev.sh review: terrain_viewer exited with $? (it crashes on shutdown after the shots)" >&2
     fi
     grep -o '"timings_ms": {[^}]*}' "$out/metadata.json" | grep -o '"total": [0-9.]*\|"script": [0-9.]*' \
         | tr '\n' ' '
@@ -94,6 +96,67 @@ review() {
     echo "review: $out (metrics.json, hillshade.png$( [[ ${#shots[@]} -gt 0 ]] && echo ", view_*.png"))"
 }
 
+# Runs `review` once per value of one parameter and lays the results out in one labelled image, sheet.png:
+# a column per value (the references first), a row per image (hillshade, then each --shot). Each label
+# carries the numbers that catch a broken variant: slope p99.9 (spikes past 85), closed depressions and
+# steep share. `--vary stage=1,2,3,4` on a staged script shows which stage drifts from the reference.
+sweep() {
+    local script="$1"; shift
+    local vary="" refs=() rest=() shots=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vary) vary="$2"; shift 2 ;;
+            --ref) refs+=("$2"); shift 2 ;;
+            --shot) rest+=("$1" "$2"); shots=$((shots + 1)); shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    [[ "$vary" == *=* ]] || { echo "dev.sh sweep: --vary key=v1,v2,... is required" >&2; exit 2; }
+    local key="${vary%%=*}" name; name="$(basename "$script" .lua)"
+    local out="$ROOT/out/sweep/$name" tiles size=512 font="fontfile='C\:/Windows/Fonts/arial.ttf'"
+    tiles="$out/tiles"
+    rm -rf "$tiles"; mkdir -p "$tiles"
+    IFS=, read -ra values <<<"${vary#*=}"
+    # One tile: the image fitted into a square on black, its label on top. Missing images give a black tile.
+    tile() {
+        printf '%s' "$3" > "$tiles/label.txt"
+        local input=(-f lavfi -i "color=black:s=${size}x${size}") fit=""
+        [[ -f "$1" ]] && { input=(-i "$1"); fit="scale=$size:$size:force_original_aspect_ratio=decrease,pad=$size:$size:-1:-1,"; }
+        # One pixel format for every tile, or the sequence that tiles them breaks on the first change.
+        (cd "$tiles" && ffmpeg -loglevel error -y "${input[@]}" -frames:v 1 \
+            -vf "${fit}format=rgb24,drawtext=$font:expansion=none:textfile=label.txt:fontsize=18:fontcolor=yellow:box=1:boxcolor=black@0.6:x=6:y=6" "$2")
+    }
+    local columns=$(( ${#refs[@]} + ${#values[@]} )) row n=0 img
+    for ((row = 0; row <= shots; row++)); do
+        for img in "${refs[@]}"; do
+            if [[ $row == 0 ]]; then tile "$img" "$(printf 't%03d.png' $n)" "reference $(basename "$img")"
+            else tile "" "$(printf 't%03d.png' $n)" ""; fi
+            n=$((n + 1))
+        done
+        for v in "${values[@]}"; do
+            local dir="$out/${key}_$v"
+            if [[ $row == 0 ]]; then
+                echo "== $key=$v"
+                review "$script" "${rest[@]}" --param "$key=$v" --out "$dir" | sed -n 1,4p
+            fi
+            local m="$dir/metrics.json" label="$key=$v"
+            if [[ $row == 0 && -f "$m" ]]; then
+                local p999 pits steep
+                p999="$(grep -o '"slope_p999": [0-9.]*' "$m" | grep -o '[0-9.]*$')"
+                pits="$(grep -o '"pit_share": [0-9.]*' "$m" | grep -o '[0-9.]*$')"
+                steep="$(grep -o '"steep45": [0-9.]*' "$m" | grep -o '[0-9.]*$')"
+                label+="  p99.9 ${p999} deg  pits $(awk "BEGIN { printf \"%.2f\", $pits * 100 }") %  >45 deg $(awk "BEGIN { printf \"%.1f\", $steep * 100 }") %"
+                awk "BEGIN { exit !($p999 > 85) }" && label+="  SPIKES"
+            fi
+            [[ $row == 0 ]] && img="$dir/hillshade.png" || img="$dir/view_$((row - 1)).png"
+            tile "$img" "$(printf 't%03d.png' $n)" "$label"
+            n=$((n + 1))
+        done
+    done
+    (cd "$tiles" && ffmpeg -loglevel error -y -framerate 1 -i t%03d.png -frames:v 1 \
+        -vf "tile=${columns}x$((shots + 1)):padding=4" "$out/sheet.png")
+    echo "sweep: $out/sheet.png"
+}
 
 # Exports a Lands script raw, then prints what it asked for (`script_report.lands` in metadata.json) next to
 # what each id measured (`terrain_metrics --by-id`). The script must output `region_id`.
@@ -298,11 +361,12 @@ case "${1:-}" in
     _api-probe) api_probe "$2" ;;
     test) shift; run_tests "$@" ;;
     review) shift; review "$@" ;;
+    sweep) shift; sweep "$@" ;;
     lands) shift; lands "$@" ;;
     lands-check) shift; lands_check "$@" ;;
     clean) shift; clean "$@" ;;
     lint) lint ;;
     docs-check) docs_check ;;
     headings) shift; headings "$@" ;;
-    *) sed -n '2,19p' "$0"; exit 2 ;;
+    *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
