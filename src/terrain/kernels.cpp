@@ -115,7 +115,8 @@ constexpr OpInfo kOps[] = {
      .name           = "Blur",
      .shader         = "ops/blur.comp.spv",
      .nodeClass      = NodeClass::Neighborhood,
-     .maxInputs      = 1,
+     // The field and, optionally, the radius map.
+     .maxInputs      = 2,
      .maxChannels    = 1,
      .resolutionWord = kMaxNodeParams,
      // Reads a neighbourhood, so the pointwise reference cannot evaluate it; test_kernels compares

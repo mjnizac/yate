@@ -33,7 +33,7 @@ Then copy the closest example, run it in the viewer, change one thing at a time.
 | Sand | `terrains/dunes.lua`, `terrains/star_dunes.lua` | `Dunes.Field` (§10): `wind`, `wavelength`, `style` |
 | Flat-topped hills | `terrains/mesa.lua`, `shapes/mesas.lua` | terrace `steps`, shape size |
 | Tall sea cliffs, an escarpment | `terrains/cliffs.lua` | `top`, `columns`, `bays` |
-| A Minecraft-scale island plateau, cliffs onto a flat shelf | `terrains/coastal_plateau.lua` | `top`, `cliff`, `shelf_width` |
+| A Minecraft-scale island plateau, cliffs of clean faces onto a flat shelf | `terrains/coastal_plateau.lua` | `expand`, `displace`, `columns` |
 | A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
 | A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
 | Islands, archipelagos, continents, inland seas, all land with lakes | `lands/*.lua` (`Lands.Island`, `Lands.Archipelago`, `Lands.Continent`, `Lands.Compose`) | the preset, then `edit` by id (§10) |
@@ -571,6 +571,18 @@ instead of the mean: World Machine's Expander. On a mask, `Expand` grows the sel
 samples and `Shrink` narrows it; on a height they are a dilation and an erosion. Follow either with a
 small `Blur` for a sloped edge rather than a step. `terrains/cliffs.lua` widens an erosion's flow map
 into channels with it.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `shape` | `"square"` | the window over x and z: `square` (World Machine's Expander), `octagon` (the regular octagon inscribed in the square), `diamond` (\|dx\| + \|dz\| <= r), `disk` (dx² + dz² <= r (r + 1)) |
+| `radius_map` | none | an `Rn -> R1` field, clamped to [0, 1], that scales the radius at each sample: 1 is the full window, 0 leaves the sample as it was |
+
+The shape sets the directions the faces take: on a height, a square expander turns a rounded outline into
+straight faces along the two axes with square corners, an octagon into faces in eight directions, a
+diamond into faces at 45 degrees, a disk into rounded shoulders. The window is read at every tap of the
+square, so a shape costs what the square does. The map lets the expander act only where it is wanted
+(big blocks on headlands, none on a plateau top) without a blend afterwards.
+`terrains/coastal_plateau.lua` uses an octagon with a map for its cliff faces.
 
 ---
 

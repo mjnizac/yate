@@ -1015,15 +1015,33 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         return Handle{Unwrap(graph.AddBlur(input, radius, location))};
     });
     // The same window as Blur, taking its largest (`Expand`) or smallest (`Shrink`) value: a mask grows
-    // or shrinks by `radius` samples, a height is dilated or eroded.
+    // or shrinks by `radius` samples, a height is dilated or eroded. `shape` cuts the window (World
+    // Machine's Expander has only the square); `radius_map` scales the radius per sample.
     const auto morphology = [&graph](const char* name, terrain::BlurMode mode) {
         return [&graph, name, mode](sol::this_state lua, sol::table table) {
             const SourceLocation location = CallerLocation(lua);
             Args                 args(std::move(table), name, location);
             const Value          input  = args.Input("input");
             const u32_t          radius = args.Count("radius", 1, 1, terrain::kMaxBlurRadius);
+            const std::string    shapeName = args.Text("shape", "square");
+            std::optional<Value> radiusMap;
+            if (args.Has("radius_map")) {
+                radiusMap = args.Input("radius_map");
+                const Mapping wanted{input.mapping.domain, 1};
+                if (!(radiusMap->mapping == wanted)) {
+                    Fail(location, "{} expects radius_map to be {}, got {}", name, ToString(wanted),
+                         ToString(radiusMap->mapping));
+                }
+            }
             args.Finish();
-            return Handle{Unwrap(graph.AddBlur(input, radius, location, mode))};
+            constexpr std::array<std::string_view, 4> kShapes = {"square", "octagon", "diamond", "disk"};
+            const auto found = std::find(kShapes.begin(), kShapes.end(), shapeName);
+            if (found == kShapes.end()) {
+                Fail(location, "{} expects shape to be square, octagon, diamond or disk, got '{}'", name,
+                     shapeName);
+            }
+            const auto shape = static_cast<terrain::BlurShape>(found - kShapes.begin());
+            return Handle{Unwrap(graph.AddBlur(input, radius, location, mode, shape, radiusMap))};
         };
     };
     filters.set_function("Expand", morphology("Filters.Expand", terrain::BlurMode::Maximum));

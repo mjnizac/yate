@@ -6,6 +6,10 @@
 //   0  radius      taps on each side, at least 1
 //   1  components
 //   2  mode        0 the mean, 1 the largest value, 2 the smallest (a dilation or an erosion)
+//   3  shape       the window over x and z (in R3 a prism of the same reach in y): 0 the square,
+//                  1 the regular octagon inscribed in it, 2 the diamond, 3 the disk
+//   4  radius map  1 when input 1 is an Rn -> R1 field scaling the radius per sample (clamped to
+//                  [0, 1]; 0 keeps only the sample itself), read at the sample only
 //
 // This is the first op that reads anything other than its own sample, so it is what makes halo
 // propagation real: its input is allocated with `output halo + radius`, which is a wider border and
@@ -30,9 +34,16 @@ void main() {
     int  radius = max(ParamInt(0), 1);
     uint count  = max(ParamUint(1), 1u);
     uint mode   = ParamUint(2);
+    uint shape  = ParamUint(3);
 
     FloatBuffer source = FloatBuffer(pc.inputs[0]);
     FloatBuffer target = FloatBuffer(pc.outputs[0]);
+
+    // The window's reach at this sample, in taps: the declared radius, times the map where there is one.
+    float reach = float(radius);
+    if (ParamUint(4) == 1u) {
+        reach *= clamp(FloatBuffer(pc.inputs[1]).values[InputIndex(1u, local)], 0.0, 1.0);
+    }
 
     // The y extent is 1 in R2, so the vertical loop collapses to the single plane.
     int spanY = IsR3() ? radius : 0;
@@ -45,6 +56,16 @@ void main() {
         for (int dy = -spanY; dy <= spanY; ++dy) {
             for (int dz = -radius; dz <= radius; ++dz) {
                 for (int dx = -radius; dx <= radius; ++dx) {
+                    float ax = abs(float(dx));
+                    float az = abs(float(dz));
+                    bool  inside = shape == 1u ? max(ax, az) <= reach && ax + az <= reach * 1.41421356
+                                 : shape == 2u ? ax + az <= reach
+                                 : shape == 3u ? ax * ax + az * az <= reach * (reach + 1.0)
+                                               : max(ax, az) <= reach;
+                    // In R3 the window is the shape's prism, its height scaled by the map too.
+                    if (!inside || abs(float(dy)) > reach) {
+                        continue;
+                    }
                     ivec3 offset = ivec3(dx, dy, dz);
                     if (!InputContains(0u, local, offset)) {
                         continue;

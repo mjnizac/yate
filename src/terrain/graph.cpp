@@ -748,9 +748,22 @@ Result<Value> Graph::AddExtract(Value input, u8_t component, SourceLocation loca
     return Append(node, location);
 }
 
-Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location, BlurMode mode) {
+Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location, BlurMode mode,
+                             BlurShape shape, std::optional<Value> radiusMap) {
     if (Status checked = CheckValue(input, "Blur input", location); !checked) {
         return std::unexpected(checked.error());
+    }
+    if (radiusMap.has_value()) {
+        if (Status checked = CheckValue(*radiusMap, "Blur radius map", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        const Mapping wanted{input.mapping.domain, 1};
+        if (!(radiusMap->mapping == wanted)) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "Blur expects a {} radius map, got {}", ToString(wanted),
+                ToString(radiusMap->mapping)));
+        }
     }
     if (radius == 0 || radius > kMaxBlurRadius) {
         return std::unexpected(MakeScriptError(
@@ -763,13 +776,18 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location,
     node.nodeClass = NodeClass::Neighborhood;
     // The radius is what halo propagation adds to every producer upstream of this node.
     node.radius       = radius;
-    node.inputCount   = 1;
+    node.inputCount   = radiusMap.has_value() ? 2 : 1;
     node.inputs[0]    = input;
+    if (radiusMap.has_value()) {
+        node.inputs[1] = *radiusMap;
+    }
     node.channelCount = 1;
     node.channels[0]  = input.mapping;
     node.params[0]    = radius;
     node.params[1]    = input.mapping.components;
     node.params[2]    = static_cast<u32_t>(mode);
+    node.params[3]    = static_cast<u32_t>(shape);
+    node.params[4]    = radiusMap.has_value() ? 1u : 0u;
     return Append(node, location);
 }
 

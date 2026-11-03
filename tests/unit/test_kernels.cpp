@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <memory_resource>
 #include <vector>
 
@@ -240,8 +241,13 @@ private:
 /// Written against the geometry of the input on purpose: the whole point of the check is that the
 /// input carries a wider border than the output, so a kernel that reused the row stride of the
 /// output would read the wrong samples and this would catch it.
-void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionExtent extent,
-                      u32_t inputHalo, u32_t outputHalo, i32_t radius, u8_t components) {
+///
+/// `mode` and `shape` are the kernel's parameters 2 and 3; `map`, when given, is the radius map in the
+/// input's geometry. The shape test is written in single precision, as the kernel writes it, so a tap
+/// on a window's edge falls on the same side in both.
+void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain domain,
+                   SectionExtent extent, u32_t inputHalo, u32_t outputHalo, i32_t radius,
+                   u8_t components, u32_t mode, u32_t shape) {
     const auto padded = [&](u32_t halo) {
         const u32_t pad = 2 * halo;
         return std::array<u32_t, 3>{extent.x + pad, domain == Domain::R3 ? extent.y + pad : 1,
@@ -260,13 +266,32 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
                 const i32_t ix = static_cast<i32_t>(x) + delta;
                 const i32_t iy = domain == Domain::R3 ? static_cast<i32_t>(y) + delta : 0;
                 const i32_t iz = static_cast<i32_t>(z) + delta;
+                f32_t       reach = static_cast<f32_t>(radius);
+                if (map != nullptr) {
+                    const u64_t centre =
+                        (static_cast<u64_t>(iy) * nIn[2] + static_cast<u64_t>(iz)) * nIn[0]
+                        + static_cast<u64_t>(ix);
+                    reach *= std::clamp(map[centre], 0.0f, 1.0f);
+                }
 
                 for (u8_t c = 0; c < components; ++c) {
-                    f64_t sum  = 0.0;
-                    f64_t taps = 0.0;
+                    f64_t sum   = 0.0;
+                    f64_t taps  = 0.0;
+                    f32_t most  = -3.402823e38f;
+                    f32_t least = 3.402823e38f;
                     for (i32_t dy = -spanY; dy <= spanY; ++dy) {
                         for (i32_t dz = -radius; dz <= radius; ++dz) {
                             for (i32_t dx = -radius; dx <= radius; ++dx) {
+                                const f32_t ax = static_cast<f32_t>(std::abs(dx));
+                                const f32_t az = static_cast<f32_t>(std::abs(dz));
+                                const b8_t  inside =
+                                    shape == 1u   ? std::max(ax, az) <= reach && ax + az <= reach * 1.41421356f
+                                    : shape == 2u ? ax + az <= reach
+                                    : shape == 3u ? ax * ax + az * az <= reach * (reach + 1.0f)
+                                                  : std::max(ax, az) <= reach;
+                                if (!inside || static_cast<f32_t>(std::abs(dy)) > reach) {
+                                    continue;
+                                }
                                 const i32_t tx = ix + dx;
                                 const i32_t ty = iy + dy;
                                 const i32_t tz = iz + dz;
@@ -278,13 +303,18 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
                                 }
                                 const u64_t inAt =
                                     (static_cast<u64_t>(ty) * nIn[2] + tz) * nIn[0] + tx;
-                                sum += input[inAt * components + c];
+                                const f32_t v = input[inAt * components + c];
+                                sum += v;
+                                most  = std::max(most, v);
+                                least = std::min(least, v);
                                 taps += 1.0;
                             }
                         }
                     }
-                    output[outAt * components + c] =
-                        taps > 0.0 ? static_cast<f32_t>(sum / taps) : 0.0f;
+                    const f32_t result = mode == 1u ? most
+                                       : mode == 2u ? least
+                                                    : static_cast<f32_t>(sum / std::max(taps, 1.0));
+                    output[outAt * components + c] = taps > 0.0 ? result : 0.0f;
                 }
             }
         }
@@ -292,9 +322,11 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
 }
 
 /// Dispatches Blur with an input whose halo is wider than the one of the output, as halo propagation
-/// would arrange it, and compares against the CPU box blur.
+/// would arrange it, and compares against the CPU reference. `mode` and `shape` are the kernel's;
+/// with `withMap` a radius map spanning [-0.25, 1.25) (so both clamps are reached) goes in as input 1.
 [[nodiscard]] b8_t CheckBlur(Context& context, Domain domain, i32_t radius, u8_t components,
-                             u32_t outputHalo, const char* label) {
+                             u32_t outputHalo, const char* label, u32_t mode = 0, u32_t shape = 0,
+                             b8_t withMap = false) {
     const SectionExtent extent = domain == Domain::R3 ? kExtent3 : kExtent;
     const Mapping       mapping{domain, components};
     const u32_t         inputHalo = outputHalo + static_cast<u32_t>(radius);
@@ -331,6 +363,31 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
         ok = false;
     }
 
+    // The map in the input's geometry: one component, the same halo.
+    const Mapping              mapMapping{domain, 1};
+    const u64_t                mapBytes = ValueSize(mapMapping, extent, inputHalo);
+    std::optional<SectionSlot> mapSlot;
+    std::pmr::vector<f32_t>    map(&memory::General().Resource());
+    if (ok && withMap) {
+        Result<SectionSlot> acquired =
+            context.Sections().Acquire(ClassOf(mapMapping, extent, inputHalo), mapBytes);
+        if (!acquired) {
+            std::printf("FAIL %s: %s\n", label, acquired.error().Format().data());
+            ok = false;
+        } else {
+            mapSlot = *acquired;
+            map.resize(static_cast<usize_t>(SampleCount(mapMapping, extent, inputHalo)));
+            for (usize_t i = 0; i < map.size(); ++i) {
+                map[i] = SampleValue(11, i) * 0.75f + 0.5f;
+            }
+            if (Status uploaded = test::UploadToSlot(context, *mapSlot, map.data(), mapBytes);
+                !uploaded) {
+                std::printf("FAIL %s: %s\n", label, uploaded.error().Format().data());
+                ok = false;
+            }
+        }
+    }
+
     if (ok) {
         Result<ComputePipeline> pipeline = ComputePipeline::Create(
             context.Device(), OpInfoOf(OpKind::Blur).shader,
@@ -345,11 +402,17 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
             constants.halo   = outputHalo;
             constants.SetDomain(static_cast<u32_t>(domain));
             constants.SetChannelMask(1);
-            constants.inputHalos = inputHalo & 0xFFu;
+            constants.inputHalos = (inputHalo & 0xFFu) | ((inputHalo & 0xFFu) << 8);
             constants.inputs[0]  = inputSlot->address;
             constants.outputs[0] = outputSlot->address;
             constants.params[0]  = static_cast<u32_t>(radius);
             constants.params[1]  = components;
+            constants.params[2]  = mode;
+            constants.params[3]  = shape;
+            if (mapSlot.has_value()) {
+                constants.inputs[1] = mapSlot->address;
+                constants.params[4] = 1;
+            }
 
             Result<test::Readback> readback =
                 test::RunKernel(context, *pipeline, *outputSlot, constants, outputBytes);
@@ -360,8 +423,9 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
                 std::pmr::vector<f32_t> expected(
                     static_cast<usize_t>(outputSamples * components),
                     &memory::General().Resource());
-                BoxBlurReference(host.data(), expected.data(), domain, extent, inputHalo,
-                                 outputHalo, radius, components);
+                BlurReference(host.data(), mapSlot.has_value() ? map.data() : nullptr,
+                              expected.data(), domain, extent, inputHalo, outputHalo, radius,
+                              components, mode, shape);
 
                 u64_t mismatches = 0;
                 f64_t worst      = 0.0;
@@ -388,6 +452,9 @@ void BoxBlurReference(const f32_t* input, f32_t* output, Domain domain, SectionE
         }
     }
 
+    if (mapSlot.has_value()) {
+        context.Sections().Release(*mapSlot);
+    }
     context.Sections().Release(*outputSlot);
     context.Sections().Release(*inputSlot);
     return ok;
@@ -545,6 +612,24 @@ int main() {
             (void)CheckBlur(context, Domain::R2, 1, 3, 2, "Blur R2 r1 h2");
             (void)CheckBlur(context, Domain::R3, 1, 1, 0, "Blur R3 r1");
             (void)CheckBlur(context, Domain::R3, 2, 1, 1, "Blur R3 r2 h1");
+        }
+
+        test::Section("Expand and Shrink: window shapes and the radius map");
+        {
+            // Every shape at a radius where it differs from the square, in both modes, then each
+            // with a radius map that reaches both of its clamps.
+            const char* names[4] = {"square", "octagon", "diamond", "disk"};
+            char        label[48];
+            for (u32_t shape = 0; shape < 4; ++shape) {
+                std::snprintf(label, sizeof(label), "Expand %s r4", names[shape]);
+                (void)CheckBlur(context, Domain::R2, 4, 1, 1, label, 1, shape);
+                std::snprintf(label, sizeof(label), "Shrink %s r3", names[shape]);
+                (void)CheckBlur(context, Domain::R2, 3, 1, 0, label, 2, shape);
+                std::snprintf(label, sizeof(label), "Expand %s r5 map", names[shape]);
+                (void)CheckBlur(context, Domain::R2, 5, 1, 1, label, 1, shape, true);
+            }
+            (void)CheckBlur(context, Domain::R2, 3, 2, 0, "Blur disk r3 map", 0, 3, true);
+            (void)CheckBlur(context, Domain::R3, 2, 1, 0, "Expand R3 octagon map", 1, 1, true);
         }
 
         test::Section("Transform");

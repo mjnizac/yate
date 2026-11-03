@@ -6,6 +6,7 @@
 
 #include <array>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -199,6 +200,11 @@ enum class VectorOp : u32_t { Extract = 0, Combine };
 /// What a Blur node takes over its window: the mean, or the largest or smallest value (a dilation or an
 /// erosion, World Machine's Expander).
 enum class BlurMode : u32_t { Average = 0, Maximum, Minimum };
+
+/// The window a Blur node reads, over x and z (in R3 a prism of the same reach in y): the square of
+/// `radius` taps on each side, the regular octagon inscribed in it, the diamond (|dx| + |dz| <= r) or
+/// the disk (dx^2 + dz^2 <= r (r + 1)).
+enum class BlurShape : u32_t { Square = 0, Octagon, Diamond, Disk };
 
 /// Where in a script a node was created. Reported by every validation and compilation error.
 struct SourceLocation {
@@ -441,9 +447,13 @@ public:
     [[nodiscard]] Result<Value> AddExtract(Value input, u8_t component, SourceLocation location);
 
     /// Box blur of `radius` taps on each side. Neighbourhood: this is what gives the producing node
-    /// a halo, and the compiler propagates it backwards from here.
+    /// a halo, and the compiler propagates it backwards from here. `shape` cuts the window; with a
+    /// `radiusMap` (an `Rn -> R1` field, clamped to [0, 1]) each sample's window is `radius` times the
+    /// map there, so 0 leaves the sample as it was.
     [[nodiscard]] Result<Value> AddBlur(Value input, u32_t radius, SourceLocation location,
-                                        BlurMode mode = BlurMode::Average);
+                                        BlurMode mode = BlurMode::Average,
+                                        BlurShape shape = BlurShape::Square,
+                                        std::optional<Value> radiusMap = std::nullopt);
 
     struct ThermalParams {
         /// Iterations to run. Also the influence radius, and therefore the halo.

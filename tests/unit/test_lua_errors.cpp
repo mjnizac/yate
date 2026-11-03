@@ -254,6 +254,24 @@ return main
 )",
                  3, {"radius"});
 
+    CheckFailure("expand_unknown_shape", R"(local function main()
+    local n = Noises.fBm{ frequency = 0.01 }
+    return { height = { value = Filters.Expand{ input = n.value, radius = 2, shape = "hexagon" },
+                        range = { 0, 1 } } }
+end
+return main
+)",
+                 3, {"Filters.Expand", "shape", "octagon", "hexagon"});
+
+    CheckFailure("expand_radius_map_not_scalar", R"(local function main()
+    local n = Noises.fBm{ frequency = 0.01 }
+    return { height = { value = Filters.Expand{ input = n.value, radius = 2, radius_map = n.gradient },
+                        range = { 0, 1 } } }
+end
+return main
+)",
+                 3, {"Filters.Expand", "radius_map", "R2->R1", "R2->R2"});
+
     CheckFailure("inverted_slope_range", R"(local function main()
     local n = Noises.fBm{ frequency = 0.01 }
     local mask = Masks.Slope{ input = n.gradient, min = 0.9, max = 0.2 }
