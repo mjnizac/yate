@@ -1,12 +1,24 @@
 {
   "family": "cliffs",
-  "note": "Real height fields come from tools/dev.sh dem (AWS Terrain Tiles, open data from USGS 3DEP and others); only the hillshade (sun 180,35) is kept here, the heights are regenerated with the command. kind as in alpine/refs.json.",
+  "note": "Real height fields come from tools/dev.sh dem (AWS Terrain Tiles, open data from USGS 3DEP and others); only their hillshade (sun 180,35) is kept here, the heights are regenerated with the command. Photos give the look; a photo's dimensions come from the dem of the same place. kind as in alpine/refs.json.",
   "images": [
     { "file": "book_cliffs_hillshade.png", "kind": "shaded", "dem": "tools/dev.sh dem 39.68,-110.74 --zoom 13 --tiles 3 --out out/dem/book_cliffs",
       "size_m": 11295, "height_m": 760,
       "note": "Book Cliffs front north of Price, Utah: a south-facing escarpment dissected into dendritic ridges and ravines (no sheer wall), over a pediment plain cut by inverted gravel channels. North is up.",
       "measured": { "resolution_m": 14.7, "heights_m": { "p10": 1879, "p50": 2087, "p90": 2536, "p99": 2639 },
                     "slope_p50": 16.5, "slope_p999": 59.6, "steep45": 0.0216, "talus_share": 0.1623,
-                    "local_relief_m": 234, "hypsometric_integral": 0.425, "drainage_density": 1.96, "spectral_slope": 4.18 } }
+                    "local_relief_m": 234, "hypsometric_integral": 0.425, "drainage_density": 1.96, "spectral_slope": 4.18 } },
+    { "file": "vermilion_cliffs.jpg", "kind": "photo", "license": "public domain (USGS)",
+      "source": "https://www.usgs.gov/media/images/pipe-spring-a-view-looking-west-along-vermilion-cliffs",
+      "note": "Vermilion Cliffs near Pipe Spring, Arizona: a short vertical cap rock over a long straight debris slope strewn with fallen blocks, a mesa behind." },
+    { "file": "seven_sisters.jpg", "kind": "photo", "license": "CC BY-SA 2.0, Stephen Dawson (credit required)",
+      "source": "https://commons.wikimedia.org/wiki/File:Seven_Sisters.jpg",
+      "note": "Seven Sisters, East Sussex: white chalk sea cliffs, flat vertical faces where rolling downs and their dry valleys are cut off by the sea, a shingle beach at the foot." },
+    { "file": "el_capitan.jpg", "kind": "photo", "license": "public domain (C. E. Watkins, 1870s; via USGS)",
+      "source": "https://www.usgs.gov/media/images/a-photo-a-cliff-el-capitan",
+      "note": "El Capitan, Yosemite: a smooth granite wall about 900 m high over a forested talus foot. Small stereo card in a frame: shapes only." },
+    { "file": "na_pali.jpg", "kind": "photo", "license": "public domain (USGS)",
+      "source": "https://www.usgs.gov/media/images/coast-cliffs-known-napali",
+      "note": "Na Pali coast, Kauai: steep vegetated sea cliffs with layered lava benches and fluted ridges; mostly hidden by trees in the foreground." }
   ]
 }
