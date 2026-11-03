@@ -136,6 +136,9 @@ enum class ArithOp : u32_t {
     /// parameter word `kArithSmoothWord`.
     SmoothMinimum,
     SmoothMaximum,
+    /// The angle of the vector (b, a) in radians, in (-pi, pi]: atan2(a, b). World Machine's Angle
+    /// Selector output, from a gradient or a position.
+    Atan2,
 };
 
 /// Word of `Node::params` that carries the width of a smooth minimum or maximum, as float bits.

@@ -509,6 +509,12 @@ without cutting into it. `Min` intersects, which is how you carve: a canyon fiel
 removes material wherever the canyon is lower. Both leave a crease where the two surfaces cross; soften
 it with a small `Filters.Blur` if it reads as an edge.
 
+### `Combine.Atan2`
+
+`Combine.Atan2{ y = ..., x = ... }`: the angle of the vector (x, y) in radians, (-pi, pi], 0 at the
+origin. Of a gradient it is the aspect; of a position, the bearing round a point: World Machine's Angle
+Selector output, which the forum uses for the radial spokes of impact debris. `Masks.Aspect` wraps it.
+
 #### Example: a plateau that never sinks below the terrain
 
 ```lua

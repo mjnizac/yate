@@ -35,6 +35,7 @@ layout(constant_id = 4) const uint kImmediateOperand = 0;
 #define ARITH_MAXIMUM  5u
 #define ARITH_SMOOTH_MINIMUM 6u
 #define ARITH_SMOOTH_MAXIMUM 7u
+#define ARITH_ATAN2          8u
 
 // Polynomial smooth minimum: `min(a, b)` with the corner rounded over a width `k`.
 float SmoothMinimum(float a, float b, float k) {
@@ -53,6 +54,8 @@ float Apply(float a, float b) {
         case ARITH_MINIMUM: return min(a, b);
         case ARITH_SMOOTH_MINIMUM: return SmoothMinimum(a, b, ParamFloat(4));
         case ARITH_SMOOTH_MAXIMUM: return -SmoothMinimum(-a, -b, ParamFloat(4));
+        // Zero at the origin rather than whatever the implementation gives for atan(0, 0).
+        case ARITH_ATAN2: return a == 0.0 && b == 0.0 ? 0.0 : atan(a, b);
         default: return max(a, b);
     }
 }

@@ -879,6 +879,15 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     combine.set_function("Max", [pair](sol::this_state lua, sol::table table) {
         return pair(lua, std::move(table), "Combine.Max", ArithOp::Maximum);
     });
+    // The angle of (x, y) in radians, (-pi, pi]: of a gradient it is the aspect, of a position the bearing.
+    combine.set_function("Atan2", [&graph](sol::this_state lua, sol::table table) {
+        const SourceLocation location = CallerLocation(lua);
+        Args                 args(std::move(table), "Combine.Atan2", location);
+        const Value          y = args.Input("y");
+        const Value          x = args.Input("x");
+        args.Finish();
+        return Handle{Unwrap(graph.AddArith(ArithOp::Atan2, y, x, location))};
+    });
 
     // The rounded versions. `k` is the width of the blend in the units of the operands: where the two
     // differ by more than `k` the result is exactly Min or Max, and inside it the corner is rounded,

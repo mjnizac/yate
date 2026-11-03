@@ -652,8 +652,9 @@ int main() {
         test::Section("Arith");
         {
             const ArithOp ops[] = {ArithOp::Add,     ArithOp::Subtract, ArithOp::Multiply,
-                                   ArithOp::Divide,  ArithOp::Minimum,  ArithOp::Maximum};
-            const char*   names[] = {"Add", "Subtract", "Multiply", "Divide", "Minimum", "Maximum"};
+                                   ArithOp::Divide,  ArithOp::Minimum,  ArithOp::Maximum,
+                                   ArithOp::Atan2};
+            const char*   names[] = {"Add", "Subtract", "Multiply", "Divide", "Minimum", "Maximum", "Atan2"};
             for (usize_t i = 0; i < ArrayCount(ops); ++i) {
                 Result<Value> node =
                     graph.AddArith(ops[i], *scalar, *scalar, At(static_cast<u32_t>(20 + i)));
@@ -672,6 +673,11 @@ int main() {
             Result<Value> reversed = graph.AddArith(ArithOp::Add, *scalar, *vector2, At(31));
             REQUIRE_OK(reversed);
             (void)checker.Check(reversed->node, "Arith broadcast R1xR2");
+
+            // Two different operands, so every quadrant is reached.
+            Result<Value> angle = graph.AddArith(ArithOp::Atan2, *vector2, *scalar, At(32));
+            REQUIRE_OK(angle);
+            (void)checker.Check(angle->node, "Arith Atan2 R2xR1");
         }
 
         test::Section("Curve");

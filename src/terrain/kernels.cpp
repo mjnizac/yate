@@ -291,6 +291,7 @@ static_assert(RegistryIsOrdered(), "kOps entries must be in OpKind order");
     switch (op) {
         case ArithOp::SmoothMinimum: return SmoothMinimum(a, b, smooth);
         case ArithOp::SmoothMaximum: return -SmoothMinimum(-a, -b, smooth);
+        case ArithOp::Atan2: return a == 0.0f && b == 0.0f ? 0.0f : std::atan2(a, b);
         case ArithOp::Add: return a + b;
         case ArithOp::Subtract: return a - b;
         case ArithOp::Multiply: return a * b;
