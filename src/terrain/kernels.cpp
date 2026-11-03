@@ -118,7 +118,8 @@ constexpr OpInfo kOps[] = {
      // The field and, optionally, the radius map.
      .maxInputs      = 2,
      .maxChannels    = 1,
-     .resolutionWord = kMaxNodeParams,
+     // Word 6: a cone or round falloff is a slope, so the drop per sample is slope times spacing.
+     .resolutionWord = 6,
      // Reads a neighbourhood, so the pointwise reference cannot evaluate it; test_kernels compares
      // it against a CPU box blur of its own.
      .hasReference   = false,

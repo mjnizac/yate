@@ -749,7 +749,8 @@ Result<Value> Graph::AddExtract(Value input, u8_t component, SourceLocation loca
 }
 
 Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location, BlurMode mode,
-                             BlurShape shape, std::optional<Value> radiusMap) {
+                             BlurShape shape, std::optional<Value> radiusMap, BlurFalloff falloff,
+                             f32_t slope) {
     if (Status checked = CheckValue(input, "Blur input", location); !checked) {
         return std::unexpected(checked.error());
     }
@@ -770,6 +771,11 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location,
             ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
             "Blur radius must be between 1 and {}, got {}", kMaxBlurRadius, radius));
     }
+    if (falloff != BlurFalloff::Flat && (mode == BlurMode::Average || !std::isfinite(slope) || slope < 0.0f)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a falloff needs Expand or Shrink and a finite slope of at least 0, got {}", slope));
+    }
 
     Node node;
     node.kind      = OpKind::Blur;
@@ -788,6 +794,8 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location,
     node.params[2]    = static_cast<u32_t>(mode);
     node.params[3]    = static_cast<u32_t>(shape);
     node.params[4]    = radiusMap.has_value() ? 1u : 0u;
+    node.params[5]    = static_cast<u32_t>(falloff);
+    std::memcpy(&node.params[7], &slope, sizeof(f32_t));
     return Append(node, location);
 }
 

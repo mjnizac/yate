@@ -578,6 +578,8 @@ into channels with it.
 | --- | --- | --- |
 | `shape` | `"square"` | the window over x and z: `square` (World Machine's Expander), `octagon` (the regular octagon inscribed in the square), `diamond` (\|dx\| + \|dz\| <= r), `disk` (dx² + dz² <= r (r + 1)) |
 | `radius_map` | none | an `Rn -> R1` field, clamped to [0, 1], that scales the radius at each sample: 1 is the full window, 0 leaves the sample as it was |
+| `falloff` | `"flat"` | the structuring element: `flat` takes the window's values as they are; `cone` lowers each tap (for `Shrink`, raises it) by `slope` times its distance, World Machine's Linear Slope expander; `round` by a paraboloid that reaches `slope` at `radius`, its Gaussian expander |
+| `slope` | `1.0` | rise over run of the falloff, the `tan` of its angle, as `talus` is |
 
 The shape sets the directions the faces take: on a height, a square expander turns a rounded outline into
 straight faces along the two axes with square corners, an octagon into faces in eight directions, a
@@ -585,6 +587,13 @@ diamond into faces at 45 degrees, a disk into rounded shoulders. The window is r
 square, so a shape costs what the square does. The map lets the expander act only where it is wanted
 (big blocks on headlands, none on a plateau top) without a blend afterwards.
 `terrains/coastal_plateau.lua` uses an octagon with a map for its cliff faces.
+
+A cone falloff is the constant-slope expander the World Machine forum keeps asking for: `Expand` with
+`falloff = "cone", slope = math.tan(math.rad(35))` and the `disk` shape skirts every peak and outline with
+a 35 degree apron, whatever their height, out to `radius` samples; `Shrink` with a cone cuts V creases
+into a height along its low lines (the forum's "Shrink, Linear Slope" for sharp mountain creases). The
+cone is measured in true distance, so on a disk it has no straight faces along the axes, the artefact
+World Machine's Linear Slope leaves. `round` gives rounded shoulders instead of straight aprons.
 
 ### `Filters.Displace`
 

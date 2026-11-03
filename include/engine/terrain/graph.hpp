@@ -209,6 +209,10 @@ enum class BlurMode : u32_t { Average = 0, Maximum, Minimum };
 /// the disk (dx^2 + dz^2 <= r (r + 1)).
 enum class BlurShape : u32_t { Square = 0, Octagon, Diamond, Disk };
 
+/// The structuring element of an Expand or a Shrink: flat, a cone falling by a slope with distance
+/// (World Machine's Linear Slope expander), or a paraboloid reaching that slope at the radius (round).
+enum class BlurFalloff : u32_t { Flat = 0, Cone, Round };
+
 /// Where in a script a node was created. Reported by every validation and compilation error.
 struct SourceLocation {
     std::string_view file;
@@ -452,11 +456,13 @@ public:
     /// Box blur of `radius` taps on each side. Neighbourhood: this is what gives the producing node
     /// a halo, and the compiler propagates it backwards from here. `shape` cuts the window; with a
     /// `radiusMap` (an `Rn -> R1` field, clamped to [0, 1]) each sample's window is `radius` times the
-    /// map there, so 0 leaves the sample as it was.
+    /// map there, so 0 leaves the sample as it was. A `falloff` other than flat lowers each tap of a
+    /// maximum (raises it for a minimum) by `slope`, rise over run, times its distance.
     [[nodiscard]] Result<Value> AddBlur(Value input, u32_t radius, SourceLocation location,
                                         BlurMode mode = BlurMode::Average,
                                         BlurShape shape = BlurShape::Square,
-                                        std::optional<Value> radiusMap = std::nullopt);
+                                        std::optional<Value> radiusMap = std::nullopt,
+                                        BlurFalloff falloff = BlurFalloff::Flat, f32_t slope = 0.0f);
 
     /// `input` (an `R2 -> R1` field) read at each sample moved by `offset` (an `R2 -> R2` field, in
     /// metres along x and z), bilinearly; offsets longer than `radius` samples are shortened to it, which

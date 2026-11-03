@@ -1024,6 +1024,8 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
             const Value          input  = args.Input("input");
             const u32_t          radius = args.Count("radius", 1, 1, terrain::kMaxBlurRadius);
             const std::string    shapeName = args.Text("shape", "square");
+            const std::string    falloffName = args.Text("falloff", "flat");
+            const f32_t          slope       = args.Float("slope", 1.0);
             std::optional<Value> radiusMap;
             if (args.Has("radius_map")) {
                 radiusMap = args.Input("radius_map");
@@ -1041,7 +1043,14 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
                      shapeName);
             }
             const auto shape = static_cast<terrain::BlurShape>(found - kShapes.begin());
-            return Handle{Unwrap(graph.AddBlur(input, radius, location, mode, shape, radiusMap))};
+            constexpr std::array<std::string_view, 3> kFalloffs = {"flat", "cone", "round"};
+            const auto falloff = std::find(kFalloffs.begin(), kFalloffs.end(), falloffName);
+            if (falloff == kFalloffs.end()) {
+                Fail(location, "{} expects falloff to be flat, cone or round, got '{}'", name, falloffName);
+            }
+            return Handle{Unwrap(graph.AddBlur(
+                input, radius, location, mode, shape, radiusMap,
+                static_cast<terrain::BlurFalloff>(falloff - kFalloffs.begin()), slope))};
         };
     };
     filters.set_function("Expand", morphology("Filters.Expand", terrain::BlurMode::Maximum));

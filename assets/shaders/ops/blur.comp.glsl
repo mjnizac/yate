@@ -10,6 +10,11 @@
 //                  1 the regular octagon inscribed in it, 2 the diamond, 3 the disk
 //   4  radius map  1 when input 1 is an Rn -> R1 field scaling the radius per sample (clamped to
 //                  [0, 1]; 0 keeps only the sample itself), read at the sample only
+//   5  falloff     the structuring element of modes 1 and 2: 0 flat, 1 a cone (each tap lowered, or for
+//                  the smallest value raised, by slope x distance, World Machine's Linear Slope), 2 round
+//                  (a paraboloid reaching that slope at the declared radius, its Gaussian expander)
+//   6  spacing     metres per sample, written by the compiler
+//   7  slope       rise over run of the falloff, as float bits
 //
 // This is the first op that reads anything other than its own sample, so it is what makes halo
 // propagation real: its input is allocated with `output halo + radius`, which is a wider border and
@@ -35,6 +40,9 @@ void main() {
     uint count  = max(ParamUint(1), 1u);
     uint mode   = ParamUint(2);
     uint shape  = ParamUint(3);
+    uint falloff = mode == 0u ? 0u : ParamUint(5);
+    // The drop per sample of distance, in the field's units: a slope is metres over metres.
+    float drop = ParamFloat(7) * ParamFloat(6);
 
     FloatBuffer source = FloatBuffer(pc.inputs[0]);
     FloatBuffer target = FloatBuffer(pc.outputs[0]);
@@ -72,6 +80,11 @@ void main() {
                     }
                     uint at = InputIndexOffset(0u, local, offset);
                     float v = source.values[at * count + c];
+                    if (falloff != 0u) {
+                        float d = length(vec3(ax, float(dy), az));
+                        float fall = falloff == 1u ? drop * d : drop * d * d / (2.0 * float(radius));
+                        v += mode == 1u ? -fall : fall;
+                    }
                     sum += v;
                     most  = max(most, v);
                     least = min(least, v);

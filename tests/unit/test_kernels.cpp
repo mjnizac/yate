@@ -248,7 +248,7 @@ private:
 /// on a window's edge falls on the same side in both.
 void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain domain,
                    SectionExtent extent, u32_t inputHalo, u32_t outputHalo, i32_t radius,
-                   u8_t components, u32_t mode, u32_t shape) {
+                   u8_t components, u32_t mode, u32_t shape, u32_t falloff = 0, f32_t drop = 0.0f) {
     const auto padded = [&](u32_t halo) {
         const u32_t pad = 2 * halo;
         return std::array<u32_t, 3>{extent.x + pad, domain == Domain::R3 ? extent.y + pad : 1,
@@ -304,7 +304,13 @@ void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain d
                                 }
                                 const u64_t inAt =
                                     (static_cast<u64_t>(ty) * nIn[2] + tz) * nIn[0] + tx;
-                                const f32_t v = input[inAt * components + c];
+                                f32_t v = input[inAt * components + c];
+                                if (falloff != 0u && mode != 0u) {
+                                    const f32_t d = std::sqrt(ax * ax + static_cast<f32_t>(dy * dy) + az * az);
+                                    const f32_t fall = falloff == 1u ? drop * d
+                                                                     : drop * d * d / (2.0f * static_cast<f32_t>(radius));
+                                    v += mode == 1u ? -fall : fall;
+                                }
                                 sum += v;
                                 most  = std::max(most, v);
                                 least = std::min(least, v);
@@ -327,7 +333,8 @@ void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain d
 /// with `withMap` a radius map spanning [-0.25, 1.25) (so both clamps are reached) goes in as input 1.
 [[nodiscard]] b8_t CheckBlur(Context& context, Domain domain, i32_t radius, u8_t components,
                              u32_t outputHalo, const char* label, u32_t mode = 0, u32_t shape = 0,
-                             b8_t withMap = false) {
+                             b8_t withMap = false, u32_t falloff = 0, f32_t slope = 0.0f,
+                             f32_t spacing = 1.0f) {
     const SectionExtent extent = domain == Domain::R3 ? kExtent3 : kExtent;
     const Mapping       mapping{domain, components};
     const u32_t         inputHalo = outputHalo + static_cast<u32_t>(radius);
@@ -410,6 +417,9 @@ void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain d
             constants.params[1]  = components;
             constants.params[2]  = mode;
             constants.params[3]  = shape;
+            constants.params[5]  = falloff;
+            std::memcpy(&constants.params[6], &spacing, sizeof(f32_t));
+            std::memcpy(&constants.params[7], &slope, sizeof(f32_t));
             if (mapSlot.has_value()) {
                 constants.inputs[1] = mapSlot->address;
                 constants.params[4] = 1;
@@ -426,7 +436,7 @@ void BlurReference(const f32_t* input, const f32_t* map, f32_t* output, Domain d
                     &memory::General().Resource());
                 BlurReference(host.data(), mapSlot.has_value() ? map.data() : nullptr,
                               expected.data(), domain, extent, inputHalo, outputHalo, radius,
-                              components, mode, shape);
+                              components, mode, shape, falloff, slope * spacing);
 
                 u64_t mismatches = 0;
                 f64_t worst      = 0.0;
@@ -760,6 +770,15 @@ int main() {
             }
             (void)CheckBlur(context, Domain::R2, 3, 2, 0, "Blur disk r3 map", 0, 3, true);
             (void)CheckBlur(context, Domain::R3, 2, 1, 0, "Expand R3 octagon map", 1, 1, true);
+        }
+
+        test::Section("Expand and Shrink: cone and round falloff");
+        {
+            // A slope large against the field's range, so the falloff decides which tap wins.
+            (void)CheckBlur(context, Domain::R2, 4, 1, 1, "Expand cone disk", 1, 3, false, 1, 0.3f, 2.0f);
+            (void)CheckBlur(context, Domain::R2, 3, 1, 0, "Shrink cone square", 2, 0, false, 1, 0.5f, 1.0f);
+            (void)CheckBlur(context, Domain::R2, 5, 1, 1, "Expand round map", 1, 3, true, 2, 0.4f, 4.0f);
+            (void)CheckBlur(context, Domain::R3, 2, 1, 0, "Shrink round R3", 2, 1, false, 2, 0.2f, 1.0f);
         }
 
         test::Section("Displace");
