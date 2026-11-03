@@ -25,8 +25,10 @@ CTEST="$VS_ROOT/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/ctest.exe
 
 build() {
     local type="${1:-Release}"
-    cmd //c "$(cygpath -w "$ROOT/build.cmd") $type" 2>&1 | grep -E " error |warning C|FAILED|CMake Error|^ninja: build stopped" || true
-    test -x "$ROOT/build/$type/bin/terrain_export.exe" || { echo "dev.sh: build failed" >&2; exit 1; }
+    # The status is the build's, not grep's: an old exe left by a previous build must not pass for this one.
+    cmd //c "$(cygpath -w "$ROOT/build.cmd") $type" 2>&1 \
+        | { grep -E " error |error:|warning C|FAILED|CMake Error|^ninja: build stopped" || true; } \
+        || { echo "dev.sh: build failed" >&2; exit 1; }
 }
 
 run_tests() {
@@ -37,8 +39,9 @@ run_tests() {
     mkdir "$lock" 2>/dev/null || { echo "dev.sh: another test run holds $lock" >&2; exit 1; }
     # Expanded now: the local is gone by the time the trap runs.
     trap "rmdir '$lock'" EXIT
+    # Exits with ctest's status (pipefail), so a failing suite fails the command.
     (cd "$ROOT/build/$type" && "$CTEST" --output-on-failure "$@" 2>&1 \
-        | grep -E "Test +#|tests passed|FAILED|Failed|SEGFAULT|Timeout|^FAIL|^ +(actual|expected|error) +:|^-- " || true)
+        | { grep -E "Test +#|tests passed|FAILED|Failed|SEGFAULT|Timeout|^FAIL|^ +(actual|expected|error) +:|^-- " || true; })
 }
 
 review() {
