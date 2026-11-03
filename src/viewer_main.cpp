@@ -40,6 +40,8 @@ void PrintUsage() {
                "                         watched and reloaded like the script\n"
                "  --view yaw,pitch,dist  start the orbit camera here: degrees, degrees, metres\n"
                "  --target x,y,z         the point the camera orbits (default 0,0,0)\n"
+               "  --bounds minx,minz,maxx,maxz  evaluate and draw only the tiles that overlap the map;\n"
+               "                         whole tiles, so the edge is exact when 127 x resolution divides it\n"
                "  --water                draw water at the water level (off by default)\n"
                "  --follow               re-run the script as the camera moves, with params.bounds round\n"
                "                         it: for a world built only where it is looked at\n"
@@ -145,16 +147,16 @@ private:
     u32_t          m_tail    = 0;
 };
 
-/// Parses `a,b,c`, three finite numbers.
-[[nodiscard]] Result<std::array<f32_t, 3>> ParseTriple(std::string_view option,
-                                                       std::string_view text) {
-    std::array<f32_t, 3> out{};
+/// Parses `N` finite numbers separated by commas.
+template <usize_t N>
+[[nodiscard]] Result<std::array<f32_t, N>> ParseNumbers(std::string_view option, std::string_view text) {
+    std::array<f32_t, N> out{};
     for (usize_t i = 0; i < out.size(); ++i) {
         const usize_t          comma = text.find(',');
         const std::string_view part  = text.substr(0, comma);
         if ((comma == std::string_view::npos) != (i + 1 == out.size())) {
-            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} expects three numbers "
-                        "separated by commas, got {}", option, text);
+            ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} expects {} numbers "
+                        "separated by commas, got {}", option, N, text);
         }
         Result<f64_t> value = cli::ParseFinite(option, part);
         if (!value) {
@@ -324,7 +326,7 @@ template <typename T>
                 return std::unexpected(ok.error());
             }
         } else if (argument == "--view") {
-            Result<std::array<f32_t, 3>> view = ParseTriple(argument, value);
+            Result<std::array<f32_t, 3>> view = ParseNumbers<3>(argument, value);
             if (!view) {
                 return std::unexpected(view.error());
             }
@@ -337,11 +339,22 @@ template <typename T>
             options.viewer.view.pitch    = (*view)[1];
             options.viewer.view.distance = (*view)[2];
         } else if (argument == "--target") {
-            Result<std::array<f32_t, 3>> target = ParseTriple(argument, value);
+            Result<std::array<f32_t, 3>> target = ParseNumbers<3>(argument, value);
             if (!target) {
                 return std::unexpected(target.error());
             }
             options.viewer.view.target = *target;
+        } else if (argument == "--bounds") {
+            Result<std::array<f32_t, 4>> bounds = ParseNumbers<4>(argument, value);
+            if (!bounds) {
+                return std::unexpected(bounds.error());
+            }
+            if (!((*bounds)[0] < (*bounds)[2] && (*bounds)[1] < (*bounds)[3])) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--bounds expects minx,minz,maxx,maxz with min under max, got {}", value);
+            }
+            options.viewer.bounds  = *bounds;
+            options.viewer.bounded = true;
         } else if (argument == "--water-level") {
             Result<f64_t> level = cli::ParseFinite(argument, value);
             if (!level) {
@@ -376,7 +389,7 @@ template <typename T>
                 ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "at most {} --shot views",
                             options.shots.size());
             }
-            Result<std::array<f32_t, 3>> view = ParseTriple(argument, value.substr(0, equals));
+            Result<std::array<f32_t, 3>> view = ParseNumbers<3>(argument, value.substr(0, equals));
             if (!view) {
                 return std::unexpected(view.error());
             }

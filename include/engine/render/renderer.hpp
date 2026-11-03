@@ -78,6 +78,11 @@ public:
         /// last run, so a script that builds only round `params.bounds` keeps up. Off by default: any
         /// other script would re-run for nothing.
         b8_t follow = false;
+        /// With `bounded`, only the tiles that overlap `bounds` (min x, min z, max x, max z in metres) are
+        /// evaluated and drawn (`--bounds`): a map of a given size instead of an endless ring. Whole tiles,
+        /// so the edge falls on the bounds when they are multiples of a tile's side.
+        b8_t                 bounded = false;
+        std::array<f32_t, 4> bounds{};
         /// How much wider than the script built it the map is drawn: x and z are multiplied by it, the
         /// heights and the water level are not, so distances grow and the sea stays at 0. The tiles are
         /// still evaluated at the script's own positions.

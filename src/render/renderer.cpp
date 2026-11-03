@@ -1607,6 +1607,14 @@ void ViewerLayer::StreamTiles(u32_t budget, f64_t deadline) {
             return false;
         }
         const u32_t level = key.level;
+        if (state.settings.bounded) {
+            const f32_t side = side0 * static_cast<f32_t>(1u << level);
+            const auto& b    = state.settings.bounds;
+            if (static_cast<f32_t>(key.x) * side >= b[2] || static_cast<f32_t>(key.x + 1) * side <= b[0]
+                || static_cast<f32_t>(key.z) * side >= b[3] || static_cast<f32_t>(key.z + 1) * side <= b[1]) {
+                return false;
+            }
+        }
         b8_t inside;
         if (level == top) {
             inside = std::abs(key.x - centre[level][0]) <= radius && std::abs(key.z - centre[level][1]) <= radius;
