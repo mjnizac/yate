@@ -12,6 +12,7 @@
 #   tools/dev.sh lint                                           mechanical checks of the CLAUDE.md rules over src/ and include/
 #   tools/dev.sh headings [doc]                                 line numbers of a doc's headings (default docs/archive/decisions.md)
 #   tools/dev.sh docs-check                                     the docs agree with the repo: paths, suites, op count, todo
+#   tools/dev.sh api [name]                                     every script function and the keys it accepts, from the engine
 #
 # `review` exports the script as raw floats, measures it (out/review/<name>/metrics.json), writes a
 # hillshade, takes the viewer shots in one run, and prints a short summary. `lands` prints what a Lands
@@ -239,8 +240,62 @@ docs_check() {
     return "$failed"
 }
 
+# Runs a one-line script through terrain_export and prints what the engine said about it, without the log prefix.
+# The sandbox has no pcall, so every question about the API is one script and one error.
+ask_engine() {
+    local dir="$ROOT/out/api" body="$1" file
+    file="$dir/$(echo "$body" | md5sum | cut -c1-12).lua"
+    printf 'local function main(params)\n%s\nend\nreturn main\n' "$body" > "$file"
+    { "$ROOT/build/Release/bin/terrain_export" --script "$file" --min 0,0 --max 64,64 --resolution 8 \
+        --out "$dir/run" --log-level error 2>&1 || true; } \
+        | sed -n '/\[script\] /{s/.*\[script\] //; s/^main failed: //; s/^[^ ]*:[0-9]*: //; p}' | head -1
+}
+
+# One function: the keys it accepts, from its own unknown-key error. A call that first needs a graph value under
+# some key is given one and asked again; if it still refuses, its own message (which names what it needs) is kept.
+api_probe() {
+    local name="$1" said given="" try
+    for try in 1 2 3 4; do
+        said="$(ask_engine "    return { h = { value = $name{ ${given}zz_probe = 1 }, range = { 0, 1 } } }")"
+        [[ "$said" =~ needs\ a\ graph\ value\ as\ \'([a-z_]+)\' ]] || break
+        given+="${BASH_REMATCH[1]} = Terrain.Const{ value = 0 }, "
+    done
+    if [[ "$said" == *"does not take 'zz_probe'; it accepts "* ]]; then echo "$name: ${said##*it accepts }"
+    else echo "$name ! $said"; fi
+}
+
+# The catalogue, built from the engine once per build of terrain_export (about 20 s) and cached next to it:
+# `name: key, key, ...`, or `name ! <what it needs first>`. With a name, only the lines that match, and the line
+# of the reference where that function is described, to read only that section.
+api() {
+    local exe="$ROOT/build/Release/bin/terrain_export.exe" cache="$ROOT/build/Release/api.txt"
+    test -x "$exe" || { echo "dev.sh api: build Release first" >&2; exit 1; }
+    if [[ ! -f "$cache" || "$exe" -nt "$cache" ]]; then
+        mkdir -p "$ROOT/out/api"
+        local tables names
+        tables="$(ask_engine '    local t = {}
+    for k, v in pairs(_G) do if type(v) == "table" and getmetatable(v) == nil and k:match("^%u") then t[#t + 1] = k end end
+    error(table.concat(t, " "), 0)')"
+        names="$(for table in $tables; do ask_engine "    local t = {}
+    for k, v in pairs($table) do if type(v) == \"function\" and k:match(\"^%a\") then t[#t + 1] = \"$table.\" .. k end end
+    error(table.concat(t, \" \"), 0)" & done; wait)"
+        echo "$names" | tr ' ' '\n' | grep . | sort | xargs -P 4 -I{} "$0" _api-probe {} | sort > "$cache.tmp"
+        mv "$cache.tmp" "$cache"
+    fi
+    [[ -z "${1:-}" ]] && { cat "$cache"; return; }
+    grep -i -- "^[^ :]*$1" "$cache" || { echo "dev.sh api: no function matches $1" >&2; exit 1; }
+    local name; name="$(grep -i -m1 -o -- "^[^ :]*$1[^ :]*" "$cache")"
+    # Its own heading, else its table's (`Lands.*`), else its first mention.
+    local ref="$ROOT/docs/lua_reference.md" line
+    line="$(grep -n -m1 -E "^#+ .*\`${name}\b" "$ref" || grep -n -m1 -E "^#+ .*\`${name%%.*}\.\*" "$ref" \
+        || grep -n -m1 -F "$name" "$ref" || true)"
+    if [[ -n "$line" ]]; then echo "docs/lua_reference.md:${line%%:*}"; else echo "(not in docs/lua_reference.md)"; fi
+}
+
 case "${1:-}" in
     build) shift; build "$@" ;;
+    api) shift; api "$@" ;;
+    _api-probe) api_probe "$2" ;;
     test) shift; run_tests "$@" ;;
     review) shift; review "$@" ;;
     lands) shift; lands "$@" ;;

@@ -25,4 +25,5 @@ subsystem read only its section of `docs/design.md` (`tools/dev.sh headings docs
 not the whole file; open `docs/archive/decisions.md` only for the story behind one of its bullets.
 
 `docs/archive/decisions.md`, `docs/lua_reference.md`, `docs/archive/lands_plan.md` and `docs/spec.md` run to hundreds or
-thousands of lines: grep for the heading or identifier and read only that section.
+thousands of lines: grep for the heading or identifier and read only that section. For a script call,
+`tools/dev.sh api <name>` prints the keys the engine accepts and the line of `docs/lua_reference.md` to read.

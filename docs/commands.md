@@ -306,6 +306,12 @@ Opus plans (plan mode), Sonnet implements through the `implementer` agent, then 
 `build-runner` run in parallel, then the orchestrator commits. A plan is a message, not a file; its
 conclusion goes into `docs/design.md` and its leftovers into `docs/todo.md`, so nothing stale is kept.
 
+Each agent starts cold and reads its context again, so delegate only what pays for that: a change of more than
+about 50 lines, or a suite of minutes (`build-runner`, in the background). A smaller change, a script, a doc or a
+`-L fast` run is done by the orchestrator itself, which already has the context. Before writing a script call,
+`tools/dev.sh api <name>` gives the keys it accepts from the engine itself, and the line of
+`docs/lua_reference.md` to read for the rest.
+
 A plan has these parts, each short enough to be checked:
 
 1. **Goal**: one sentence, and what must be true afterwards.
