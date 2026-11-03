@@ -202,3 +202,15 @@ function Landforms.Trench(t)
 end
 
 _G.Landforms = Landforms
+
+-- A U-shaped (glacial) valley: `depth` metres at the floor, flat across the floor (`floor`, a fraction of
+-- `width`, default 0.3) and rising steeply to nothing at `width` metres from the line, given as a distance
+-- field in metres (a shape's `.value`, a river's distance). Returns a height to add.
+function Landforms.UValley(t)
+    check("Landforms.UValley", t, accepted("distance", "width", "depth", "floor"))
+    local width = require_number("Landforms.UValley", t, "width")
+    local depth = require_height("Landforms.UValley", t, "depth")
+    local floor = t.floor or 0.3
+    local across = Curves.Clamp{ input = (t.distance - width * floor) * (1 / (width * (1 - floor))), min = 0, max = 1 }
+    return (Curves.Power{ input = across, exponent = 2 } * -1 + 1) * -depth
+end

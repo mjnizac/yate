@@ -60,7 +60,7 @@ add_custom_target(engine_shaders ALL DEPENDS ${ENGINE_SHADER_OUTPUTS})
 
 # The Lua prelude: scripts the engine runs before the user's, copied next to the executable. The list is
 # closed on purpose, in load order, and generates `engine/prelude_files.hpp`.
-set(ENGINE_PRELUDE_FILES 05_common.lua 10_shapes.lua 20_landforms.lua 30_ranges.lua 40_dunes.lua 45_water.lua 46_network.lua 50_lands.lua)
+set(ENGINE_PRELUDE_FILES 05_common.lua 10_shapes.lua 15_filters.lua 20_landforms.lua 30_ranges.lua 40_dunes.lua 45_water.lua 46_network.lua 50_lands.lua)
 # The same list as a header, so the engine and the tests do not keep their own copies.
 set(ENGINE_PRELUDE_ENTRIES "")
 foreach(prelude_file ${ENGINE_PRELUDE_FILES})

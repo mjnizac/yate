@@ -282,6 +282,19 @@ Milestone state is in `docs/status.md`, open work in `docs/todo.md`, and the pro
 - **Sediment against a wall.** An erosion over a wall hundreds of metres high piles sediment against its face
   and a following `Max` keeps it as arches and spikes; cap the deposit a few tens of metres above the ground.
   (archive: "## Cliffs after a World Machine escarpment")
+- **World Machine's devices: ops only where a composition cannot do it.** Read from the forum, the help
+  site and decoded `.tmd` files (2026-11-03). New in the engine: the cone and round structuring elements of
+  `Filters.Expand` (true distance, so a disk has none of the Linear Slope expander's straight axis faces),
+  thermal `mass_balance`, `two_phase` and `strength_map`, `Noises.Cells` and `Combine.Atan2`. Everything
+  else (Open/Close, Strata, Equalizer, Ramp, Curves, Snow-style accumulation, U valleys) is prelude in
+  `15_filters.lua`; a curve through points is a dense `Terrain.Grid` read at the input, and the Equalizer a
+  captured `Terrain.Sample`, so both stay the same in every section. Strata are weighted by slope, since
+  on flat ground a tilted terrace is a stripe pattern the device does not have.
+- **Parameter words 8 and 9 belong to every dispatch.** The compiler writes the iteration count and index
+  there for all nodes, not only iterative ones; `Cells` first kept its warp flag in word 9 and silently
+  ignored its position. Flags go in a shared word; `test_geometry` checks a warped `Cells`.
+- **`Cells` is its own op, not a `Noise` kind.** A node has two channels and `Noise` spends its second on
+  the gradient; the site and the cell's value need the second, and World Machine's Voronoi is one octave.
 
 ## Viewer
 

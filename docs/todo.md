@@ -77,6 +77,10 @@ The goal is that a terrain is composed from validated examples and judged by num
       above the stream-power grid scale with an amplitude ratio from the target spectral slope; erosion passes
       ordered coarse to fine; the difference between before and after an erosion recombined as debris and
       broken terraces; terraces cracked by cells before erosion; F3 - F1 cells for cliff edges.
+      The World Machine devices these lean on now exist (`Noises.Cells` with every F-style and metric,
+      cone/round `Filters.Expand`, thermal `mass_balance` and `two_phase`, `Strata.Apply` with spatial
+      bedding, `Curves.Ramp`), recreated against the forum threads they came from; none is in the alpine
+      script yet.
 - [ ] **Cliffs, what is open:** no heightmap reference with a known scale exists, so its case holds guards, not
       ranges; the chutes' heads are rounded capsules; the sea cliffs are low against the escarpment; 0.3 % of the
       land is closed depressions; `strata` and `debris` outputs are not used by the viewer's palette; the

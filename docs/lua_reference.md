@@ -649,6 +649,38 @@ largest move the offset actually makes: `math.ceil(D / params.resolution)` for a
 `Terrain.Sample` evaluates it exactly, reading the field again at the moved positions.
 `terrains/coastal_plateau.lua` bends its expanded cliff faces with it.
 
+### World Machine devices built from these: `15_filters.lua`
+
+The devices below are compositions of the ops in this reference, so they live in the prelude and say how
+they are built. Each returns handles like any op.
+
+| Function | World Machine | Built as | Returns |
+| --- | --- | --- | --- |
+| `Filters.Open{ input, radius, shape, falloff, slope }` | Expander, Open (Shrink-Expand) | `Shrink` then `Expand` | the field without peaks narrower than the window |
+| `Filters.Close{ ... }` | Expander, Close (Expand-Shrink) | `Expand` then `Shrink` | the field without pits narrower than the window |
+| `Filters.FrequencySplit{ input, radius = 8 }` | the forum's Frequency Splitter | a blur and the rest | `low`, `high`; `low + high` is the input |
+| `Filters.DirectionalBlur{ input, direction, length, taps = 8, radius = 16 }` | Blur, Directional | `taps` displaced reads along `direction` degrees over `length` metres | a field streaked along one direction |
+| `Masks.Convexity{ input, radius = 4 }` | Select Convexity, with a radius | `input - Blur(input)` | positive on crests, negative in hollows |
+| `Masks.Aspect{ input, direction, full = 0.5 }` | Select Aspect, Angle Selector | the gradient against a direction; `Combine.Atan2` | `facing` in [0, 1], `angle` in radians |
+| `Curves.Table{ input, points, smooth = true }` | Curves, Bias/Gain, Levels | a 256-entry `Terrain.Grid` read at the input | the input through a monotone curve (or straight segments) through `{ {x, y}, ... }`, held flat beyond its ends |
+| `Curves.Ramp{ input, period, mode = "repeat", offset = 0 }` | Ramp, Repeat or Mirror | `x - Terrace(x)`, a sawtooth exact at any spacing | a sawtooth (or with `"mirror"` a triangle wave) between 0 and `period` |
+| `Curves.Equalize{ input, region, cell = 64, amount = 1 }` | Equalizer with a captured sample | `Terrain.Sample` over `region`, its quantiles as a `Curves.Table` | the input spread evenly over its own range, the same in every section |
+| `Strata.Apply{ input, step, tilt, heading, strength, sharpness, layers, bedding, mask, smoothness, flat, steep }` | Strata | a terrace of `input + plane`, the plane tilted `tilt` degrees towards `heading`, minus the plane, blended in on slopes only | height, exposure, bed index |
+| `Erosion.Accumulate{ input, direction, lift = 0.2, talus = 0.6, iterations = 32 }` | Snow on a gradient with an angle selector | tilt, `Erosion.Thermal{ mass_balance = 1 }`, untilt | material built up on the side facing away from `direction` |
+
+`Curves.Equalize` measures on the CPU, where neighbourhood and erosion ops read their input unchanged, so
+measure the field before them. `Strata.Apply` shows beds where the input blurred over `smoothness`
+samples is steeper than `flat`, fully from `steep` (rise over run), as the device does: a flat surface
+shows none. `bedding` (any field) is added to the plane, which is how tilt and heading vary across the map.
+
+`Curves.Ramp` on a blurred, stretched range lays ridges along its contours, the forum's folded ranges
+(thread 8043):
+
+```lua
+local smooth = Filters.Blur{ input = range, radius = 12 }
+local folded = range + Curves.Ramp{ input = smooth, period = 90, mode = "mirror" } * mountains * 1.6
+```
+
 ---
 
 ## 8. Vectors
@@ -1065,6 +1097,7 @@ landform can be scaled by a mask. All take `at`, `rotation` and `position`; the 
 | `Landforms.Pyramid` | `size`, `height` | square faces; a rectangle gives a ridge at the top |
 | `Landforms.Ridge` | `points`, `width`, `height`, `profile = "smooth"`, `subdivisions = 8`, `closed` | a raised band along a spline |
 | `Landforms.Trench` | `points`, `width`, `depth`, `profile = "smooth"`, `subdivisions = 8`, `closed` | the same, cut |
+| `Landforms.UValley` | `distance`, `width`, `depth`, `floor = 0.3` | a glacial U: a parabola from `depth` at a flat floor (`floor` of the width) to 0 at `width` metres of the `distance` field (a shape's `.value`, a river's distance); a height to add |
 
 `profile` is one of `linear`, `smooth`, `dome`, `gaussian` for the ones that take it. For a ridge the
 cross-section is the profile of the distance to the spline minus half the width, so `width` is the full
