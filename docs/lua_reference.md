@@ -33,6 +33,7 @@ Then copy the closest example, run it in the viewer, change one thing at a time.
 | Sand | `terrains/dunes.lua`, `terrains/star_dunes.lua` | `Dunes.Field` (§10): `wind`, `wavelength`, `style` |
 | Flat-topped hills | `terrains/mesa.lua`, `shapes/mesas.lua` | terrace `steps`, shape size |
 | Tall sea cliffs, an escarpment | `terrains/cliffs.lua` | `top`, `columns`, `bays` |
+| A Minecraft-scale island plateau, cliffs onto a flat shelf | `terrains/coastal_plateau.lua` | `top`, `cliff`, `shelf_width` |
 | A volcano or an island | `terrains/crater.lua`, `shapes/volcanic_island.lua` | the profile and its radius |
 | A mountain range, canyon, coast | `shapes/mountain_range.lua`, `canyon.lua`, `coast.lua` | the polyline points and widths |
 | Islands, archipelagos, continents, inland seas, all land with lakes | `lands/*.lua` (`Lands.Island`, `Lands.Archipelago`, `Lands.Continent`, `Lands.Compose`) | the preset, then `edit` by id (§10) |
