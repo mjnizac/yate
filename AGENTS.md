@@ -20,9 +20,9 @@ The export path is the product. The viewer is a tool for iterating on it.
 | [docs/roadmap.md](docs/roadmap.md) | Medium and long-term direction |
 | [docs/todo.md](docs/todo.md) | Concrete open tasks |
 
-Start with `docs/status.md`. It is short on purpose: current state, the numbers that matter and the
-known defects. Read `docs/design.md` before changing a subsystem; open `docs/archive/decisions.md` only for the story behind one of its bullets —
-it is the long history and it is not meant to be read front to back.
+Start with `docs/status.md`: it is short on purpose, the current state and the known defects. Before changing a
+subsystem read only its section of `docs/design.md` (`tools/dev.sh headings docs/design.md` gives the line of each),
+not the whole file; open `docs/archive/decisions.md` only for the story behind one of its bullets.
 
 `docs/archive/decisions.md`, `docs/lua_reference.md`, `docs/archive/lands_plan.md` and `docs/spec.md` run to hundreds or
 thousands of lines: grep for the heading or identifier and read only that section.

@@ -308,8 +308,8 @@ Milestone state is in `docs/status.md`, open work in `docs/todo.md`, and the pro
   switches only after the ideal level disagrees for fifteen frames. Per-tile levels were refused because two
   spacings meeting on screen crack, contradicting the claim that section borders are bit-identical. Tile
   origins are multiples of the tile size in that level's units, so changing level does not shift terrain
-  sideways. (archive: "### The renderer") Note: `docs/status.md` now also lists rings of detail beyond the
-  main ring (`--max-level`), which this entry does not describe.
+  sideways. (archive: "### The renderer") Note: `docs/architecture.md` ("What exists") also lists rings of
+  detail beyond the main ring (`--max-level`), which this entry does not describe.
 - **A level change recompiles the graph (0.05 ms) and refills the ring (47 ms for 49 tiles, three frames at 60
   Hz).** Streaming the new level under the usual budget would trade that hitch for half a second of mostly
   missing terrain. At the default two tiles per frame, streaming costs about 1.9 ms while crossing a tile
@@ -414,7 +414,7 @@ Milestone state is in `docs/status.md`, open work in `docs/todo.md`, and the pro
 ## Water
 
 The archive records no separate water milestone; the decisions below are the ones it states, and
-`docs/status.md` describes the ops (`Water`, `Water.Drain`, `Water.Network`).
+`docs/architecture.md` ("What exists") describes the ops (`Water`, `Water.Drain`, `Water.Network`).
 
 - **Hydraulic erosion exposes water and sediment as channel `flow`**, the state after the last iteration, a
   wetness and a sediment map a renderer uses to decide where rock gives way to silt. Written only when a
