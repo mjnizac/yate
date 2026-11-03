@@ -226,12 +226,15 @@ docs_check() {
     hits="$(grep -nE '^- \[x\]' "$ROOT/docs/todo.md" || true)"
     [[ -z "$hits" ]] || { echo "finished tasks left in docs/todo.md (they live in git):"; echo "$hits"; failed=1; }
 
-    local script name
+    # One pass for every name, `path:name` per hit; a script naming itself does not count.
+    local scripts mentioned script
+    scripts="$(git -C "$ROOT" ls-files 'assets/scripts/*.lua')"
+    mentioned="$(cd "$ROOT" && { grep -rowFI --exclude-dir=actual -f <(sed 's|.*/||; s|\.lua$||' <<<"$scripts") \
+        docs tests assets/lua assets/scripts src 2>/dev/null || true; } \
+        | awk -F: '{ n = split($1, p, "/"); if (p[n] != $NF ".lua") print $NF }' | sort -u)"
     while read -r script; do
-        name="$(basename "$script" .lua)"
-        grep -rqwF "$name" "$ROOT/docs" "$ROOT/tests" "$ROOT/assets/lua" "$ROOT/assets/scripts" "$ROOT/src" --exclude="$name.lua" 2>/dev/null \
-            || echo "warning: no doc, test or script mentions $script"
-    done < <(git -C "$ROOT" ls-files 'assets/scripts/*.lua')
+        grep -qxF "$(basename "$script" .lua)" <<<"$mentioned" || echo "warning: no doc, test or script mentions $script"
+    done <<<"$scripts"
     [[ "$failed" == 0 ]] && echo "docs-check: ok"
     return "$failed"
 }
