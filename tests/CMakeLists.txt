@@ -38,8 +38,9 @@ engine_add_unit_test(test_hydrology)
 engine_add_unit_test(test_water)
 # Lands.Compose, the land made of shapes, through the CPU sampler.
 engine_add_unit_test(test_compose)
-# Some thirty template maps with their fjords, one with its ocean floor: about 50 s in Release, 4 min in Debug.
-set_tests_properties(test_compose PROPERTIES TIMEOUT 300)
+# Some thirty template maps with their fjords, one with its ocean floor: about 50 s in Release, 4 min in Debug,
+# over 5 min in Debug while `ctest -j4` runs the other suites beside it.
+set_tests_properties(test_compose PROPERTIES TIMEOUT 600)
 
 # The same metrics as a command line tool over an export: `terrain_metrics <dir> [--json]`. Header-only
 # metrics and nothing from the engine; libspng only to read reference heightmaps given as PNG.
@@ -105,7 +106,8 @@ engine_set_warnings(test_datasets)
 add_dependencies(test_datasets engine_shaders)
 
 add_test(NAME test_datasets COMMAND test_datasets)
-set_tests_properties(test_datasets PROPERTIES TIMEOUT 900)
+# Serial even under `ctest -j`: its timings are compared against a baseline taken on an idle machine.
+set_tests_properties(test_datasets PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE)
 
 # `ctest -L fast` while iterating (seconds), the whole suite before a commit (minutes). The slow ones
 # export whole terrains through the executables or run the viewer.

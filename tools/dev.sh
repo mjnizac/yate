@@ -39,8 +39,9 @@ run_tests() {
     mkdir "$lock" 2>/dev/null || { echo "dev.sh: another test run holds $lock" >&2; exit 1; }
     # Expanded now: the local is gone by the time the trap runs.
     trap "rmdir '$lock'" EXIT
-    # Exits with ctest's status (pipefail), so a failing suite fails the command.
-    (cd "$ROOT/build/$type" && "$CTEST" --output-on-failure "$@" 2>&1 \
+    # Exits with ctest's status (pipefail), so a failing suite fails the command. Each suite writes its own
+    # directory and test_datasets is RUN_SERIAL, so suites run 4 at a time unless -j or the variable says otherwise.
+    (cd "$ROOT/build/$type" && CTEST_PARALLEL_LEVEL="${CTEST_PARALLEL_LEVEL:-4}" "$CTEST" --output-on-failure "$@" 2>&1 \
         | { grep -E "Test +#|tests passed|FAILED|Failed|SEGFAULT|Timeout|^FAIL|^ +(actual|expected|error) +:|^-- " || true; })
 }
 

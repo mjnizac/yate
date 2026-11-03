@@ -127,7 +127,9 @@ tools/dev.sh review assets/scripts/terrains/alpine.lua --bounds -8192,-8192,8192
 ```
 
 `build` calls `build.cmd` with the Windows path and keeps only errors and warnings. `test` finds ctest
-and refuses to start while another run holds `out/.ctest.lock`, since two suites share `out/`.
+and refuses to start while another run holds `out/.ctest.lock`, since two suites share `out/`. Within one
+run the suites go 4 at a time (`CTEST_PARALLEL_LEVEL`, or `-j N`; `test_datasets` stays serial for its
+timings): the full suite took 350 s serial and 231 s at `-j4` in Release, about 800 s and 430 s in Debug. Both exit with the build's or ctest's status.
 `review` is one terrain iteration: a raw export with warnings only, `metrics.json`, a hillshade, the
 viewer shots in one process, and a four-line relief summary, all under `out/review/<script>/`.
 Stream-power results are cached on disk (`<bin>/cache/`) until the engine is rebuilt, so repeating a
