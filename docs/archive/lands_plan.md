@@ -1,744 +1,749 @@
-> Archivo. Plan original de `Lands.*` (fases 1 a 3 hechas); las fases 4 a 8 viven ahora en `docs/roadmap.md`. Se conserva entero por los algoritmos y el análisis de referencias; no leer de principio a fin (`tools/dev.sh headings docs/archive/lands_plan.md`).
+> Archive. Original plan for `Lands.*` (phases 1 to 3 done); phases 4 to 8 now live in `docs/roadmap.md`. Kept whole for its algorithms and the analysis of the references; do not read it end to end (`tools/dev.sh headings docs/archive/lands_plan.md`).
 
-# Plan: islas, archipiélagos y continentes a partir de formas geométricas
+# Plan: islands, archipelagos and continents from geometric shapes
 
-Plan para rehacer la generación de tierras de YATE (`Lands.*`) y, después, los componentes que dependen de
-ella. Recoge el análisis de cuatro generadores de referencia, los criterios acordados, lo que el motor ya
-tiene y se reutiliza, los algoritmos elegidos (los de las referencias o uno más eficiente para esta
-arquitectura), la API, las fases con sus criterios de aceptación, el catálogo de ejemplos y la validación.
+Plan to rebuild YATE's land generation (`Lands.*`) and, afterwards, the components that depend on it. It
+covers the analysis of four reference generators, the agreed criteria, what the engine already has and
+reuses, the chosen algorithms (the references' own or a more efficient one for this architecture), the API,
+the phases with their acceptance criteria, the example catalogue and the validation.
 
-Documento versionado. Lo que quede vigente al cerrar cada fase se traslada a
-`docs/status.md`, `docs/todo.md` y `docs/lua_reference.md`, como siempre.
+Versioned document. Whatever still holds when each phase closes moves to `docs/status.md`, `docs/todo.md`
+and `docs/lua_reference.md`, as always.
 
-Revisión 2: inventario de lo reutilizable, algoritmos detallados, op fusionado `Lands`, herramientas para
-Claude, catálogo de ejemplos con plano infinito y tamaños fijos, y sus tests.
+Revision 2: inventory of what can be reused, detailed algorithms, fused `Lands` op, tools for Claude,
+example catalogue with infinite plane and fixed sizes, and their tests.
 
-## Estado
+## Status
 
-**Fase 1 hecha** (2026-10-28). Decisiones tomadas al implementarla, que cambian lo escrito abajo:
+**Phase 1 done** (2026-10-28). Decisions taken while implementing it, which change what is written below:
 
-* **Relieve:** no se mezclan los perfiles con pesos softmin (el elemento más profundo, p. ej. un `fill`,
-  anulaba a los demás). Cada elemento de tierra aplica su perfil a su propia distancia hacia el interior,
-  limitada por la de la costa común, y los perfiles se unen con un máximo suave. Solo cuentan los elementos
-  que contienen la muestra, lo que mantiene exacto el recorte por bins.
-* **Centro de formas ovaladas y radiales:** dentro del círculo inscrito la distancia se funde con la de ese
-  círculo; sin ello había una estrella y un pozo falso en el centro.
-* **Fondo marino:** un tercer tipo de elemento (`seabed = true`) y un modo `seabed` del op; la fosa del
-  margen activo va al pie del talud (plataforma + 0,9 del talud) y a 0,8 de la profundidad abisal.
-* **Id tras un corte de agua:** la tierra anterior a un elemento de agua que cubre la muestra deja de ser su
-  dueña (un islote en una bahía tiene su propio id).
-* **Lagunas:** rol `lagoon` explícito en un elemento de agua.
-* **`edit.scale`** sobre un elemento definido por `area` multiplica el área por la escala al cuadrado.
-* **`Lands.Island` exige `preset`;** las claves del macro antiguo fallan explicando qué usar.
-  `Lands.Archipelago` y `Lands.Continent` siguen en el macro de rejilla hasta las fases 2 y 3.
-* Los pasos 1.7 a 1.11 quedaron en un solo commit porque tocaban los mismos ficheros a la vez.
+* **Relief:** profiles are not blended with softmin weights (the deepest element, e.g. a `fill`, cancelled
+  the others). Each land element applies its profile to its own inward distance, capped by that of the
+  common coast, and the profiles are joined with a smooth maximum. Only elements that contain the sample
+  count, which keeps the bin culling exact.
+* **Centre of oval and radial shapes:** inside the inscribed circle the distance blends into that circle's;
+  without it there was a star and a false pit at the centre.
+* **Seabed:** a third element type (`seabed = true`) and a `seabed` mode of the op; the active margin's
+  trench goes at the foot of the slope (shelf + 0.9 of the slope) and at 0.8 of the abyssal depth.
+* **Id after a water cut:** the land before a water element that covers the sample stops being its owner
+  (an islet in a bay has its own id).
+* **Lagoons:** explicit `lagoon` role on a water element.
+* **`edit.scale`** on an element defined by `area` multiplies the area by the scale squared.
+* **`Lands.Island` requires `preset`;** the old macro's keys fail explaining what to use.
+  `Lands.Archipelago` and `Lands.Continent` stay on the grid macro until phases 2 and 3.
+* Steps 1.7 to 1.11 went into a single commit because they touched the same files at once.
 
-**Fase 2 hecha** (2026-10-28). Decisiones:
+**Phase 2 done** (2026-10-28). Decisions:
 
-* **`scatter` es una clave de elemento**, no un tipo: el resto de claves es la plantilla. Ids `"<id>/<ranura>"`.
-* **Acotado:** las ranuras se colocan en orden (no de mayor a menor) para que pedir una más no mueva las
-  anteriores; si no cabe, se encoge hasta 3 veces (8 sobre una curva) y si no, se omite y se informa.
-* **Infinito:** regla de Wei en una pasada (sobrevive si ningún candidato en conflicto tiene más prioridad),
-  sin cadenas voraces, para que dependa solo de las celdas vecinas.
-* **`land_fraction`:** se reescalan las áreas de los repartos por fórmula cerrada y se queda la pasada más
-  cercana; no hay bisección sobre el muestreo.
-* **Margen sin pliegues:** un cuarto modo del op (`margin`) une la tierra con un mínimo suave de medio
-  plataforma+talud; solo lo usa el fondo, la costa sigue siendo la unión dura. La fosa de varias islas se une
-  como norma 4, y el arco insular usa una fosa propia (`arc` del fondo con cono negativo).
-* **Agua repartida** (canales, lagos) no evita la tierra declarada; los repartos posteriores evitan la tierra
-  de los anteriores.
+* **`scatter` is an element key**, not a type: the remaining keys are the template. Ids `"<id>/<slot>"`.
+* **Bounded:** slots are placed in order (not largest first) so that asking for one more does not move the
+  previous ones; if one does not fit, it shrinks up to 3 times (8 on a curve), otherwise it is skipped and
+  reported.
+* **Infinite:** Wei's rule in one pass (a candidate survives if no conflicting candidate has higher
+  priority), with no greedy chains, so that it depends only on the neighbouring cells.
+* **`land_fraction`:** the areas of the scatters are rescaled by closed formula and the closest pass is
+  kept; there is no bisection over sampling.
+* **Margin without creases:** a fourth op mode (`margin`) joins the land with a smooth minimum of half
+  shelf+slope; only the seabed uses it, the coast is still the hard union. The trench of several islands
+  is joined as a 4-norm, and the island arc uses its own trench (a seabed `arc` with a negative cone).
+* **Scattered water** (channels, lakes) does not avoid declared land; later scatters avoid the land of
+  earlier ones.
 
-**Fase 3 hecha** (2026-10-28). Decisiones:
+**Phase 3 done** (2026-10-28). Decisions:
 
-* **`ridge` es una clave de elemento**, como `scatter`: un elemento de relieve por tramo de cresta (`saddles + 1`
-  bandas que se estrechan a 0,4 de su anchura en los extremos, de donde salen los collados) y espolones
-  (`capsule`) cada `spacing` (1,2 anchuras por defecto, redondeado al número entero de espolones que cabe), en
-  lados alternos y girados de 20 a 40°. Ids `"<id>/crest/<n>"` y `"<id>/spur/<n>"`. El tramo más alto mide
-  exactamente `height` sobre la tierra; los demás, de 0,8 a 1.
-* **Elementos de relieve** (`relief = true`, un cuarto tipo de operación del op): no cambian la costa; los que
-  suben se unen por un máximo suave y los que hunden (una cuenca) por un mínimo suave, y entran desde la costa en
-  `blend` metros.
-* **Los perfiles de tierra se unen por su máximo**, no por un máximo suave: el suave elevaba dos mesetas iguales
-  que se solapan (el atolón subía 15 m sobre su altura `flat`; la meseta de `all_land` no medía 280 m). En el
-  filete de una unión suave cada perfil se mide con lo que el suavizado ha crecido la tierra en esa muestra,
-  `max(h - d, 0)` (unión dura de la tierra menos la costa): allí su propia distancia es positiva aunque la tierra
-  siga, y medido desde ella el perfil dejaba un surco cerrado bajo el acantilado de la costa (0,23 % del
-  continente, hasta 87 m). Se probó antes sumar `smooth` (agrandaba cada elemento `smooth` metros) y `smooth/4`
-  (dejaba el surco). Fuera de los filetes no cambia nada. Se regeneraron los goldens de isla afectados.
-* **Goldens en Debug:** los shaders de Debug se compilan sin optimizar (`-g`), así que una muestra en una
-  discontinuidad puede salir distinta que en Release; `lands_mediterranean` se muestrea en una rejilla
-  desplazada (±49152 m a 384 m) por eso.
-* **Las bandas** unen sus segmentos con un mínimo suave de un cuarto de su anchura: sin él había un pliegue
-  donde cambia el segmento más cercano.
-* **Presets de tierra** en `Lands.Preset`/`Lands.Continent`: composiciones de la tabla de abajo con un `turn`
-  sacado de la semilla (taklamakan no gira: sus cordilleras siguen los bordes). La tierra baja es una meseta de
-  0,08 de `height` que sube en `size * 0.01` (lo que tarda en desaparecer el acantilado de la costa) con
-  `cliff_height = 0.05 height`: con la meseta más lenta o más baja que el acantilado quedaba un surco cerrado
-  detrás de la costa (0,4 % de la península en pozos). `all_land` no lleva lagos (`land_mask = 1`); los lleva
-  `lakeland`.
-* **Agua clasificada en el informe** (7.9): componentes conexas del agua sobre la rejilla del informe; el
-  `role` del primer elemento de agua cuyo centro cae dentro manda, si no `ocean` si toca el marco, `sea` por
-  encima de `classes.sea` (1/100 del mapa, 1000 km² en infinito) y `lake`. `land.info.waters` y
-  `script_report.lands.waters`.
-* **`frame.edge_margin`** y **porcentajes** del marco acotado en cualquier posición (`at = { "30%", "75%" }`).
-* **`Lands.Continent` es un preset** sobre `Compose`; el macro de rejilla se retiró entero (unas 600 líneas) y
-  sus claves fallan diciendo qué usar. `lands_continent` se regeneró a 192 km.
-* **Fracción de tierra de los continentes**: la de la composición (0,2 a 0,7 según el preset), no el 70 % del
-  macro antiguo; `land_fraction` solo reescala los repartos.
-* **Bandas de referencia** (paso 3.5): medidas en los mapas de alturas de `docs/references/` (no versionados) con
-  `terrain_metrics`; las de los archipiélagos son mapas pintados y no se usan. Se comprueban en `test_compose`
-  (no en `test_lands`, que no tiene motor): fracción de tierra y cuota de la masa mayor. La dimensión de costa
-  y la integral hipsométrica quedan fuera de banda hasta la fase 4 (detalle), como era de esperar en formas sin
-  detalle, y se imprimen. Islas: tierra 0,17 a 0,45, masa mayor 0,85 a 1, dimensión 1,02 a 1,39, integral 0,26 a
-  0,45; continentes: 0,20 a 0,89, 0,42 a 1, 1,12 a 1,38 y 0,15 a 0,62. `fractious` no se mide por la masa mayor
-  (es tierra fragmentada a propósito; su tipo de referencia serían los archipiélagos).
-* La corrección del filete fue un commit `fix:` aparte, después de 3.4, porque apareció revisando los ejemplos
-  de 3.6 con la semilla de sus goldens.
+* **`ridge` is an element key**, like `scatter`: one relief element per crest segment (`saddles + 1` bands
+  that narrow to 0.4 of their width at the ends, where the saddles come from) and spurs (`capsule`) every
+  `spacing` (1.2 widths by default, rounded to the whole number of spurs that fits), on alternating sides
+  and turned 20 to 40°. Ids `"<id>/crest/<n>"` and `"<id>/spur/<n>"`. The highest segment measures exactly
+  `height` above the land; the others, 0.8 to 1.
+* **Relief elements** (`relief = true`, a fourth operation type of the op): they do not change the coast;
+  those that rise are joined by a smooth maximum and those that sink (a basin) by a smooth minimum, and they
+  fade in from the coast over `blend` metres.
+* **Land profiles are joined by their maximum**, not by a smooth maximum: the smooth one raised two equal
+  overlapping plateaus (the atoll rose 15 m above its `flat` height; the `all_land` plateau did not reach
+  280 m). In the fillet of a smooth union each profile is measured with how much the smoothing has grown
+  the land at that sample, `max(h - d, 0)` (hard union of the land minus the coast): there its own distance
+  is positive even though the land continues, and measured from it the profile left a closed groove under
+  the coastal cliff (0.23 % of the continent, up to 87 m). Adding `smooth` (enlarged every element by
+  `smooth` metres) and `smooth/4` (left the groove) were tried first. Outside the fillets nothing changes.
+  The affected island goldens were regenerated.
+* **Goldens in Debug:** Debug shaders are compiled unoptimised (`-g`), so a sample on a discontinuity can
+  come out different from Release; `lands_mediterranean` is sampled on an offset grid (±49152 m at 384 m)
+  for that reason.
+* **Bands** join their segments with a smooth minimum of a quarter of their width: without it there was a
+  crease where the nearest segment changes.
+* **Land presets** in `Lands.Preset`/`Lands.Continent`: compositions from the table below with a `turn`
+  drawn from the seed (taklamakan does not turn: its ranges follow the edges). Lowland is a plateau of
+  0.08 of `height` that rises over `size * 0.01` (how long the coastal cliff takes to vanish) with
+  `cliff_height = 0.05 height`: with the plateau slower or lower than the cliff a closed groove was left
+  behind the coast (0.4 % of the peninsula in pits). `all_land` has no lakes (`land_mask = 1`); `lakeland`
+  has them.
+* **Water classified in the report** (7.9): connected components of the water on the report grid; the
+  `role` of the first water element whose centre falls inside wins, otherwise `ocean` if it touches the
+  frame, `sea` above `classes.sea` (1/100 of the map, 1000 km² when infinite) and `lake`.
+  `land.info.waters` and `script_report.lands.waters`.
+* **`frame.edge_margin`** and **percentages** of the bounded frame in any position (`at = { "30%", "75%" }`).
+* **`Lands.Continent` is a preset** on `Compose`; the grid macro was removed entirely (about 600 lines) and
+  its keys fail saying what to use. `lands_continent` was regenerated at 192 km.
+* **Land fraction of the continents**: the composition's (0.2 to 0.7 depending on the preset), not the
+  old macro's 70 %; `land_fraction` only rescales the scatters.
+* **Reference bands** (step 3.5): measured on the heightmaps in `docs/references/` (not versioned) with
+  `terrain_metrics`; the archipelago ones are painted maps and are not used. They are checked in
+  `test_compose` (not in `test_lands`, which has no engine): land fraction and share of the largest mass.
+  Coast dimension and hypsometric integral stay out of band until phase 4 (detail), as expected for shapes
+  without detail, and are printed. Islands: land 0.17 to 0.45, largest mass 0.85 to 1, dimension 1.02 to
+  1.39, integral 0.26 to 0.45; continents: 0.20 to 0.89, 0.42 to 1, 1.12 to 1.38 and 0.15 to 0.62.
+  `fractious` is not measured by the largest mass (it is fragmented land on purpose; its reference type
+  would be the archipelagos).
+* The fillet fix was a separate `fix:` commit, after 3.4, because it turned up while reviewing the 3.6
+  examples with their goldens' seed.
 
-**Contornos antes de la fase 4** (2026-10-29). Las imágenes de `docs/references/` son el resultado pedido y los
-generadores revisados el mínimo. Decisiones:
+**Outlines before phase 4** (2026-10-29). The images in `docs/references/` are the requested result and the
+reviewed generators the minimum. Decisions:
 
-* **Se revierte el descarte de 5.2 para mapas acotados:** `Lands.Template` porta las 14 plantillas de Azgaar tal
-  cual (sus pasos y números, rejilla con jitter de 10 000 celdas, alturas enteras); su fracción de tierra cae
-  en la dispersión de su propio generador (6 vistas previas por plantilla en azgaar.github.io).
-* **Encima, lo que acerca a las referencias:** doblado amplio (0,08 del mapa; más pliega la tierra), fiordos
-  caminados tierra adentro (8 por mapa), deshilachado fractal en distancia (2,5 celdas) por su campo de
-  rugosidad y warp bajo la celda en la GPU; distancia exacta (Felzenszwalb). El ruido en unidades de altura
-  (umbral de mapgen2) apenas movía la costa y se descartó; también los valles por `StreamPower`, que solo
-  almenaban la costa.
-* **Los presets con plantilla la usan por defecto;** `outline = "shapes"` da la composición con ids.
-  `land_fraction` fija el nivel del mar por cuantil.
-
----
-
-## Índice
-
-1. [Objetivo y alcance](#1-objetivo-y-alcance)
-2. [Criterio fundamental y principios](#2-criterio-fundamental-y-principios)
-3. [Punto de partida: qué hay hoy y qué se reutiliza](#3-punto-de-partida-qué-hay-hoy-y-qué-se-reutiliza)
-4. [Análisis de los repositorios de referencia](#4-análisis-de-los-repositorios-de-referencia)
-5. [Qué se toma, cómo se traduce y qué se descarta](#5-qué-se-toma-cómo-se-traduce-y-qué-se-descarta)
-6. [Arquitectura: el op fusionado `Lands`](#6-arquitectura-el-op-fusionado-lands)
-7. [Algoritmos detallados](#7-algoritmos-detallados)
-8. [API propuesta](#8-api-propuesta)
-9. [Plano infinito y mapas acotados](#9-plano-infinito-y-mapas-acotados)
-10. [Herramientas para que Claude trabaje afinado](#10-herramientas-para-que-claude-trabaje-afinado)
-11. [Fases prioritarias (1 a 3)](#11-fases-prioritarias-1-a-3)
-12. [Fases posteriores (4 a 8)](#12-fases-posteriores-4-a-8)
-13. [Catálogo de ejemplos](#13-catálogo-de-ejemplos)
-14. [Validación y tests](#14-validación-y-tests)
-15. [Riesgos y decisiones abiertas](#15-riesgos-y-decisiones-abiertas)
-16. [Flujo de trabajo](#16-flujo-de-trabajo)
-17. [Referencias](#17-referencias)
+* **The 5.2 rejection is reverted for bounded maps:** `Lands.Template` ports Azgaar's 14 templates as they
+  are (their steps and numbers, a jittered grid of 10 000 cells, integer heights); its land fraction falls
+  within the spread of its own generator (6 previews per template on azgaar.github.io).
+* **On top, what brings it closer to the references:** wide folding (0.08 of the map; more folds the land),
+  fjords walked inland (8 per map), fractal fraying in distance (2.5 cells) by its roughness field and a
+  sub-cell warp on the GPU; exact distance (Felzenszwalb). Noise in height units (mapgen2's threshold)
+  barely moved the coast and was dropped; so were valleys by `StreamPower`, which only crenellated the
+  coast.
+* **Presets with a template use it by default;** `outline = "shapes"` gives the composition with ids.
+  `land_fraction` sets the sea level by quantile.
 
 ---
 
-## 1. Objetivo y alcance
+## Contents
 
-**Objetivo.** Que el motor genere islas, archipiélagos, continentes y cualquier otra distribución de tierra y
-agua (todo tierra, tierra con mares interiores o lagos, todo mar con relieve submarino) de forma:
-
-* **controlable**: "5 islas de 2 a 4 km²", "agranda la isla 3 un 20 %", "una península al sur" o
-  "acantilados más altos que el interior" se traducen en parámetros, no en reescribir un script;
-* **medible**: cada elemento tiene un id, un área real y unas dimensiones que se comprueban;
-* **válida en el plano infinito y en mapas de tamaño fijo** con el mismo modelo;
-* **eficiente**: formas analíticas evaluadas en GPU en un único op; la CPU, solo para colocar y medir;
-* **con el menor código nuevo posible**: se reutiliza lo que el motor ya tiene (sección 3.4) y solo se crea
-  lo que falta, más las herramientas que Claude necesita para trabajar afinado (sección 10).
-
-La generación cubre **la superficie y la parte oceánica**: una sola superficie, continua a través del nivel
-del mar. El océano empieza con una base geométrica y se mejora en la fase 6.
-
-**Prioridad.** Islas, archipiélagos y continentes (fases 1 a 3). Detalle, hidrología, océano completo, clima,
-biomas e infraestructura van después (fases 4 a 8).
-
-**Fuera de alcance.** Política, culturas, nombres y rutas.
-
----
-
-## 2. Criterio fundamental y principios
-
-### 2.1 Criterio fundamental: primero formas geométricas simples, después detalle
-
-Todo elemento, de tierra o de océano, se construye **primero** con primitivas analíticas (distancias con
-signo combinadas por unión, intersección y resta, y perfiles sobre esas distancias). El ruido, el warp y la
-erosión entran **solo** en la etapa de detalle, sobre una forma que ya es correcta y medible, con su amplitud
-en metros declarada.
-
-Consecuencias:
-
-* Las primitivas son **locales**: valen en el plano infinito sin rejilla global.
-* Son **independientes de la resolución** y se evalúan en GPU.
-* La **distancia a la costa** sale de la composición; no hace falta una transformada de distancia salvo que
-  la erosión desplace la costa (fase 4).
-* Son **editables**: "agranda la isla 3" cambia un radio.
-* **Tiempo**: hoy los goldens `lands_*` pasan 6 a 7 s (Release) y unos 27 s (Debug) en Lua, construyendo una
-  rejilla de CPU celda a celda. Con formas analíticas, el script solo coloca elementos.
-
-### 2.2 Principios
-
-1. **Forma en planta separada del perfil.** Dónde hay tierra es una capa; cómo sube y baja la altura es otra.
-   **Nada supone que el centro sea más alto.** El perfil es una curva sobre la distancia a la costa y los
-   elementos de relieve se colocan por su cuenta.
-2. **Tierra y agua se componen libremente.** Elementos con signo de tierra o de agua; cualquier fracción de
-   tierra de 0 a 1. "Mar" se define por etiqueta o por área, no por tocar el borde.
-3. **Un modelo para el plano infinito y para tamaños fijos** (sección 9).
-4. **Editable por Claude**: ids estables, lista resuelta en los metadatos, edición por id.
-5. **Parametrización de las referencias, no sus supuestos.** Se toman operaciones y parámetros; no la regla
-   "elevación = distancia a la costa" como valor por defecto ni constantes ligadas al número de celdas.
-6. **Determinismo**: todo azar sale de un hash sembrado; nada depende del orden de consulta ni de la ventana.
-7. **Unidades del mundo**: metros y km².
-8. **Reutilizar antes que escribir**: cada paso empieza comprobando qué parte del motor ya lo hace.
+1. [Goal and scope](#1-goal-and-scope)
+2. [Fundamental criterion and principles](#2-fundamental-criterion-and-principles)
+3. [Starting point: what exists today and what is reused](#3-starting-point-what-exists-today-and-what-is-reused)
+4. [Analysis of the reference repositories](#4-analysis-of-the-reference-repositories)
+5. [What is taken, how it is translated and what is dropped](#5-what-is-taken-how-it-is-translated-and-what-is-dropped)
+6. [Architecture: the fused `Lands` op](#6-architecture-the-fused-lands-op)
+7. [Detailed algorithms](#7-detailed-algorithms)
+8. [Proposed API](#8-proposed-api)
+9. [Infinite plane and bounded maps](#9-infinite-plane-and-bounded-maps)
+10. [Tools for Claude to work precisely](#10-tools-for-claude-to-work-precisely)
+11. [Priority phases (1 to 3)](#11-priority-phases-1-to-3)
+12. [Later phases (4 to 8)](#12-later-phases-4-to-8)
+13. [Example catalogue](#13-example-catalogue)
+14. [Validation and tests](#14-validation-and-tests)
+15. [Risks and open decisions](#15-risks-and-open-decisions)
+16. [Workflow](#16-workflow)
+17. [References](#17-references)
 
 ---
 
-## 3. Punto de partida: qué hay hoy y qué se reutiliza
+## 1. Goal and scope
 
-### 3.1 El macro actual (`assets/lua/prelude/50_lands.lua`, 839 líneas)
+**Goal.** For the engine to generate islands, archipelagos, continents and any other distribution of land
+and water (all land, land with inland seas or lakes, all sea with underwater relief) in a way that is:
 
-Rejilla de CPU (256 celdas por defecto, hasta 512) leída en GPU con `Terrain.Grid`:
+* **controllable**: "5 islands of 2 to 4 km²", "make island 3 20 % bigger", "a peninsula to the south" or
+  "cliffs higher than the interior" translate into parameters, not into rewriting a script;
+* **measurable**: every element has an id, a real area and dimensions that are checked;
+* **valid on the infinite plane and on fixed-size maps** with the same model;
+* **efficient**: analytic shapes evaluated on the GPU in a single op; the CPU only places and measures;
+* **with as little new code as possible**: what the engine already has is reused (section 3.4) and only
+  what is missing is created, plus the tools Claude needs to work precisely (section 10).
 
-1. **Cuerpos** elípticos rotados con una espina de terreno alto, vistos con un domain warp. Layouts
-   `single`, `scattered`, `hotspot`, `arc`, `atoll`, `continent`.
-2. **Ríos**: `Erosion.StreamPower`.
-3. **Nivel del mar por cuantil** (`land_fraction`, 0.7).
-4. **Distancia con signo** (chamfer en Lua) y etiquetas de masa (`region_id`).
-5. **Costa**: warp en tres bandas (macro, meso, micro) con amplitud proporcional a la longitud de onda,
-   omitiendo las bandas de menos de 6 muestras; tipo de costa por dureza, sedimento, exposición y curvatura.
-6. **Margen**: presets `compressed` (anchos proporcionales al mapa, para el visor, que muestra unos 28 km) y
-   `geologic` (plataforma 40 km a 130 m, talud 60 km hasta 3500 m); laguna de atolón.
-7. Contornos dibujados opcionales (`area`, `areas`).
+Generation covers **the surface and the oceanic part**: a single surface, continuous across sea level. The
+ocean starts from a geometric base and is improved in phase 6.
 
-Salidas: `land_mask`, `land_height`, `bathymetry`, `surface_height`, `shore_mask`, `coast_type`, `region_id`
-(7 de las 8 de `kMaxOutputs`).
+**Priority.** Islands, archipelagos and continents (phases 1 to 3). Detail, hydrology, full ocean,
+climate, biomes and infrastructure come later (phases 4 to 8).
 
-### 3.2 Limitaciones abiertas (`docs/todo.md`, "Lands macro")
+**Out of scope.** Politics, cultures, names and routes.
 
-* Cadena, arco y atolón ocupan el 6 a 12 % del mapa, no el 70 %.
-* La isla del 70 % toca el borde del mapa.
-* La exposición de la costa no tiene fetch.
-* Los macros no drenan: sin lagos ni ríos como agua.
-* Rejilla de 256 celdas: drenaje tan fino como 94 m a 24 km.
-* Ninguna referencia real medida con `terrain_metrics`.
+---
 
-### 3.3 Problemas de diseño para los objetivos nuevos
+## 2. Fundamental criterion and principles
 
-* **Cuantil de la ventana**: el nivel del mar depende del área exportada; incompatible con el plano infinito.
-* **Supuesto de perfil**: espina alta y altura creciente hacia el interior.
-* **Sin ids estables ni lista resuelta**.
-* **Rejilla de CPU en Lua**: lenta y acotada a `size`.
-* **Límites del grafo**: un `Shapes.*` es una cadena de nodos (un polígono son nodos de dos segmentos cada
-  uno, y `Shapes.Spline` está limitado a 128 segmentos); el grafo admite 1024 nodos (`Graph::kMaxNodes`).
-  Cien islas como `Shapes` agotan el grafo. Es el mismo problema que `Water` resolvió con un op fusionado.
+### 2.1 Fundamental criterion: simple geometric shapes first, detail after
 
-### 3.4 Inventario de lo reutilizable
+Every element, land or ocean, is built **first** from analytic primitives (signed distances combined by
+union, intersection and subtraction, and profiles over those distances). Noise, warp and erosion enter
+**only** in the detail stage, on a shape that is already correct and measurable, with their amplitude
+declared in metres.
 
-| Pieza existente | Dónde | Qué aporta al plan | Uso |
+Consequences:
+
+* Primitives are **local**: they work on the infinite plane with no global grid.
+* They are **resolution-independent** and evaluated on the GPU.
+* **Distance to the coast** comes out of the composition; no distance transform is needed unless erosion
+  moves the coast (phase 4).
+* They are **editable**: "make island 3 bigger" changes a radius.
+* **Time**: today the `lands_*` goldens spend 6 to 7 s (Release) and about 27 s (Debug) in Lua, building a
+  CPU grid cell by cell. With analytic shapes, the script only places elements.
+
+### 2.2 Principles
+
+1. **Planform separate from profile.** Where there is land is one layer; how the height rises and falls is
+   another. **Nothing assumes the centre is highest.** The profile is a curve over the distance to the
+   coast and relief elements are placed on their own.
+2. **Land and water compose freely.** Elements signed as land or water; any land fraction from 0 to 1.
+   "Sea" is defined by label or by area, not by touching the edge.
+3. **One model for the infinite plane and for fixed sizes** (section 9).
+4. **Editable by Claude**: stable ids, a resolved list in the metadata, editing by id.
+5. **The references' parameterisation, not their assumptions.** Operations and parameters are taken; not
+   the rule "elevation = distance to the coast" as a default nor constants tied to the number of cells.
+6. **Determinism**: all randomness comes from a seeded hash; nothing depends on query order or the window.
+7. **World units**: metres and km².
+8. **Reuse before writing**: every step starts by checking which part of the engine already does it.
+
+---
+
+## 3. Starting point: what exists today and what is reused
+
+### 3.1 The current macro (`assets/lua/prelude/50_lands.lua`, 839 lines)
+
+CPU grid (256 cells by default, up to 512) read on the GPU with `Terrain.Grid`:
+
+1. Rotated elliptic **bodies** with a spine of high ground, seen through a domain warp. Layouts `single`,
+   `scattered`, `hotspot`, `arc`, `atoll`, `continent`.
+2. **Rivers**: `Erosion.StreamPower`.
+3. **Sea level by quantile** (`land_fraction`, 0.7).
+4. **Signed distance** (chamfer in Lua) and mass labels (`region_id`).
+5. **Coast**: three-band warp (macro, meso, micro) with amplitude proportional to wavelength, skipping
+   bands under 6 samples; coast type by hardness, sediment, exposure and curvature.
+6. **Margin**: presets `compressed` (widths proportional to the map, for the viewer, which shows about
+   28 km) and `geologic` (shelf 40 km at 130 m, slope 60 km down to 3500 m); atoll lagoon.
+7. Optional drawn outlines (`area`, `areas`).
+
+Outputs: `land_mask`, `land_height`, `bathymetry`, `surface_height`, `shore_mask`, `coast_type`,
+`region_id` (7 of the 8 of `kMaxOutputs`).
+
+### 3.2 Open limitations (`docs/todo.md`, "Lands macro")
+
+* Chain, arc and atoll cover 6 to 12 % of the map, not 70 %.
+* The 70 % island touches the map edge.
+* Coast exposure has no fetch.
+* The macros do not drain: no lakes or rivers as water.
+* 256-cell grid: drainage as fine as 94 m at 24 km.
+* No real reference measured with `terrain_metrics`.
+
+### 3.3 Design problems for the new goals
+
+* **Window quantile**: sea level depends on the exported area; incompatible with the infinite plane.
+* **Profile assumption**: high spine and height rising towards the interior.
+* **No stable ids or resolved list**.
+* **CPU grid in Lua**: slow and bounded to `size`.
+* **Graph limits**: a `Shapes.*` is a chain of nodes (a polygon is one node per two segments, and
+  `Shapes.Spline` is limited to 128 segments); the graph allows 1024 nodes (`Graph::kMaxNodes`). A hundred
+  islands as `Shapes` exhaust the graph. It is the same problem `Water` solved with a fused op.
+
+### 3.4 Inventory of what can be reused
+
+| Existing piece | Where | What it brings to the plan | Use |
 | --- | --- | --- | --- |
-| Op `Water` fusionado + bloque en el buffer de rejilla | `water.comp.glsl`, `kernels.cpp`, helper `block` en `lua.cpp` | patrón exacto de "una lista de elementos en un bloque, un nodo" | **plantilla del op `Lands`** (sección 6) |
-| Muestreador de CPU, misma aritmética que la GPU | `src/terrain/sampler.cpp` | evaluar el grafo en CPU | referencia de CPU del op y medición |
-| `Terrain.Sample` | `lua.cpp` | muestrear cualquier valor R2→R1 en una rejilla o en puntos | **medir áreas, fracción de tierra, clasificar** sin código nuevo de medida |
-| Distancias de `shape.comp.glsl` (círculo, elipse, caja redondeada, segmentos con paridad) | GLSL | SDF ya probadas | se mueven a `lib/shape.lib.glsl` y las comparten `Shape` y `Lands` |
-| `Combine.SmoothMin` / `SmoothMax` (smin polinómico) | `arith.comp.glsl` | unión suave con radio `k` | misma fórmula dentro de `Lands` |
-| `Shapes.*` (CSG, `Warp`, `Mask`, `Spline` Catmull-Rom) | `10_shapes.lua` | contornos pocos y declarados; warp del detalle | se usan tal cual; `sample_spline` se reutiliza para bandas |
-| `Landforms.*` (`Cone`, `Dome`, `Bowl`, `Plateau`, `Ridge`, `Trench`...) | `20_landforms.lua` | relieve declarado (pocos elementos) | tal cual |
-| `Curves.Profile` (`linear`, `smooth`, `dome`, `gaussian`), `Terrace`, `Smoothstep`, `Remap` | ops | perfiles sobre distancia | perfil global y margen |
-| `Terrain.Transform` (posición, rotación, escala, pivote) | op | colocar formas | elementos declarados |
-| Warp de costa en tres bandas, margen (`MARGINS`), tipo de costa (`COASTS`, exposición) | `50_lands.lua` | detalle de costa y margen | se extraen a funciones y se reutilizan |
-| Etiquetado de masas (chamfer + regiones) | `50_lands.lua` | componentes conexas en Lua | clasificación sobre `Terrain.Sample` |
-| `hasher`, `make_noise`, `smooth` | `30/40/50_*.lua` | hash determinista | se unifican en uno (fase 1, paso 1) |
-| `generate.world_cell` | `46_network.lua` | celdas fijas del mundo + anillo | **misma regla para el plano infinito** |
-| `Erosion.StreamPower`, `Erosion.Gullies`, `Ranges.Carve` | C++ / prelude | erosión y detalle | fase 4 |
-| `Water.Drain`, `Water.Network`, `Hydrology.*` | `45_water`, `46_network`, `hydrology.cpp` | lagos y ríos sobre cualquier terreno | fase 5, sin algoritmo nuevo |
-| `metrics::Measure` (fracción de tierra, islas, áreas, cuota dominante, lagunas, costa, dimensión fractal, canal mínimo, hipsometría) | `tests/unit/terrain_metrics.hpp` | criterios de aceptación | tests y herramienta `terrain_metrics` |
-| `tools/dev.sh review` (export + métricas + hillshade) | `tools/dev.sh` | revisión visual | tal cual, más un subcomando (sección 10) |
-| Goldens auto-descubiertos (`case.json` + `script.lua`) | `tests/datasets/` | tests de regresión de los ejemplos | un golden por ejemplo seleccionado |
-| `test_geometry` (valores cerrados), `test_lands`, `test_cli`, `test_viewer`, `test_seams` | `tests/unit/` | tipos de prueba ya establecidos | se amplían |
-| Visor: `--param`, `--resolution`, `--view`, `--target`, `--ring`, `--water`, `--screenshot` | `viewer_main.cpp` | ver cada ejemplo a distintos tamaños | comandos en la cabecera de cada ejemplo |
+| Fused `Water` op + block in the grid buffer | `water.comp.glsl`, `kernels.cpp`, `block` helper in `lua.cpp` | the exact pattern of "a list of elements in one block, one node" | **template for the `Lands` op** (section 6) |
+| CPU sampler, same arithmetic as the GPU | `src/terrain/sampler.cpp` | evaluate the graph on the CPU | CPU reference of the op and measurement |
+| `Terrain.Sample` | `lua.cpp` | sample any R2→R1 value on a grid or at points | **measure areas, land fraction, classify** with no new measuring code |
+| Distances from `shape.comp.glsl` (circle, ellipse, rounded box, segments with parity) | GLSL | SDFs already tested | moved to `lib/shape.lib.glsl` and shared by `Shape` and `Lands` |
+| `Combine.SmoothMin` / `SmoothMax` (polynomial smin) | `arith.comp.glsl` | smooth union with radius `k` | same formula inside `Lands` |
+| `Shapes.*` (CSG, `Warp`, `Mask`, Catmull-Rom `Spline`) | `10_shapes.lua` | few, declared outlines; detail warp | used as is; `sample_spline` is reused for bands |
+| `Landforms.*` (`Cone`, `Dome`, `Bowl`, `Plateau`, `Ridge`, `Trench`...) | `20_landforms.lua` | declared relief (few elements) | as is |
+| `Curves.Profile` (`linear`, `smooth`, `dome`, `gaussian`), `Terrace`, `Smoothstep`, `Remap` | ops | profiles over distance | global profile and margin |
+| `Terrain.Transform` (position, rotation, scale, pivot) | op | place shapes | declared elements |
+| Three-band coast warp, margin (`MARGINS`), coast type (`COASTS`, exposure) | `50_lands.lua` | coast and margin detail | extracted into functions and reused |
+| Mass labelling (chamfer + regions) | `50_lands.lua` | connected components in Lua | classification over `Terrain.Sample` |
+| `hasher`, `make_noise`, `smooth` | `30/40/50_*.lua` | deterministic hash | unified into one (phase 1, step 1) |
+| `generate.world_cell` | `46_network.lua` | fixed world cells + ring | **same rule for the infinite plane** |
+| `Erosion.StreamPower`, `Erosion.Gullies`, `Ranges.Carve` | C++ / prelude | erosion and detail | phase 4 |
+| `Water.Drain`, `Water.Network`, `Hydrology.*` | `45_water`, `46_network`, `hydrology.cpp` | lakes and rivers on any terrain | phase 5, no new algorithm |
+| `metrics::Measure` (land fraction, islands, areas, dominant share, lagoons, coast, fractal dimension, minimum channel, hypsometry) | `tests/unit/terrain_metrics.hpp` | acceptance criteria | tests and the `terrain_metrics` tool |
+| `tools/dev.sh review` (export + metrics + hillshade) | `tools/dev.sh` | visual review | as is, plus a subcommand (section 10) |
+| Auto-discovered goldens (`case.json` + `script.lua`) | `tests/datasets/` | regression tests for the examples | one golden per selected example |
+| `test_geometry` (closed values), `test_lands`, `test_cli`, `test_viewer`, `test_seams` | `tests/unit/` | established kinds of test | extended |
+| Viewer: `--param`, `--resolution`, `--view`, `--target`, `--ring`, `--water`, `--screenshot` | `viewer_main.cpp` | see each example at different sizes | commands in each example's header |
 
-**Código nuevo imprescindible** (lo que no existe y no se puede expresar con lo anterior):
+**Essential new code** (what does not exist and cannot be expressed with the above):
 
-1. El op fusionado `Lands` (GLSL + entrada en `kOps` + binding del bloque + referencia en `sampler.cpp`).
-2. La capa Lua `Lands.Compose` (colocación, ids, edición, medición con `Terrain.Sample`).
-3. La salida de la lista de elementos a los metadatos (binding pequeño, sección 10).
+1. The fused `Lands` op (GLSL + entry in `kOps` + block binding + reference in `sampler.cpp`).
+2. The Lua layer `Lands.Compose` (placement, ids, editing, measurement with `Terrain.Sample`).
+3. Writing the element list to the metadata (small binding, section 10).
 
 ---
 
-## 4. Análisis de los repositorios de referencia
+## 4. Analysis of the reference repositories
 
 ### 4.1 mapgen2 (Red Blob Games, JavaScript)
 
-Malla Voronoi/Delaunay (Delaunator + dual-mesh, regiones "fantasma" en el borde), struct-of-arrays.
+Voronoi/Delaunay mesh (Delaunator + dual-mesh, "ghost" regions on the border), struct-of-arrays.
 
-**Agua y tierra** (`water.js`, `assign_water_r`):
+**Water and land** (`water.js`, `assign_water_r`):
 
-* Coordenadas normalizadas a [-1, 1]; distancia **Chebyshev** `d = max(|nx|, |ny|)`.
+* Coordinates normalised to [-1, 1]; **Chebyshev** distance `d = max(|nx|, |ny|)`.
 * `n = fbm(amplitudes, nx, ny)`; `n = lerp(n, 0.5, round)`.
-* Agua si `n − (1 − inflate)·d² < 0`. `round` redondea; `inflate` reduce la penalización del borde.
-* **Océano** (`assign_ocean_r`): flood fill desde la región fantasma; el agua no alcanzada es lago.
+* Water if `n − (1 − inflate)·d² < 0`. `round` rounds; `inflate` reduces the edge penalty.
+* **Ocean** (`assign_ocean_r`): flood fill from the ghost region; water not reached is lake.
 
-**Elevación** (`elevation.js`):
+**Elevation** (`elevation.js`):
 
-* BFS multi-fuente desde los triángulos de costa; coste 0 en aristas de lago (entran por la cabeza de la
-  cola), 1 en tierra; relajación si mejora; orden de vecinos con desfase aleatorio. Guarda el lado padre como
-  **puntero de bajada**.
-* `e = −d/minDistance` en océano, `d/maxDistance` en tierra; región = media de triángulos; océano ≤ −0.01.
-* **Redistribución** por rango: `y = 1 − (1 − x)²` ⇒ `x = √S − √(S·(1 − y))`, `S = 1.1`, recorte a 1.
+* Multi-source BFS from the coast triangles; cost 0 on lake edges (they enter at the head of the queue), 1
+  on land; relaxation if it improves; neighbour order with a random offset. Stores the parent side as a
+  **downslope pointer**.
+* `e = −d/minDistance` in ocean, `d/maxDistance` on land; region = mean of triangles; ocean ≤ −0.01.
+* **Redistribution** by rank: `y = 1 − (1 − x)²` ⇒ `x = √S − √(S·(1 − y))`, `S = 1.1`, clipped to 1.
 
-**Ríos** (`rivers.js`): manantiales con `0.3 ≤ e ≤ 0.9` fuera del agua; +1 de caudal por lado recorrido.
+**Rivers** (`rivers.js`): springs with `0.3 ≤ e ≤ 0.9` outside the water; +1 flow per side travelled.
 
-**Humedad** (`moisture.js`): semillas en orillas de río y lago; BFS por tierra; `m = 1 − (d/max)^0.5`; agua
-= 1; redistribución uniforme por rango.
+**Moisture** (`moisture.js`): seeds on river and lake shores; BFS over land; `m = 1 − (d/max)^0.5`; water
+= 1; uniform redistribution by rank.
 
-**Biomas** (`biomes.js`): `t = 1 − e + lerp(bias_north, bias_south, latitud)`. `OCEAN`; agua `MARSH` (t > 0.9),
-`ICE` (t < 0.2), `LAKE`; costa `BEACH`; tierra:
+**Biomes** (`biomes.js`): `t = 1 − e + lerp(bias_north, bias_south, latitude)`. `OCEAN`; water `MARSH`
+(t > 0.9), `ICE` (t < 0.2), `LAKE`; coast `BEACH`; land:
 
-| Temperatura | Humedad → bioma |
+| Temperature | Moisture → biome |
 | --- | --- |
-| < 0.2 | > 0.50 `SNOW`, > 0.33 `TUNDRA`, > 0.16 `BARE`, si no `SCORCHED` |
-| 0.2 a 0.4 | > 0.66 `TAIGA`, > 0.33 `SHRUBLAND`, si no `TEMPERATE_DESERT` |
-| 0.4 a 0.7 | > 0.83 `TEMPERATE_RAIN_FOREST`, > 0.50 `TEMPERATE_DECIDUOUS_FOREST`, > 0.16 `GRASSLAND`, si no `TEMPERATE_DESERT` |
-| ≥ 0.7 | > 0.66 `TROPICAL_RAIN_FOREST`, > 0.33 `TROPICAL_SEASONAL_FOREST`, > 0.16 `GRASSLAND`, si no `SUBTROPICAL_DESERT` |
+| < 0.2 | > 0.50 `SNOW`, > 0.33 `TUNDRA`, > 0.16 `BARE`, else `SCORCHED` |
+| 0.2 to 0.4 | > 0.66 `TAIGA`, > 0.33 `SHRUBLAND`, else `TEMPERATE_DESERT` |
+| 0.4 to 0.7 | > 0.83 `TEMPERATE_RAIN_FOREST`, > 0.50 `TEMPERATE_DECIDUOUS_FOREST`, > 0.16 `GRASSLAND`, else `TEMPERATE_DESERT` |
+| ≥ 0.7 | > 0.66 `TROPICAL_RAIN_FOREST`, > 0.33 `TROPICAL_SEASONAL_FOREST`, > 0.16 `GRASSLAND`, else `SUBTROPICAL_DESERT` |
 
-### 4.2 voronoi-map-js (rjanicek, port de mapgen2)
+### 4.2 voronoi-map-js (rjanicek, port of mapgen2)
 
-**Formas** (`island-shape.js`, `inside(q)`, q en [-1, 1]):
+**Shapes** (`island-shape.js`, `inside(q)`, q in [-1, 1]):
 
 * **Radial** (`islandFactor = 1.07`): `bumps ∈ [1, 5]`, `startAngle`, `dipAngle`, `dipWidth ∈ [0.2, 0.7)`;
-  radio mixto `0.5·(max(|x|,|y|) + |q|)`;
+  mixed radius `0.5·(max(|x|,|y|) + |q|)`;
   `r1 = 0.5 + 0.40·sin(start + bumps·θ + cos((bumps+3)θ))`,
-  `r2 = 0.7 − 0.20·sin(start + bumps·θ − sin((bumps+2)θ))`; **bahía**: dentro de `dipWidth` de `dipAngle`,
-  `r1 = r2 = 0.2`; tierra si `length < r1` o `r1·islandFactor < length < r2` (anillo de satélites).
-* **Perlin** (`oceanRatio` reescalado a [0.1, 0.5]): tierra si `c > oceanRatio·(1 + d²)`.
-* Square, Blob, Noise (defectuosa: no depende de la posición), Bitmap (sin límites).
+  `r2 = 0.7 − 0.20·sin(start + bumps·θ − sin((bumps+2)θ))`; **bay**: within `dipWidth` of `dipAngle`,
+  `r1 = r2 = 0.2`; land if `length < r1` or `r1·islandFactor < length < r2` (ring of satellites).
+* **Perlin** (`oceanRatio` rescaled to [0.1, 0.5]): land if `c > oceanRatio·(1 + d²)`.
+* Square, Blob, Noise (broken: does not depend on position), Bitmap (no bounds).
 
-**Pipeline** (`map.js`): `improveCorners` (esquinas a la media de sus centros); esquinas por BFS desde el
-borde con +0.01 agua / +1.01 tierra (+aleatorio opcional), sin mínimos locales; redistribución con
-`S = 1.1`; polígono agua si ≥ `lakeThreshold = 0.3` de sus esquinas lo son; océano por flood fill; costa;
-bajadas al vecino más bajo; cuencas (hasta 100 pasadas); ríos `(ancho + alto)/4` intentos con fuente en
-`0.3 ≤ e ≤ 0.9`; humedad río `min(3, 0.2·caudal)`, lago 1, decaimiento **0.9** por paso; biomas por elevación
-(> 0.8, > 0.6, > 0.3, resto).
+**Pipeline** (`map.js`): `improveCorners` (corners to the mean of their centres); corners by BFS from the
+border with +0.01 water / +1.01 land (+optional random), no local minima; redistribution with `S = 1.1`;
+polygon is water if ≥ `lakeThreshold = 0.3` of its corners are; ocean by flood fill; coast; downslopes to
+the lowest neighbour; watersheds (up to 100 passes); rivers `(width + height)/4` attempts with a source at
+`0.3 ≤ e ≤ 0.9`; river moisture `min(3, 0.2·flow)`, lake 1, decay **0.9** per step; biomes by elevation
+(> 0.8, > 0.6, > 0.3, rest).
 
-**Noisy edges**: subdivisión recursiva en el cuadrilátero (v0, d0, v1, d1), corte en [0.2, 0.8], factores
-[0.6, 1.4], `noisyLineTradeoff = 0.5`, longitud mínima 10 por defecto, 3 entre biomas, 100 entre océanos y
-**1 en costa, ríos y lava**: el detalle va donde se ve.
+**Noisy edges**: recursive subdivision within the quadrilateral (v0, d0, v1, d1), cut in [0.2, 0.8],
+factors [0.6, 1.4], `noisyLineTradeoff = 0.5`, minimum length 10 by default, 3 between biomes, 100 between
+oceans and **1 on coast, rivers and lava**: detail goes where it is seen.
 
-**Lava**: e > 0.8 y humedad < 0.3, probabilidad 0.2; defectuosa (nunca crea lava).
+**Lava**: e > 0.8 and moisture < 0.3, probability 0.2; broken (never creates lava).
 
 ### 4.3 heman (Philip Rideout, C)
 
-**Generadores** (`SEALEVEL = 0.5`, `DEFAULT_STRENGTH = 0.6`):
+**Generators** (`SEALEVEL = 0.5`, `DEFAULT_STRENGTH = 0.6`):
 
-* **Isla**: ruido de 3 canales, frecuencias `{4, 16, 32, 64, 128}`, amplitudes
-  `{0.2, 0.1, 0.05, 0.025, 0.0125}`; máscara `0.707 − √(u² + v²) + n0` con `u, v` desplazados; umbral 0.5;
-  SDF; pasada final con warp `influence = z` y `z += 6·influence·n0`: **ruido creciente hacia el interior,
-  costa limpia**.
-* **Archipiélago**: puntos `(x, y[, fuerza])`, conos `fuerza·(1 − d/r)` combinados por **máximo**,
-  `fuerza = 0.56` por defecto, `noiseamt ≈ 0.3`.
-* **Roca**: `√(r² − d²)` con `r = 0.3 + n`. **Planeta**: OpenSimplex 3D lat-long. **fBm**: lacunaridad 2,
-  ganancia 0.5.
+* **Island**: 3-channel noise, frequencies `{4, 16, 32, 64, 128}`, amplitudes
+  `{0.2, 0.1, 0.05, 0.025, 0.0125}`; mask `0.707 − √(u² + v²) + n0` with `u, v` offset; threshold 0.5;
+  SDF; final pass with warp `influence = z` and `z += 6·influence·n0`: **noise growing towards the interior,
+  clean coast**.
+* **Archipelago**: points `(x, y[, strength])`, cones `strength·(1 − d/r)` combined by **maximum**,
+  `strength = 0.56` by default, `noiseamt ≈ 0.3`.
+* **Rock**: `√(r² − d²)` with `r = 0.3 + n`. **Planet**: 3D lat-long OpenSimplex. **fBm**: lacunarity 2,
+  gain 0.5.
 
-**Distancia**: Felzenszwalb–Huttenlocher, envolvente de parábolas, O(n) por línea, separable; con signo
-(positivo dentro), sin signo y **campo de punto más cercano** (CPCF).
+**Distance**: Felzenszwalb–Huttenlocher, lower envelope of parabolas, O(n) per line, separable; signed
+(positive inside), unsigned and **closest point coordinate field** (CPCF).
 
-**Ops**: `warp` (ganancia 0.6, lacunaridad 2, amplitud 0.05, frecuencia 8, **amortiguado en cumbres**
-`(1 − h)^4`); `emboss` (tierra fino `a = 0.0005, f = 256`; océano **∝ profundidad** `a = 0.5, f = 1`);
-`percentiles` (terrazas de igual área); `stairstep`; Poisson de Bridson y por densidad; oclusión por barridos
-de horizonte.
+**Ops**: `warp` (gain 0.6, lacunarity 2, amplitude 0.05, frequency 8, **damped on peaks** `(1 − h)^4`);
+`emboss` (fine on land `a = 0.0005, f = 256`; ocean **∝ depth** `a = 0.5, f = 1`); `percentiles`
+(equal-area terraces); `stairstep`; Bridson and density-based Poisson; occlusion by horizon sweeps.
 
-Bugs: `sobel` lee la fila 0; `merge_political` usa `MIN` por `MAX`; normalización de distancias
-inconsistente.
+Bugs: `sobel` reads row 0; `merge_political` uses `MIN` for `MAX`; inconsistent distance normalisation.
 
 ### 4.4 Fantasy-Map-Generator (Azgaar, TypeScript)
 
-Rejilla de ~10 000 celdas, alturas 0 a 100, mar en 20.
+Grid of ~10 000 cells, heights 0 to 100, sea at 20.
 
-**Lenguaje de plantillas**: `Herramienta cantidad altura rangoX% rangoY%`.
+**Template language**: `Tool count height rangeX% rangeY%`.
 
-| Operación | Algoritmo |
+| Operation | Algorithm |
 | --- | --- |
-| `Hill` | BFS: `h_vecino = h^blobPower·U(0.9, 1.1)` hasta h ≤ 1; reintenta (50) si la cima pasaría de 90 |
-| `Pit` | igual restando; empieza en tierra |
-| `Range` | camino voraz a un destino a `ancho/8`–`ancho/3` (15 % de pasos "acortan"); anillos `h = h^linePower − 1` hasta h < 2; **cada 6 celdas del eje baja ladera abajo** con `(2·h + h_min)/3` (estribaciones) |
-| `Trough` | igual restando; 20 %; hasta `ancho/2` |
-| `Strait` | camino de borde a borde por el 30–70 % central; `h^exp`, `exp = 0.9 − (0.1/ancho)·restante` |
-| `Mask` | `(1 − nx²)(1 − ny²)`; negativa invierte (mar interior); mezcla `(h·(fr − 1) + h·d)/fr` |
-| `Invert` | espejo con probabilidad |
-| `Add`, `Multiply` | sobre `all`, `land` o un rango, respetando el nivel 20 |
-| `Smooth` | `(h·(fr − 1) + media)/fr` |
+| `Hill` | BFS: `h_neighbour = h^blobPower·U(0.9, 1.1)` until h ≤ 1; retries (50) if the peak would exceed 90 |
+| `Pit` | same, subtracting; starts on land |
+| `Range` | greedy path to a target at `width/8`–`width/3` (15 % of steps "shortcut"); rings `h = h^linePower − 1` until h < 2; **every 6 cells of the axis it walks downhill** with `(2·h + h_min)/3` (foothills) |
+| `Trough` | same, subtracting; 20 %; up to `width/2` |
+| `Strait` | edge-to-edge path through the central 30–70 %; `h^exp`, `exp = 0.9 − (0.1/width)·remaining` |
+| `Mask` | `(1 − nx²)(1 − ny²)`; negative inverts (inland sea); blend `(h·(fr − 1) + h·d)/fr` |
+| `Invert` | mirror with probability |
+| `Add`, `Multiply` | on `all`, `land` or a range, respecting level 20 |
+| `Smooth` | `(h·(fr − 1) + mean)/fr` |
 
-`blobPower` (0.93 a 0.9973) y `linePower` (0.75 a 0.93) dependen del número de celdas.
+`blobPower` (0.93 to 0.9973) and `linePower` (0.75 to 0.93) depend on the number of cells.
 
-Plantillas (peso): `volcano` 3, `highIsland` 19, `lowIsland` 9, `continents` 16, `archipelago` 18, `atoll` 1,
-`mediterranean` 5, `peninsula` 3, `pangea` 5, `isthmus` 2, `shattered` 7, `taklamakan` 1, `oldWorld` 8,
-`fractious` 3. Estructura de las más útiles:
+Templates (weight): `volcano` 3, `highIsland` 19, `lowIsland` 9, `continents` 16, `archipelago` 18,
+`atoll` 1, `mediterranean` 5, `peninsula` 3, `pangea` 5, `isthmus` 2, `shattered` 7, `taklamakan` 1,
+`oldWorld` 8, `fractious` 3. Structure of the most useful ones:
 
-* `volcano`: Hill central 90–100, `Multiply 0.8` en 50–100, Range central, Smooth, colinas laterales, `Mask 3`.
-* `highIsland`: Hill grande, `Add 7`, colinas, Range, `Multiply 0.8` en tierra, `Mask 3`, Troughs, Pits.
-* `lowIsland`: igual con `Multiply 0.4` en 20–100: isla llana.
-* `continents`: dos Hill grandes separados, colinas, Ranges en los bordes, dos `Strait` verticales, Troughs.
-* `archipelago`: `Add 11`, Ranges, Hills, `Trough 10`, `Strait` vertical y horizontal.
-* `mediterranean`: relieve pegado a los bordes norte y sur y `Mask −2` (mar en el centro).
-* `atoll`: Hill central, `Multiply 0.2` en 25–100 (hunde el centro).
-* `peninsula`: Range desde un borde, `Add`, Hill en el borde, `Invert`.
-* `pangea`: Hills en las cuatro esquinas y una banda central, Troughs, Ranges.
-* `isthmus`: cadena diagonal de Hill y Trough alternos, `Invert x`.
+* `volcano`: central Hill 90–100, `Multiply 0.8` on 50–100, central Range, Smooth, side hills, `Mask 3`.
+* `highIsland`: large Hill, `Add 7`, hills, Range, `Multiply 0.8` on land, `Mask 3`, Troughs, Pits.
+* `lowIsland`: same with `Multiply 0.4` on 20–100: flat island.
+* `continents`: two large separate Hills, hills, Ranges on the edges, two vertical `Strait`, Troughs.
+* `archipelago`: `Add 11`, Ranges, Hills, `Trough 10`, vertical and horizontal `Strait`.
+* `mediterranean`: relief stuck to the north and south edges and `Mask −2` (sea in the centre).
+* `atoll`: central Hill, `Multiply 0.2` on 25–100 (sinks the centre).
+* `peninsula`: Range from one edge, `Add`, Hill on the edge, `Invert`.
+* `pangea`: Hills in the four corners and a central band, Troughs, Ranges.
+* `isthmus`: diagonal chain of alternating Hill and Trough, `Invert x`.
 * `shattered`: Hills, `Trough 10–20`, Ranges, `Pit 12–20`.
-* `taklamakan`: Hills altos en los cuatro bordes: cuenca cerrada.
+* `taklamakan`: high Hills on the four edges: closed basin.
 * `fractious`: 12–15 Hills, `Mask −1.5`, `Mask 3`, `Add −20`, Ranges.
 
-**Features**: flood fill + anillos de distancia (+3 … −10). Subtipos: tierra `continent` > N/10 celdas,
-`island` > N/1000, si no `isle`, `lake_island`; agua `ocean` > N/25, `sea` > N/1000, si no `gulf`; lago
-`frozen` (t < −3 °C), `dry` (evaporación > 4·aporte sin entradas ni salidas), `salt` (evaporación > aporte
-sin salida), `sinkhole`, `lava`, `freshwater`.
+**Features**: flood fill + distance rings (+3 … −10). Subtypes: land `continent` > N/10 cells, `island` >
+N/1000, else `isle`, `lake_island`; water `ocean` > N/25, `sea` > N/1000, else `gulf`; lake `frozen`
+(t < −3 °C), `dry` (evaporation > 4·inflow with no inlets or outlets), `salt` (evaporation > inflow with no
+outlet), `sinkhole`, `lava`, `freshwater`.
 
-**Lagos**: nivel = orilla mínima − 0.1; cerrados si no hay salida bajo `lakeElevationLimit`; evaporación
-`((700·(t + 0.006·h))/50 + 75)/(80 − t)` por celda.
+**Lakes**: level = minimum shore − 0.1; closed if there is no outlet below `lakeElevationLimit`;
+evaporation `((700·(t + 0.006·h))/50 + 75)/(80 − t)` per cell.
 
-**Temperatura**: trópicos entre 16° y −20° con 0.15 °C/°, tramos lineales hasta los polos, −6.5 °C/km.
+**Temperature**: tropics between 16° and −20° with 0.15 °C/°, linear segments to the poles, −6.5 °C/km.
 
-**Precipitación**: vientos por franjas de 30°; humedad `maxPrec − h`; sobre agua `+5·mod` y lluvia en la costa
-de llegada; en tierra `max(humedad/(10·mod), 1) + Δh·(h_sig/70)²`; por encima de 85, la humedad cae a 0
-(**sombra de lluvia**); modificador por bandas de 5°
+**Precipitation**: winds by 30° bands; moisture `maxPrec − h`; over water `+5·mod` and rain on the
+windward coast; on land `max(moisture/(10·mod), 1) + Δh·(h_next/70)²`; above 85, moisture drops to 0
+(**rain shadow**); modifier by 5° bands
 `[4, 2, 2, 2, 1, 1, 2, 2, 2, 2, 3, 3, 2, 2, 1, 1, 1, 0.5]`.
 
-**Ríos**: caudal acumulado por altura; río ≥ 30, navegable ≥ 100; depresiones +0.1 iterativo; erosión de cauce
-con h ≥ 35, `min(caudal/caudal_superior, 5)`; ancho `min(caudal^0.7/500, 1)` + longitud; meandros.
+**Rivers**: flow accumulated by height; river ≥ 30, navigable ≥ 100; depressions +0.1 iterative; channel
+erosion with h ≥ 35, `min(flow/upstream_flow, 5)`; width `min(flow^0.7/500, 1)` + length; meanders.
 
-**Costa**: fractalización (`maxDepth 4`, `baseAmplitude 1.5·√longitud`, `amplitudeDecay 0.9`, `minEdge 1`) con
-**campo de rugosidad** (`roughnessScale 60`, `smoothThreshold 0.25`, `roughnessContrast 1.5`, lagos ×2 más
-tranquilos).
+**Coast**: fractalisation (`maxDepth 4`, `baseAmplitude 1.5·√length`, `amplitudeDecay 0.9`, `minEdge 1`)
+with a **roughness field** (`roughnessScale 60`, `smoothThreshold 0.25`, `roughnessContrast 1.5`, lakes ×2
+calmer).
 
-**Océano**: anillos batimétricos a distancias −1 … −9. **Biomas**: humedad (5) × temperatura (26).
+**Ocean**: bathymetric rings at distances −1 … −9. **Biomes**: moisture (5) × temperature (26).
 
 ---
 
-## 5. Qué se toma, cómo se traduce y qué se descarta
+## 5. What is taken, how it is translated and what is dropped
 
-### 5.1 Traducción
+### 5.1 Translation
 
-| Concepto | Traducción en YATE | Sección |
+| Concept | Translation in YATE | Section |
 | --- | --- | --- |
-| Azgaar `Hill` | elemento de contorno + perfil (`dome`, `cone`) | 7.1, 7.4 |
-| Azgaar `Pit` | elemento de agua o relieve `bowl` | 7.1, 7.5 |
-| Azgaar `Range` con estribaciones | `ridge` sobre spline + `spurs` geométricos | 7.5 |
-| Azgaar `Trough` | `trench` sobre spline | 7.5 |
-| Azgaar `Strait` | `band`/`capsule` de agua | 7.1 |
-| Azgaar `Mask` / negativa | elemento `frame` de tierra o de agua | 7.1 |
-| Azgaar `Invert` | `mirror` del elemento | 8.3 |
-| Azgaar `Add`/`Multiply`/`Smooth` | parámetros del perfil, `smooth` de la unión | 7.2, 7.4 |
-| Azgaar plantillas | presets de `Lands.Compose` | 11 |
-| Azgaar subtipos | clasificación por área (km²) | 7.9 |
-| mapgen2 radial (`bumps`, `dip`, `islandFactor`) | `radial` + `sector` de agua + anillo de satélites | 7.1 |
-| mapgen2 `inflate`, `round` | elemento `field` (fase 4) | 12 |
-| mapgen2 hipsometría | curva fija sobre la altura | 7.4 |
-| heman archipiélago `(x, y, fuerza)` | `centers` | 7.6 |
-| heman Poisson | colocación por `scatter` | 7.6 |
-| heman ruido ∝ distancia al interior | detalle (fase 4) | 12 |
-| heman `emboss` océano | detalle del fondo (fase 6) | 12 |
-| heman Felzenszwalb | solo si la erosión mueve la costa (fase 4) | 12 |
-| Azgaar campo de rugosidad | detalle de costa (fase 4) | 7.10 |
-| Azgaar clima, lagos, ríos | fases 5 y 7 | 12 |
+| Azgaar `Hill` | outline element + profile (`dome`, `cone`) | 7.1, 7.4 |
+| Azgaar `Pit` | water element or `bowl` relief | 7.1, 7.5 |
+| Azgaar `Range` with foothills | `ridge` on a spline + geometric `spurs` | 7.5 |
+| Azgaar `Trough` | `trench` on a spline | 7.5 |
+| Azgaar `Strait` | water `band`/`capsule` | 7.1 |
+| Azgaar `Mask` / negative | land or water `frame` element | 7.1 |
+| Azgaar `Invert` | element `mirror` | 8.3 |
+| Azgaar `Add`/`Multiply`/`Smooth` | profile parameters, union `smooth` | 7.2, 7.4 |
+| Azgaar templates | `Lands.Compose` presets | 11 |
+| Azgaar subtypes | classification by area (km²) | 7.9 |
+| mapgen2 radial (`bumps`, `dip`, `islandFactor`) | `radial` + water `sector` + ring of satellites | 7.1 |
+| mapgen2 `inflate`, `round` | `field` element (phase 4) | 12 |
+| mapgen2 hypsometry | fixed curve over height | 7.4 |
+| heman archipelago `(x, y, strength)` | `centers` | 7.6 |
+| heman Poisson | placement by `scatter` | 7.6 |
+| heman noise ∝ distance to the interior | detail (phase 4) | 12 |
+| heman ocean `emboss` | seabed detail (phase 6) | 12 |
+| heman Felzenszwalb | only if erosion moves the coast (phase 4) | 12 |
+| Azgaar roughness field | coast detail (phase 4) | 7.10 |
+| Azgaar climate, lakes, rivers | phases 5 and 7 | 12 |
 
-### 5.2 Descartes
+### 5.2 Rejections
 
-* **Malla Voronoi/Delaunay y noisy edges en polilínea**: YATE es raster en GPU; primitivas y warp cubren lo
-  mismo con independencia de la resolución.
-* **Elevación = distancia a la costa por defecto**: queda como preset `dome`.
-* **Redistribución por rango**: depende de la ventana; se usa una curva fija.
-* **Océano = agua que toca el borde**: no hay borde en el plano infinito.
-* **Constantes por número de celdas** (`blobPower`, `linePower`, N/10, N/1000): pasan a metros y km².
-* **Crecimiento por BFS celda a celda** (Hill, Range de Azgaar): depende de la rejilla; se sustituye por
-  primitivas analíticas con el mismo efecto.
-* **Política, culturas, rutas, nombres; lava de voronoi-map.**
-* **Bugs**: `sobel` y `merge_political` (heman); `makeNoise`, `makeBitmap`, lava (voronoi-map).
+* **Voronoi/Delaunay mesh and polyline noisy edges**: YATE is raster on the GPU; primitives and warp
+  cover the same independently of resolution.
+* **Elevation = distance to the coast by default**: kept as the `dome` preset.
+* **Redistribution by rank**: depends on the window; a fixed curve is used.
+* **Ocean = water that touches the edge**: there is no edge on the infinite plane.
+* **Constants per number of cells** (`blobPower`, `linePower`, N/10, N/1000): become metres and km².
+* **Cell-by-cell BFS growth** (Azgaar's Hill, Range): depends on the grid; replaced by analytic
+  primitives with the same effect.
+* **Politics, cultures, routes, names; voronoi-map's lava.**
+* **Bugs**: `sobel` and `merge_political` (heman); `makeNoise`, `makeBitmap`, lava (voronoi-map).
 
 ---
 
-## 6. Arquitectura: el op fusionado `Lands`
+## 6. Architecture: the fused `Lands` op
 
-### 6.1 Por qué un op nuevo
+### 6.1 Why a new op
 
-Componer cada isla con `Shapes.*` cuesta varios nodos (posición, distancia, unión) y el grafo tiene 1024;
-un polígono cuesta un nodo cada dos segmentos. El op `Water` ya resolvió lo mismo: **una lista de elementos en
-un bloque del buffer de rejilla y un nodo**. `Lands` copia ese patrón; no inventa un mecanismo nuevo.
+Composing each island from `Shapes.*` costs several nodes (position, distance, union) and the graph has
+1024; a polygon costs one node per two segments. The `Water` op already solved the same thing: **a list of
+elements in one block of the grid buffer and one node**. `Lands` copies that pattern; it does not invent a
+new mechanism.
 
-Los `Shapes.*` y `Landforms.*` siguen siendo la vía para pocos elementos declarados a mano y para el detalle.
+`Shapes.*` and `Landforms.*` remain the way for a few hand-declared elements and for detail.
 
-### 6.2 Contrato del op (como `water.comp.glsl`)
+### 6.2 Op contract (like `water.comp.glsl`)
 
-* Clase: pointwise (halo 0); dos secciones vecinas coinciden por construcción.
-* Entradas: `position` (R2→R2, por defecto `Terrain.Coords`; un `Shapes.Warp` da el detalle de costa sin
-  código nuevo) y, opcional, un campo auxiliar.
-* Slot 3: el bloque, ligado por el evaluador, igual que `Water` y `Grid`.
-* Dos canales, como `Water` (`maxChannels = 2`).
-* Modos (parámetro 2):
+* Class: pointwise (halo 0); two neighbouring sections agree by construction.
+* Inputs: `position` (R2→R2, default `Terrain.Coords`; a `Shapes.Warp` gives coast detail with no new
+  code) and, optionally, an auxiliary field.
+* Slot 3: the block, bound by the evaluator, same as `Water` and `Grid`.
+* Two channels, like `Water` (`maxChannels = 2`).
+* Modes (parameter 2):
 
-  | Modo | Canal 0 | Canal 1 |
+  | Mode | Channel 0 | Channel 1 |
   | --- | --- | --- |
-  | 0 `coast` | distancia con signo a la costa (tierra < 0), en metros, recortada a `D` | id del elemento de tierra dominante |
-  | 1 `relief` | altura sobre el nivel del mar del perfil de tierra mezclado por elemento | id dominante |
-  | 2 `seabed` | profundidad del margen y de los elementos del fondo | id dominante |
+  | 0 `coast` | signed distance to the coast (land < 0), in metres, clipped to `D` | id of the dominant land element |
+  | 1 `relief` | height above sea level of the per-element blended land profile | dominant id |
+  | 2 `seabed` | depth of the margin and of the seabed elements | dominant id |
 
-* Referencia de CPU en `sampler.cpp`, **término a término** igual que el GLSL (como `Water`). Así funcionan
-  `Terrain.Sample` sobre el op y las comparaciones GPU/CPU de los tests.
+* CPU reference in `sampler.cpp`, **term by term** equal to the GLSL (like `Water`). That is what makes
+  `Terrain.Sample` over the op and the GPU/CPU comparisons in the tests work.
 
-### 6.3 Disposición del bloque
+### 6.3 Block layout
 
 ```
-cabecera (24 valores)
-  0 modo de bloque   1 número de elementos   2 tamaño de bin (m)   3..4 origen de bins (x, z)
-  5..6 bins en x, z  7 D: distancia máxima medida (m)   8 inicio de elementos   9 inicio del índice
-  10 inicio de puntos (bandas y polígonos)   11 número de puntos   12..23 parámetros globales del modo
-elementos (32 valores cada uno)
-  0 tipo  1 operación (add, subtract)  2 id numérico  3 x  4 z  5 rotación  6 escala
-  7..14 parámetros de la forma  15 suavizado k (m)  16 radio envolvente (m)
-  17..25 perfil o margen (preset y parámetros)  26 inicio de sus puntos  27 número de puntos  28..31 libres
-índice de bins (CSR)
-  desplazamientos por bin, luego índices de elemento en orden global
-puntos (x, z, anchura) para bandas, arcos muestreados y polígonos
+header (24 values)
+  0 block mode   1 number of elements   2 bin size (m)   3..4 bin origin (x, z)
+  5..6 bins in x, z  7 D: maximum measured distance (m)   8 start of elements   9 start of index
+  10 start of points (bands and polygons)   11 number of points   12..23 global mode parameters
+elements (32 values each)
+  0 type  1 operation (add, subtract)  2 numeric id  3 x  4 z  5 rotation  6 scale
+  7..14 shape parameters  15 smoothing k (m)  16 bounding radius (m)
+  17..25 profile or margin (preset and parameters)  26 start of its points  27 number of points  28..31 free
+bin index (CSR)
+  offsets per bin, then element indices in global order
+points (x, z, width) for bands, sampled arcs and polygons
 ```
 
-El bloque lo construye un binding nuevo `Lands.Block{...}` que reutiliza el helper `block` de `lua.cpp`
-(el mismo que `RiverBlock`/`LakeBlock`), y el nodo se añade como `Hydrology.Carve` añade el de `Water`.
+The block is built by a new binding `Lands.Block{...}` that reuses the `block` helper in `lua.cpp` (the
+same one as `RiverBlock`/`LakeBlock`), and the node is added the way `Hydrology.Carve` adds the `Water` one.
 
-### 6.4 Evaluación por muestra
+### 6.4 Per-sample evaluation
 
-1. Bin de la muestra: `floor((p − origen)/bin)`. Fuera de los bins: distancia `D` (mar abierto).
-2. Para los elementos del bin, en orden global: distancia de su forma (7.1) en su espacio local
-   (traslación, rotación, escala).
-3. CSG en ese orden: `add` con smin polinómico, `subtract` con smax (7.2).
-4. Id dominante y pesos de mezcla por softmin (7.3).
-5. Según el modo: distancia, perfil de tierra mezclado (7.4) o margen y fondo (7.7).
-6. Recorte a `±D`.
+1. The sample's bin: `floor((p − origin)/bin)`. Outside the bins: distance `D` (open sea).
+2. For the elements of the bin, in global order: distance of its shape (7.1) in its local space
+   (translation, rotation, scale).
+3. CSG in that order: `add` with polynomial smin, `subtract` with smax (7.2).
+4. Dominant id and blend weights by softmin (7.3).
+5. Depending on the mode: distance, blended land profile (7.4) or margin and seabed (7.7).
+6. Clip to `±D`.
 
-Coste por muestra: O(elementos del bin), independiente del total. El tamaño de bin se elige para que un bin
-tenga pocos elementos (sección 7.11).
+Cost per sample: O(elements of the bin), independent of the total. The bin size is chosen so that a bin
+holds few elements (section 7.11).
 
 ---
 
-## 7. Algoritmos detallados
+## 7. Detailed algorithms
 
-### 7.1 Distancias de las primitivas
+### 7.1 Primitive distances
 
-Todas en espacio local, en metros, negativas dentro. Las cuatro primeras ya existen en `shape.comp.glsl` y se
-mueven a `lib/shape.lib.glsl`.
+All in local space, in metres, negative inside. The first four already exist in `shape.comp.glsl` and are
+moved to `lib/shape.lib.glsl`.
 
-| Primitiva | Distancia | Exacta | Área cerrada |
+| Primitive | Distance | Exact | Closed-form area |
 | --- | --- | --- | --- |
-| `circle` (r) | `|p| − r` | sí | `πr²` |
-| `ellipse` (a, b) | la de `shape.comp.glsl` | aprox. acotada | `πab` |
-| `box` (hx, hz, redondeo) | la de `shape.comp.glsl` | sí | `4hx·hz − (4 − π)ρ²` |
-| `polygon` (puntos) | segmentos + paridad, como `Shape`, pero sin límite de nodos | sí | fórmula del área de Gauss (lazada) |
-| `superellipse` (a, b, n) | `f = (|x/a|^n + |z/b|^n)^(1/n) − 1`, dividida por `|∇f|`: `d ≈ f/|∇f|` | 1.er orden | `4ab·Γ(1+1/n)²/Γ(1+2/n)` |
-| `radial` (R, armónicos `a_k`, `φ_k`) | `r(θ) = R·(1 + Σ a_k·sin(kθ + φ_k))`; `d ≈ (|p| − r(θ))/√(1 + (r′(θ)/r(θ))²)` | 1.er orden | `πR²·(1 + ½·Σ a_k²)` (armónicos distintos ortogonales) |
-| `capsule` (a, b, r) | `sdSegment − r` | sí | `2r·|ab| + πr²` |
-| `band` (puntos con anchura) | unión de conos redondeados por segmento (`sdUnevenCapsule` de Íñigo Quílez) | sí por tramo | integración numérica en Lua al construir |
-| `ring` (R, w) | `||p| − R| − w/2` | sí | `2πR·w` |
-| `arc` (R, ángulos, w) | `sdArc` de Íñigo Quílez − w/2 | sí | `R·Δθ·w + πw²/4` |
-| `sector` (r, ángulo, alcance) | `sdPie` de Íñigo Quílez | sí | `α·r²` (α = semiángulo) |
-| `frame` (marco del mapa, margen, exponente) | superelipse grande (n alto = rectángulo redondeado) | 1.er orden | igual que superelipse |
+| `circle` (r) | `|p| − r` | yes | `πr²` |
+| `ellipse` (a, b) | the one in `shape.comp.glsl` | bounded approx. | `πab` |
+| `box` (hx, hz, rounding) | the one in `shape.comp.glsl` | yes | `4hx·hz − (4 − π)ρ²` |
+| `polygon` (points) | segments + parity, like `Shape`, but with no node limit | yes | Gauss's area formula (shoelace) |
+| `superellipse` (a, b, n) | `f = (|x/a|^n + |z/b|^n)^(1/n) − 1`, divided by `|∇f|`: `d ≈ f/|∇f|` | 1st order | `4ab·Γ(1+1/n)²/Γ(1+2/n)` |
+| `radial` (R, harmonics `a_k`, `φ_k`) | `r(θ) = R·(1 + Σ a_k·sin(kθ + φ_k))`; `d ≈ (|p| − r(θ))/√(1 + (r′(θ)/r(θ))²)` | 1st order | `πR²·(1 + ½·Σ a_k²)` (distinct harmonics are orthogonal) |
+| `capsule` (a, b, r) | `sdSegment − r` | yes | `2r·|ab| + πr²` |
+| `band` (points with width) | union of rounded cones per segment (Íñigo Quílez's `sdUnevenCapsule`) | yes per segment | numerical integration in Lua at build time |
+| `ring` (R, w) | `||p| − R| − w/2` | yes | `2πR·w` |
+| `arc` (R, angles, w) | Íñigo Quílez's `sdArc` − w/2 | yes | `R·Δθ·w + πw²/4` |
+| `sector` (r, angle, reach) | Íñigo Quílez's `sdPie` | yes | `α·r²` (α = half-angle) |
+| `frame` (map frame, margin, exponent) | large superellipse (high n = rounded rectangle) | 1st order | same as superellipse |
 
-Notas:
+Notes:
 
-* La forma **radial** generaliza la de mapgen2 sin ruido: con `bumps = k` y `a_k` se obtienen los lóbulos;
-  dos armónicos (k y k+3) reproducen el `sin(kθ + cos((k+3)θ))` original con un error pequeño y área cerrada.
-  Restricción de validez: `Σ|a_k| < 1` (radio positivo) y `Σ k·|a_k| < 1.5` para que la corrección por
-  gradiente no se degrade.
-* La **bahía** (`dip` de mapgen2) no se hornea en la forma: es un `sector` de agua restado. Se edita aparte.
-* Los **satélites** (`islandFactor`) son un `scatter` en un `ring` alrededor de la isla, no un anillo de tierra.
-* Las aproximaciones de 1.er orden son exactas en la costa (d = 0), que es lo que define el área y el
-  contorno; lejos de ella se desvían algo, y lo absorbe el perfil.
+* The **radial** shape generalises mapgen2's without noise: with `bumps = k` and `a_k` you get the lobes;
+  two harmonics (k and k+3) reproduce the original `sin(kθ + cos((k+3)θ))` with a small error and a closed
+  area. Validity constraint: `Σ|a_k| < 1` (positive radius) and `Σ k·|a_k| < 1.5` so that the gradient
+  correction does not degrade.
+* The **bay** (mapgen2's `dip`) is not baked into the shape: it is a subtracted water `sector`. It is edited
+  separately.
+* The **satellites** (`islandFactor`) are a `scatter` on a `ring` around the island, not a ring of land.
+* The 1st-order approximations are exact on the coast (d = 0), which is what defines the area and the
+  outline; far from it they drift somewhat, and the profile absorbs it.
 
-### 7.2 Composición (CSG)
+### 7.2 Composition (CSG)
 
-* Unión: `smin(a, b, k) = mix(b, a, h) − k·h·(1 − h)`, `h = clamp(0.5 + 0.5·(b − a)/k, 0, 1)` (la de
-  `arith.comp.glsl`). Error máximo `k/4` respecto a `min`; con `k = 0`, unión exacta.
-* Resta: `smax(a, −b, k)`.
-* `k` por elemento (metros): con `k` del orden de la anchura de un estrecho, dos islas cercanas se unen en un
-  istmo natural; con `k = 0`, quedan separadas.
-* Orden: el de la lista. La primera tierra, luego el agua que la recorta, luego la tierra dentro del agua
-  (isla en un lago), etc. El índice de bins conserva el orden global, así que el resultado no depende del bin.
+* Union: `smin(a, b, k) = mix(b, a, h) − k·h·(1 − h)`, `h = clamp(0.5 + 0.5·(b − a)/k, 0, 1)` (the one in
+  `arith.comp.glsl`). Maximum error `k/4` relative to `min`; with `k = 0`, exact union.
+* Subtraction: `smax(a, −b, k)`.
+* `k` per element (metres): with `k` on the order of a strait's width, two nearby islands join in a natural
+  isthmus; with `k = 0`, they stay apart.
+* Order: that of the list. First land, then the water that cuts it, then land inside the water (an island
+  in a lake), etc. The bin index keeps the global order, so the result does not depend on the bin.
 
-### 7.3 Id dominante y pesos de mezcla
+### 7.3 Dominant id and blend weights
 
-* Id: el elemento de tierra con menor distancia propia en la muestra.
-* Pesos para mezclar perfiles y márgenes de elementos distintos sin escalón:
-  `w_i = exp(−(d_i − d_min)/τ)` normalizados, con `τ = max(k_i, 1 muestra)`. Si todos los elementos comparten
-  perfil, la mezcla es la identidad.
+* Id: the land element with the smallest own distance at the sample.
+* Weights to blend profiles and margins of different elements without a step:
+  `w_i = exp(−(d_i − d_min)/τ)` normalised, with `τ = max(k_i, 1 sample)`. If all elements share a profile,
+  the blend is the identity.
 
-### 7.4 Perfil de tierra (sin supuestos)
+### 7.4 Land profile (no assumptions)
 
-Altura = `Σ w_i · P_i(s_i)` con `s = −d` (distancia hacia el interior, ≥ 0) y `P_i` el perfil del elemento.
+Height = `Σ w_i · P_i(s_i)` with `s = −d` (inward distance, ≥ 0) and `P_i` the element's profile.
 
-Presets (parámetros en metros; todos editables y **ninguno implícito**: si no se da perfil, el script falla
-con un mensaje que lista los presets):
+Presets (parameters in metres; all editable and **none implicit**: if no profile is given, the script fails
+with a message listing the presets):
 
-| Preset | Definición | Parámetros |
+| Preset | Definition | Parameters |
 | --- | --- | --- |
-| `dome` | `H·profile(s/W)` con la curva `dome` de `Curves.Profile` | H, W |
+| `dome` | `H·profile(s/W)` with the `dome` curve of `Curves.Profile` | H, W |
 | `cone` | `H·min(s/W, 1)` | H, W |
-| `plateau` | `H·smoothstep(0, E, s)` | H, E (anchura del borde) |
-| `rim` | `H_r·g(s; c, σ) + H_i·smoothstep(0, W, s)` con `g` gaussiana centrada a `c` del borde: **acantilado más alto que el interior** cuando `H_r > H_i` | H_r, c, σ, H_i, W |
-| `caldera` | `rim` con `H_i < 0` relativo al borde: sube y vuelve a bajar a una cubeta | H_r, c, σ, profundidad, radio de la cubeta |
-| `tilt` | `smoothstep(0, E, s)·(H_0 + G·dot(p − c, u))`: plano inclinado (cuesta), alto en un lado | H_0, gradiente G, dirección u, E |
-| `flat` | `H·smoothstep(0, E, s)` con H pequeño | H, E |
-| `curve` | `Curves.Profile`/tabla de puntos `(s, h)` interpolada | puntos |
+| `plateau` | `H·smoothstep(0, E, s)` | H, E (edge width) |
+| `rim` | `H_r·g(s; c, σ) + H_i·smoothstep(0, W, s)` with `g` a Gaussian centred `c` from the edge: **cliff higher than the interior** when `H_r > H_i` | H_r, c, σ, H_i, W |
+| `caldera` | `rim` with `H_i < 0` relative to the edge: rises and drops again into a basin | H_r, c, σ, depth, basin radius |
+| `tilt` | `smoothstep(0, E, s)·(H_0 + G·dot(p − c, u))`: tilted plane (cuesta), high on one side | H_0, gradient G, direction u, E |
+| `flat` | `H·smoothstep(0, E, s)` with small H | H, E |
+| `curve` | `Curves.Profile`/table of `(s, h)` points, interpolated | points |
 
-Costa: los parámetros `beach_width`, `beach_height`, `cliff_height`, `cliff_width` del macro actual pasan a
-ser el tramo inicial del perfil (s de 0 a la anchura de playa o acantilado), seleccionado por el tipo de costa.
+Coast: the current macro's `beach_width`, `beach_height`, `cliff_height`, `cliff_width` parameters become
+the initial stretch of the profile (s from 0 to the beach or cliff width), selected by coast type.
 
-Hipsometría opcional: `h' = H·C(h/H)` con `C` una curva fija (`low`: `C(x) = x²`, `balanced`: identidad,
-`high`: `1 − (1 − x)²`, la curva de mapgen2; o una tabla). Es monótona, así que conserva el orden de alturas y
-el drenaje, y no depende de la ventana.
+Optional hypsometry: `h' = H·C(h/H)` with `C` a fixed curve (`low`: `C(x) = x²`, `balanced`: identity,
+`high`: `1 − (1 − x)²`, mapgen2's curve; or a table). It is monotonic, so it keeps the order of heights and
+the drainage, and does not depend on the window.
 
-### 7.5 Elementos de relieve
+### 7.5 Relief elements
 
-* **Pocos y declarados**: `Landforms.*` tal cual (sin código nuevo), sumados a la altura del op.
-* **Muchos o generados** (un volcán por isla, cordilleras en cada continente): modo `relief` del op, con los
-  mismos perfiles que `Landforms` (`linear`, `smooth`, `dome`, `gaussian`).
+* **Few and declared**: `Landforms.*` as is (no new code), added to the op's height.
+* **Many or generated** (one volcano per island, ranges on every continent): the op's `relief` mode, with
+  the same profiles as `Landforms` (`linear`, `smooth`, `dome`, `gaussian`).
 
-**Cordillera con estribaciones** (traducción geométrica del `Range` de Azgaar):
+**Range with foothills** (geometric translation of Azgaar's `Range`):
 
-1. Eje: spline Catmull-Rom (`sample_spline` de `10_shapes.lua`) entre puntos dados o generados.
-2. Sección: `Ridge` de anchura W y altura H.
-3. Altura a lo largo: `H(s) = H·(1 − Σ_j a_j·exp(−((s − s_j)/σ_j)²))`, collados en posiciones `s_j` por hash
-   (parámetro `saddles`, de 0 a N).
-4. Estribaciones: cada `spacing` metros de arco (por defecto 2.5·W), un segmento desde el eje con dirección
-   la normal del eje girada `±(20° a 40°)` (lado alterno), longitud `W·U(0.8, 1.6)`, altura de arranque
-   `0.7·H(s)` y caída lineal a 0. Sustituye el "cada 6 celdas, bajar ladera abajo" de Azgaar, que depende de
-   la rejilla.
-5. Todo como bandas del bloque (conos redondeados), sin nodos por estribación.
+1. Axis: Catmull-Rom spline (`sample_spline` from `10_shapes.lua`) between given or generated points.
+2. Cross-section: `Ridge` of width W and height H.
+3. Height along it: `H(s) = H·(1 − Σ_j a_j·exp(−((s − s_j)/σ_j)²))`, saddles at positions `s_j` by hash
+   (`saddles` parameter, from 0 to N).
+4. Spurs: every `spacing` metres of arc (2.5·W by default), a segment from the axis in the direction of the
+   axis normal turned `±(20° to 40°)` (alternating side), length `W·U(0.8, 1.6)`, starting height
+   `0.7·H(s)` and linear fall to 0. Replaces Azgaar's "every 6 cells, walk downhill", which depends on the
+   grid.
+5. All as bands of the block (rounded cones), with no nodes per spur.
 
-**Volcán**: `Cone` + `Bowl` de cráter (radio y profundidad del cráter). **Depresión**: `Bowl`.
-**Escarpe**: `band` con perfil escalonado (`Curves.Terrace` de un peldaño). **Valle**: `Trench`.
+**Volcano**: `Cone` + crater `Bowl` (crater radius and depth). **Depression**: `Bowl`.
+**Escarpment**: `band` with a stepped profile (one-step `Curves.Terrace`). **Valley**: `Trench`.
 
-### 7.6 Colocación (`scatter`)
+### 7.6 Placement (`scatter`)
 
-**Tamaños primero.** Se sortean las áreas en el rango pedido (log-uniforme por defecto: en la naturaleza hay
-muchas más islas pequeñas que grandes; `distribution = "uniform"` disponible), se convierten a radio con las
-fórmulas cerradas de 7.1 y se ordenan de mayor a menor (colocar primero las grandes empaqueta mejor, como ya
-hace el layout `scattered` actual).
+**Sizes first.** Areas are drawn in the requested range (log-uniform by default: in nature there are many
+more small islands than large ones; `distribution = "uniform"` available), converted to a radius with the
+closed formulas of 7.1 and sorted largest first (placing the large ones first packs better, as the current
+`scattered` layout already does).
 
-**Mapa acotado: dart throwing con rejilla de aceleración** (Bridson adaptado a radios distintos):
+**Bounded map: dart throwing with an acceleration grid** (Bridson adapted to different radii):
 
-* Conflicto entre i y j si `|c_i − c_j| < R_i + R_j + spacing` (R = radio envolvente).
-* Rejilla de aceleración con celda `2·R_max + spacing`; hasta `k = 30` intentos por elemento (Bridson).
-* Dentro de `region` (cualquier elemento usado como máscara: se evalúa su distancia con la referencia de CPU)
-  y a `edge_margin` del marco.
-* Si un elemento no cabe tras `k` intentos, se reduce un 10 % y se reintenta; si sigue sin caber, se omite y
-  se avisa con el número colocado frente al pedido.
+* Conflict between i and j if `|c_i − c_j| < R_i + R_j + spacing` (R = bounding radius).
+* Acceleration grid with cell `2·R_max + spacing`; up to `k = 30` attempts per element (Bridson).
+* Inside `region` (any element used as a mask: its distance is evaluated with the CPU reference) and at
+  `edge_margin` from the frame.
+* If an element does not fit after `k` attempts, it shrinks by 10 % and retries; if it still does not fit,
+  it is skipped and a warning gives the number placed against the number requested.
 
-**Plano infinito: Poisson por celda con prioridad por hash** (independiente del orden, local):
+**Infinite plane: per-cell Poisson with hash priority** (order-independent, local):
 
-1. Cada celda del mundo (`world_cell`) se divide en `m × m` subceldas; cada subcelda propone un candidato con
-   posición, área y prioridad sacadas del hash de `(celda, subcelda, seed)`.
-2. Un candidato sobrevive si ningún candidato en conflicto de las celdas vecinas (3 × 3) tiene prioridad
-   mayor. Es la variante de un paso del muestreo de Poisson paralelo (Wei, 2008): no necesita orden global, así
-   que dos regiones que comparten celdas obtienen exactamente los mismos elementos.
-3. Requisito: `world_cell ≥ 2·R_max + spacing`, comprobado con un error claro.
-4. `count` se interpreta por celda del mundo (densidad), como en `Water.Network`.
+1. Each world cell (`world_cell`) is split into `m × m` subcells; each subcell proposes a candidate with a
+   position, area and priority drawn from the hash of `(cell, subcell, seed)`.
+2. A candidate survives if no conflicting candidate in the neighbouring cells (3 × 3) has higher priority.
+   It is the one-pass variant of parallel Poisson sampling (Wei, 2008): it needs no global order, so two
+   regions that share cells get exactly the same elements.
+3. Requirement: `world_cell ≥ 2·R_max + spacing`, checked with a clear error.
+4. `count` is read per world cell (density), as in `Water.Network`.
 
-**Patrones** (la posición de los centros; los tamaños siguen las reglas de arriba):
+**Patterns** (the position of the centres; sizes follow the rules above):
 
-| Patrón | Algoritmo | Referencia |
+| Pattern | Algorithm | Reference |
 | --- | --- | --- |
-| `uniform` | lo anterior | Bridson, Wei |
-| `cluster` | proceso de Neyman–Scott/Thomas: padres por Poisson con intensidad λ_p; hijos `~N(padre, σ²)` en número `Poisson(μ)`; conflicto igual que arriba | archipiélagos naturales en racimos |
-| `line` | centros a lo largo de una spline con hueco `gap`; radio que decrece con el arco `R(s) = R_0·(1 − a·s/L)` (cadena de punto caliente que envejece) | `hotspot` actual |
-| `arc` | igual sobre un `arc` | `arc` actual |
-| `ring` | centros sobre un `ring`, elementos alargados tangencialmente (relación 0.38 del layout `atoll` actual) | atolón |
-| `centers` | posiciones dadas `(x, z, radio, fuerza)`; la fuerza escala el perfil | heman |
-| `grid` | rejilla con jitter (`points_from_grid` de heman) | utilidad |
+| `uniform` | the above | Bridson, Wei |
+| `cluster` | Neyman–Scott/Thomas process: Poisson parents with intensity λ_p; children `~N(parent, σ²)` numbering `Poisson(μ)`; conflict as above | natural clustered archipelagos |
+| `line` | centres along a spline with gap `gap`; radius decreasing with arc length `R(s) = R_0·(1 − a·s/L)` (ageing hotspot chain) | current `hotspot` |
+| `arc` | same on an `arc` | current `arc` |
+| `ring` | centres on a `ring`, elements elongated tangentially (ratio 0.38 of the current `atoll` layout) | atoll |
+| `centers` | given positions `(x, z, radius, strength)`; strength scales the profile | heman |
+| `grid` | jittered grid (heman's `points_from_grid`) | utility |
 
-**Ids estables**: `"<id del scatter>/<ranura>"`. En acotado, la ranura es el índice en la lista de tamaños
-sorteada con el hash de la ranura (no de la posición en el bucle), así que `count = N + 1` deja intactas las N
-primeras; en infinito, la ranura es `(celda, subcelda)`.
+**Stable ids**: `"<scatter id>/<slot>"`. When bounded, the slot is the index in the list of sizes drawn
+with the slot's hash (not with the position in the loop), so `count = N + 1` leaves the first N untouched;
+when infinite, the slot is `(cell, subcell)`.
 
-### 7.7 Margen oceánico y fondo (base geométrica)
+### 7.7 Ocean margin and seabed (geometric base)
 
-Sobre la distancia mar adentro `d > 0`:
+Over the seaward distance `d > 0`:
 
 ```
-plataforma  0 ≤ d < Ws:          z = −Zs·(d/Ws)^1.5            (pendiente suave, < 1°)
-talud       Ws ≤ d < Ws + Wt:    z = −Zs − (Za − Zs)·smoothstep(0, 1, (d − Ws)/Wt)^0.8
-emersión    hasta + Wr:          suavizado hacia la llanura
-abisal      después:             z = −Za
+shelf     0 ≤ d < Ws:          z = −Zs·(d/Ws)^1.5            (gentle slope, < 1°)
+slope     Ws ≤ d < Ws + Wt:    z = −Zs − (Za − Zs)·smoothstep(0, 1, (d − Ws)/Wt)^0.8
+rise      up to + Wr:          smoothed towards the plain
+abyssal   after:               z = −Za
 ```
 
-* Presets existentes reutilizados: `compressed` (anchos proporcionales al marco) y `geologic`.
-* Por elemento: `margin = "passive"` (plataforma ancha) o `"active"` (plataforma estrecha y fosa: gaussiana de
-  profundidad `Zf` a distancia `Df` de la costa). Mezcla entre elementos con los pesos de 7.3.
-* Laguna: dentro de un `ring` de tierra, profundidad `lagoon_depth` (como ahora).
-* Elementos del fondo en la fase 1: `seamount` (cono) y `guyot` (cono truncado), ya que son las mismas
-  primitivas. El resto, en la fase 6.
-* `D` (distancia máxima medida) = `Ws + Wt + Wr`; más allá todo es llanura abisal, y el índice de bins solo
-  necesita los elementos a menos de `D`.
+* Existing presets reused: `compressed` (widths proportional to the frame) and `geologic`.
+* Per element: `margin = "passive"` (wide shelf) or `"active"` (narrow shelf and trench: a Gaussian of
+  depth `Zf` at distance `Df` from the coast). Blending between elements with the weights of 7.3.
+* Lagoon: inside a land `ring`, depth `lagoon_depth` (as now).
+* Seabed elements in phase 1: `seamount` (cone) and `guyot` (truncated cone), since they are the same
+  primitives. The rest, in phase 6.
+* `D` (maximum measured distance) = `Ws + Wt + Wr`; beyond it everything is abyssal plain, and the bin
+  index only needs the elements closer than `D`.
 
-### 7.8 Fracción de tierra
+### 7.8 Land fraction
 
-* **Acotado**: bisección (8 a 10 iteraciones) sobre un factor de escala común a los elementos **generados**
-  (no a los declarados ni a los fijados). Área medida con `Terrain.Sample` del modo `coast` en una rejilla de
-  256² (contando celdas con d < 0). Coste: unas pocas evaluaciones en CPU de un op pointwise.
-* **Infinito**: objetivo estadístico. Sin solapes (hard-core), cobertura ≈ `λ·E[A]` (λ = elementos por m²);
-  con solapes permitidos (modelo booleano), `1 − exp(−λ·E[A])`. Se calibra λ con esa fórmula y se avisa si la
-  separación pedida lo impide (en la práctica no se puede cubrir más del ~55 % con discos que no se tocan).
-* "Todo tierra" no usa fracción: es un `frame` de tierra que cubre la ventana (o, en infinito, un elemento
-  `fill` de tierra) al que se restan elementos de agua.
+* **Bounded**: bisection (8 to 10 iterations) over a scale factor common to the **generated** elements
+  (not the declared or fixed ones). Area measured with `Terrain.Sample` of the `coast` mode on a 256² grid
+  (counting cells with d < 0). Cost: a few CPU evaluations of a pointwise op.
+* **Infinite**: statistical target. Without overlaps (hard-core), coverage ≈ `λ·E[A]` (λ = elements per
+  m²); with overlaps allowed (Boolean model), `1 − exp(−λ·E[A])`. λ is calibrated with that formula and a
+  warning is given if the requested spacing prevents it (in practice, discs that do not touch cannot cover
+  more than ~55 %).
+* "All land" does not use a fraction: it is a land `frame` covering the window (or, when infinite, a land
+  `fill` element) from which water elements are subtracted.
 
-### 7.9 Clasificación
+### 7.9 Classification
 
-* Componentes conexas de tierra y de agua sobre `Terrain.Sample` (rejilla de 256² a 512² en la ventana de
-  análisis), con el etiquetado del macro actual en Lua.
-* Tierra por área: `continent` ≥ `classes.continent` km², `island` ≥ `classes.island`, si no `isle`;
-  `lake_island` si la rodea agua que no es mar. Por defecto, en acotado, los umbrales de Azgaar en fracción
-  del marco (1/10, 1/1000); en infinito, absolutos (por defecto 10 000 km² y 1 km²). Configurables.
-* Agua: el `role` del elemento manda. Sin `role`: en acotado, `ocean` si toca el marco, `sea` si su área
-  supera `classes.sea`, si no `lake`; en infinito, `ocean` si toca el borde de la ventana de análisis (que
-  incluye el anillo), `sea`/`lake` por área.
-* `gulf`: agua del mar que entra en un `sector`/`ellipse` de agua etiquetado así.
+* Connected components of land and water over `Terrain.Sample` (a 256² to 512² grid on the analysis
+  window), with the current macro's labelling in Lua.
+* Land by area: `continent` ≥ `classes.continent` km², `island` ≥ `classes.island`, else `isle`;
+  `lake_island` if it is surrounded by water that is not sea. By default, when bounded, Azgaar's thresholds
+  as a fraction of the frame (1/10, 1/1000); when infinite, absolute (10 000 km² and 1 km² by default).
+  Configurable.
+* Water: the element's `role` wins. Without `role`: when bounded, `ocean` if it touches the frame, `sea` if
+  its area exceeds `classes.sea`, else `lake`; when infinite, `ocean` if it touches the edge of the
+  analysis window (which includes the ring), `sea`/`lake` by area.
+* `gulf`: sea water that enters a water `sector`/`ellipse` labelled as such.
 
-### 7.10 Detalle de costa (fase 4, ya decidido para no rehacer la API)
+### 7.10 Coast detail (phase 4, decided now so the API is not redone)
 
-* Warp de tres bandas del macro actual, aplicado a la `position` del op (un `Shapes.Warp`): sin código nuevo.
-* Campo de rugosidad (Azgaar): `r = clamp((fbm(p/escala)·0.5 + 0.5 − umbral)/(1 − umbral), 0, 1)^contraste`
-  multiplica la amplitud del warp. Valores de partida: `escala` 8 a 15 km, `umbral 0.25`, `contraste 1.5`.
-* Amortiguado lejos de la costa: amplitud × `exp(−|d|/L)`, para que el warp no mueva el relieve interior.
-* Por elemento: `roughness` y `coast` (tipo) en el bloque, mezclados con los pesos de 7.3.
+* The current macro's three-band warp, applied to the op's `position` (a `Shapes.Warp`): no new code.
+* Roughness field (Azgaar): `r = clamp((fbm(p/scale)·0.5 + 0.5 − threshold)/(1 − threshold), 0, 1)^contrast`
+  multiplies the warp amplitude. Starting values: `scale` 8 to 15 km, `threshold 0.25`, `contrast 1.5`.
+* Damped away from the coast: amplitude × `exp(−|d|/L)`, so the warp does not move the inland relief.
+* Per element: `roughness` and `coast` (type) in the block, blended with the weights of 7.3.
 
-### 7.11 Tamaño de bin y coste
+### 7.11 Bin size and cost
 
-* `bin = max(R_med, D/2)` acotado a [500 m, 20 km]; el elemento se inscribe en todos los bins a menos de
-  `R_i + k_i + D` de su centro.
-* Objetivo: ≤ 16 elementos por bin de media; se mide y se registra en los metadatos (`lands.bins.mean`,
-  `lands.bins.max`).
-* Coste estimado: una distancia de elemento son unas 20 a 60 operaciones; 16 por muestra es comparable a un
-  fBm de 4 octavas.
+* `bin = max(R_mean, D/2)` clamped to [500 m, 20 km]; the element is registered in every bin closer than
+  `R_i + k_i + D` to its centre.
+* Target: ≤ 16 elements per bin on average; it is measured and recorded in the metadata
+  (`lands.bins.mean`, `lands.bins.max`).
+* Estimated cost: an element distance is about 20 to 60 operations; 16 per sample is comparable to a
+  4-octave fBm.
 
 ---
 
-## 8. API propuesta
+## 8. Proposed API
 
-Borrador: los nombres se fijan al implementar y se documentan en `docs/lua_reference.md`. Código y claves en
-inglés.
+Draft: names are fixed while implementing and documented in `docs/lua_reference.md`. Code and keys in
+English.
 
-### 8.1 Llamada
+### 8.1 Call
 
 ```lua
 local land = Lands.Compose{
     seed  = 1,
-    frame = { size = 24000, edge_margin = 1500 },     -- o { world_cell = 16000, region = { x0, z0, x1, z1 } }
-    sea   = { margin = "compressed" },                 -- margen por defecto
-    profile = { "dome", height = 600, width = 4000 },  -- por defecto para los elementos sin perfil propio
+    frame = { size = 24000, edge_margin = 1500 },     -- or { world_cell = 16000, region = { x0, z0, x1, z1 } }
+    sea   = { margin = "compressed" },                 -- default margin
+    profile = { "dome", height = 600, width = 4000 },  -- default for elements without their own profile
     elements = { ... },                                -- 8.2
     edit = { ... }, fixed = { ... }, remove = { ... }, -- 8.4
-    land_fraction = 0.4,                               -- opcional, solo acotado (7.8)
-    classes = { continent = 5000, island = 1 },        -- km², opcional
+    land_fraction = 0.4,                               -- optional, bounded only (7.8)
+    classes = { continent = 5000, island = 1 },        -- km², optional
 }
 return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 ```
 
-### 8.2 Elementos
+### 8.2 Elements
 
 ```lua
 { kind = "radial", id = "main", at = { 0, 0 }, area = 120e6, bumps = 3, amplitude = 0.25,
@@ -754,15 +759,16 @@ return land:outputs{ "coast_type", "land_mask", "coast_sdf", "region_id" }
 { kind = "seamount", at = { 15000, 4000 }, radius = 3000, height = 1800 },
 ```
 
-Campos comunes: `id`, `water`, `role`, `area` (o las dimensiones de la forma), `rotation`, `scale`,
+Common fields: `id`, `water`, `role`, `area` (or the shape's dimensions), `rotation`, `scale`,
 `mirror = "x" | "z" | "both"`, `smooth` (k, m), `profile`, `margin`, `coast`, `roughness`, `name`.
 
-`area` y las dimensiones son excluyentes: con `area`, el tamaño se resuelve con la fórmula cerrada de 7.1.
+`area` and the dimensions are mutually exclusive: with `area`, the size is solved with the closed formula of
+7.1.
 
-### 8.3 Presets (sección 11)
+### 8.3 Presets (section 11)
 
-`Lands.Island`, `Lands.Archipelago`, `Lands.Continent` y los nuevos (`Lands.Preset{ name = "mediterranean",
-... }`) devuelven la tabla de `Compose` rellenada, que se puede modificar antes de construir:
+`Lands.Island`, `Lands.Archipelago`, `Lands.Continent` and the new ones (`Lands.Preset{ name =
+"mediterranean", ... }`) return the filled-in `Compose` table, which can be modified before building:
 
 ```lua
 local t = Lands.Preset{ name = "high_island", seed = 3, size = 24000 }
@@ -770,10 +776,10 @@ t.elements[1].area = 200e6
 return Lands.Compose(t):outputs{ ... }
 ```
 
-### 8.4 Ids, lista resuelta y edición
+### 8.4 Ids, resolved list and editing
 
-* Elemento declarado: su `id` o su índice. Generado: `"<scatter>/<ranura>"`.
-* `land:elements()` devuelve la lista resuelta; la exportación la escribe en los metadatos (sección 10):
+* Declared element: its `id` or its index. Generated: `"<scatter>/<slot>"`.
+* `land:elements()` returns the resolved list; the export writes it to the metadata (section 10):
 
   ```json
   { "id": "islets/3", "kind": "radial", "role": "isle", "area_m2": 1.42e6, "area_geometric_m2": 1.40e6,
@@ -781,397 +787,397 @@ return Lands.Compose(t):outputs{ ... }
     "component": 4 }
   ```
 
-* Edición:
+* Editing:
 
   ```lua
   edit   = { ["islets/3"] = { scale = 1.2 }, main = { profile = "rim" } },
-  fixed  = { "islets/1" },   -- no cambia aunque cambien seed, count o land_fraction
+  fixed  = { "islets/1" },   -- does not change even if seed, count or land_fraction change
   remove = { "islets/4" },
   ```
 
-### 8.5 Salidas
+### 8.5 Outputs
 
-Las actuales (`land_mask`, `land_height`, `bathymetry`, `surface_height`, `shore_mask`, `coast_type`,
-`region_id`, `coast_sdf`). `region_id` pasa a ser el id numérico del elemento dominante (tabla id → nombre en
-los metadatos). Salidas nuevas (`temperature`, `moisture`, `biome`) en la fase 7.
+The current ones (`land_mask`, `land_height`, `bathymetry`, `surface_height`, `shore_mask`, `coast_type`,
+`region_id`, `coast_sdf`). `region_id` becomes the numeric id of the dominant element (id → name table in
+the metadata). New outputs (`temperature`, `moisture`, `biome`) in phase 7.
 
-### 8.6 De instrucción a parámetros
+### 8.6 From instruction to parameters
 
-| Instrucción | Cambio |
+| Instruction | Change |
 | --- | --- |
-| "Un archipiélago de 6 islas de 2 a 4 km²" | `scatter{ count = 6, area = { 2e6, 4e6 } }` |
-| "Que estén agrupadas" | `pattern = "cluster"` |
-| "Agranda la isla 3 un poco" | `edit = { ["islets/3"] = { scale = 1.15 } }` (área ×1.32) |
-| "Que la isla 3 tenga 5 km²" | `edit = { ["islets/3"] = { area = 5e6 } }` |
-| "Acantilados más altos que el centro" | `profile = { "rim", ... }` |
-| "Una isla plana" | `profile = "flat"` o preset `low_island` |
-| "Un continente con un mar interior" | `superellipse` + `ellipse{ water = true, role = "sea" }` |
-| "Todo tierra, sin océano" | preset `all_land` |
-| "Todo tierra con lagos" | `all_land` + `scatter{ water = true, role = "lake" }` |
-| "Una península al sur" | `capsule{ from = costa sur, to = ..., width = ... }` |
-| "Une las islas 1 y 2 con un istmo" | `smooth` en ambas o `capsule` entre ellas |
-| "Separa las islas 1 y 4" | `edit` con `offset`, o más `spacing` |
-| "Un monte submarino al este" | `seamount{ at = ..., radius = ..., height = ... }` |
-| "Más tierra" | `land_fraction` mayor (acotado) o `count`/`area` mayores (infinito) |
+| "An archipelago of 6 islands of 2 to 4 km²" | `scatter{ count = 6, area = { 2e6, 4e6 } }` |
+| "Grouped together" | `pattern = "cluster"` |
+| "Make island 3 a bit bigger" | `edit = { ["islets/3"] = { scale = 1.15 } }` (area ×1.32) |
+| "Island 3 should be 5 km²" | `edit = { ["islets/3"] = { area = 5e6 } }` |
+| "Cliffs higher than the centre" | `profile = { "rim", ... }` |
+| "A flat island" | `profile = "flat"` or the `low_island` preset |
+| "A continent with an inland sea" | `superellipse` + `ellipse{ water = true, role = "sea" }` |
+| "All land, no ocean" | the `all_land` preset |
+| "All land with lakes" | `all_land` + `scatter{ water = true, role = "lake" }` |
+| "A peninsula to the south" | `capsule{ from = south coast, to = ..., width = ... }` |
+| "Join islands 1 and 2 with an isthmus" | `smooth` on both or a `capsule` between them |
+| "Separate islands 1 and 4" | `edit` with `offset`, or more `spacing` |
+| "A seamount to the east" | `seamount{ at = ..., radius = ..., height = ... }` |
+| "More land" | larger `land_fraction` (bounded) or larger `count`/`area` (infinite) |
 
 ---
 
-## 9. Plano infinito y mapas acotados
+## 9. Infinite plane and bounded maps
 
-Reglas comunes:
+Common rules:
 
-1. **Nada depende de la ventana pedida**: sin cuantiles ni normalizaciones sobre lo exportado.
-2. **Nivel del mar absoluto** (0 m).
-3. **Todo lo no local tiene radio acotado** (`D`, el anillo de celdas).
-4. **Generadores por celda del mundo**, como `Water.Network` con `generate.world_cell`.
+1. **Nothing depends on the requested window**: no quantiles or normalisations over what is exported.
+2. **Absolute sea level** (0 m).
+3. **Everything non-local has a bounded radius** (`D`, the ring of cells).
+4. **Generators per world cell**, like `Water.Network` with `generate.world_cell`.
 
-**Acotado** (`frame.size`, centrado en el origen o `frame.bounds`):
+**Bounded** (`frame.size`, centred on the origin, or `frame.bounds`):
 
-* `land_fraction` exacta por bisección (7.8).
-* Porcentajes del marco aceptados (`at = { "30%", "50%" }`) y resueltos a metros.
-* `edge_margin`: distancia mínima de la tierra al borde.
+* Exact `land_fraction` by bisection (7.8).
+* Frame percentages accepted (`at = { "30%", "50%" }`) and resolved to metres.
+* `edge_margin`: minimum distance from the land to the edge.
 
-**Infinito** (`frame.world_cell`):
+**Infinite** (`frame.world_cell`):
 
-* Los elementos generados se crean para las celdas que tocan `frame.region` más un anillo. La `region` es la
-  ventana de trabajo del script (por defecto ±64 km, más que lo que muestra el visor), no un límite del mundo:
-  dos regiones distintas que comparten celdas obtienen los mismos elementos, así que el mundo se puede exportar
-  por piezas.
-* La fracción de tierra es estadística (7.8).
-* Los elementos declarados existen en sus coordenadas absolutas.
-* Mejora futura, solo si la `region` se queda corta para el visor: generar los elementos de `scatter`
-  directamente en el shader por hash de celda (los mismos números que la CPU), sin lista. No es necesario para
-  las fases 1 a 3.
-
----
-
-## 10. Herramientas para que Claude trabaje afinado
-
-Lo mínimo necesario para que una instrucción se aplique y se compruebe sin mirar imágenes a ciegas:
-
-1. **Lista de elementos en los metadatos.** Binding pequeño `engine.report(key, table)` que añade una
-   sección `"script_report"` al `metadata.json` de la exportación. `Lands.Compose` escribe ahí la lista
-   resuelta (8.4), el número de bins y los avisos (elementos omitidos, fracción no alcanzable).
-2. **`terrain_metrics --by-id`**: amplía la herramienta existente para leer la salida `region_id` y dar, por
-   id, área, centroide, caja, altura máxima y si toca el borde. Reutiliza `metrics::Measure` y el etiquetado.
-3. **`tools/dev.sh lands <script> [--param k=v]...`**: exporta, ejecuta `terrain_metrics --by-id`, compara la
-   lista del script con lo medido (área geométrica frente a medida, ids presentes) y escribe un resumen corto;
-   con `--hillshade`, la imagen de revisión. Reutiliza el subcomando `review`.
-4. **`tools/dev.sh lands-check <script> --expect count=6,area=2e6..4e6`**: comprobación de instrucción (lo
-   mismo que hace el test, desde la terminal) para que Claude valide su cambio antes de dar algo por hecho.
-5. **Skill `terrain-author`**: sección "Lands" con el flujo (preset más cercano → `elements()` → `edit` →
-   `lands-check` → detalle) y la tabla 8.6.
-6. **Errores accionables**: cada clave inválida o combinación imposible falla con qué se esperaba, como el
-   resto del prelude (`check_args` guiado por tabla en `Lands`, extensible al resto en la fase 8).
+* Generated elements are created for the cells that touch `frame.region` plus a ring. The `region` is the
+  script's working window (±64 km by default, more than the viewer shows), not a limit of the world: two
+  different regions that share cells get the same elements, so the world can be exported in pieces.
+* The land fraction is statistical (7.8).
+* Declared elements exist at their absolute coordinates.
+* Future improvement, only if the `region` falls short for the viewer: generate the `scatter` elements
+  directly in the shader by cell hash (the same numbers as the CPU), with no list. Not needed for phases 1
+  to 3.
 
 ---
 
-## 11. Fases prioritarias (1 a 3)
+## 10. Tools for Claude to work precisely
 
-Cada paso es un commit. Cada fase termina con su documentación, imágenes, `status.md` y `todo.md`.
+The minimum needed for an instruction to be applied and checked without looking at images blindly:
 
-### Fase 1: una isla, de punta a punta
+1. **Element list in the metadata.** A small binding `engine.report(key, table)` that adds a
+   `"script_report"` section to the export's `metadata.json`. `Lands.Compose` writes there the resolved list
+   (8.4), the number of bins and the warnings (skipped elements, unreachable fraction).
+2. **`terrain_metrics --by-id`**: extends the existing tool to read the `region_id` output and give, per id,
+   area, centroid, box, maximum height and whether it touches the edge. Reuses `metrics::Measure` and the
+   labelling.
+3. **`tools/dev.sh lands <script> [--param k=v]...`**: exports, runs `terrain_metrics --by-id`, compares the
+   script's list with what was measured (geometric against measured area, ids present) and writes a short
+   summary; with `--hillshade`, the review image. Reuses the `review` subcommand.
+4. **`tools/dev.sh lands-check <script> --expect count=6,area=2e6..4e6`**: instruction check (the same as
+   the test does, from the terminal) so Claude validates its change before calling something done.
+5. **`terrain-author` skill**: a "Lands" section with the flow (closest preset → `elements()` → `edit` →
+   `lands-check` → detail) and table 8.6.
+6. **Actionable errors**: every invalid key or impossible combination fails with what was expected, like
+   the rest of the prelude (table-driven `check_args` in `Lands`, extensible to the rest in phase 8).
 
-**Objetivo.** Una tierra de uno o pocos elementos con perfil libre, margen básico, ids, edición, en mapa
-acotado y en plano infinito, sobre el op `Lands`.
+---
 
-| Paso | Contenido | Reutiliza |
+## 11. Priority phases (1 to 3)
+
+Each step is a commit. Each phase ends with its documentation, images, `status.md` and `todo.md`.
+
+### Phase 1: one island, end to end
+
+**Goal.** Land of one or a few elements with a free profile, basic margin, ids, editing, on a bounded map
+and on the infinite plane, on the `Lands` op.
+
+| Step | Content | Reuses |
 | --- | --- | --- |
-| 1.1 | Unificar `hasher`, `make_noise`, `smooth` en un fichero del prelude cargado antes de `30_ranges` | las tres copias actuales |
-| 1.2 | `lib/shape.lib.glsl` con las distancias de `shape.comp.glsl`; `Shape` lo incluye sin cambiar resultados (goldens de `shapes_r2` iguales) | `shape.comp.glsl` |
-| 1.3 | Op `Lands` modo `coast` con `circle`, `ellipse`, `box`, `polygon`, `superellipse`, `radial`, `capsule`, `ring`, `sector`, `frame`; CSG ordenado con smin/smax; bins; referencia de CPU en `sampler.cpp`; binding `Lands.Block` | patrón `Water`, helper `block`, `SmoothMinimum` |
-| 1.4 | `test_geometry`: cada primitiva frente a su distancia cerrada en puntos elegidos; GPU frente a CPU; área de cada primitiva frente a su fórmula | `test_geometry`, `Terrain.Sample` |
-| 1.5 | `Lands.Compose` mínimo: `frame`, `elements` declarados, `area` → tamaño, salidas actuales a partir del modo `coast` | funciones de salida de `50_lands.lua` |
-| 1.6 | Modo `relief`: perfiles de 7.4, pesos de 7.3, hipsometría | `Curves.Profile` (fórmulas) |
-| 1.7 | Modo `seabed`: margen de 7.7 con presets `compressed`/`geologic`, `passive`/`active`, laguna, `seamount`/`guyot` | `MARGINS` |
-| 1.8 | Ids, lista resuelta, `edit`/`fixed`/`remove`, `engine.report`, `terrain_metrics --by-id`, `dev.sh lands` y `lands-check` | `terrain_metrics`, `dev.sh` |
-| 1.9 | Plano infinito: `frame.world_cell` con elementos declarados; exportaciones solapadas idénticas | regla de `world_cell` |
-| 1.10 | `Lands.Island` sobre `Compose` con presets `volcano`, `high_island`, `low_island`, `atoll`, `rim_island`, `mesa_island`; claves retiradas fallan diciendo qué usar | coast type y warp actuales |
-| 1.11 | Ejemplos de la fase (13.2) con sus goldens; documentación | — |
+| 1.1 | Unify `hasher`, `make_noise`, `smooth` into one prelude file loaded before `30_ranges` | the three current copies |
+| 1.2 | `lib/shape.lib.glsl` with the distances from `shape.comp.glsl`; `Shape` includes it without changing results (`shapes_r2` goldens unchanged) | `shape.comp.glsl` |
+| 1.3 | `Lands` op `coast` mode with `circle`, `ellipse`, `box`, `polygon`, `superellipse`, `radial`, `capsule`, `ring`, `sector`, `frame`; ordered CSG with smin/smax; bins; CPU reference in `sampler.cpp`; `Lands.Block` binding | `Water` pattern, `block` helper, `SmoothMinimum` |
+| 1.4 | `test_geometry`: each primitive against its closed distance at chosen points; GPU against CPU; area of each primitive against its formula | `test_geometry`, `Terrain.Sample` |
+| 1.5 | Minimal `Lands.Compose`: `frame`, declared `elements`, `area` → size, current outputs from the `coast` mode | output functions of `50_lands.lua` |
+| 1.6 | `relief` mode: profiles of 7.4, weights of 7.3, hypsometry | `Curves.Profile` (formulas) |
+| 1.7 | `seabed` mode: margin of 7.7 with `compressed`/`geologic`, `passive`/`active` presets, lagoon, `seamount`/`guyot` | `MARGINS` |
+| 1.8 | Ids, resolved list, `edit`/`fixed`/`remove`, `engine.report`, `terrain_metrics --by-id`, `dev.sh lands` and `lands-check` | `terrain_metrics`, `dev.sh` |
+| 1.9 | Infinite plane: `frame.world_cell` with declared elements; identical overlapping exports | `world_cell` rule |
+| 1.10 | `Lands.Island` on `Compose` with presets `volcano`, `high_island`, `low_island`, `atoll`, `rim_island`, `mesa_island`; removed keys fail saying what to use | current coast type and warp |
+| 1.11 | The phase's examples (13.2) with their goldens; documentation | — |
 
-Criterios de aceptación:
+Acceptance criteria:
 
-* Distancia de cada primitiva exacta (o, en las de 1.er orden, error < 1 % del tamaño) en la costa.
-* Área de cada primitiva (sin detalle) dentro del 1 % de su fórmula cerrada.
-* `edit{ scale = 1.2 }` multiplica el área por 1.44 ± 2 %.
-* `rim`: la altura máxima a menos de `at + 2σ` de la costa y por encima del interior; `dome`: en el interior.
-* `all_land` y `ocean_only` exportan sin error con `land_mask` 1 y 0 en todo el mapa.
-* Infinito: dos exportaciones solapadas idénticas byte a byte en la zona común; distintos tamaños de sección
-  idénticos.
-* Script de la isla por defecto en menos de 0.5 s en Release (hoy 6 s).
-* Suite completa verde en Debug y Release.
+* Distance of each primitive exact on the coast (or, for the 1st-order ones, error < 1 % of the size).
+* Area of each primitive (without detail) within 1 % of its closed formula.
+* `edit{ scale = 1.2 }` multiplies the area by 1.44 ± 2 %.
+* `rim`: maximum height closer than `at + 2σ` to the coast and above the interior; `dome`: in the interior.
+* `all_land` and `ocean_only` export without error with `land_mask` 1 and 0 across the whole map.
+* Infinite: two overlapping exports identical byte for byte in the common area; different section sizes
+  identical.
+* Default island script in under 0.5 s in Release (6 s today).
+* Full suite green in Debug and Release.
 
-### Fase 2: archipiélagos
+### Phase 2: archipelagos
 
-| Paso | Contenido | Reutiliza |
+| Step | Content | Reuses |
 | --- | --- | --- |
-| 2.1 | `scatter` acotado: tamaños log-uniformes, dart throwing con rejilla, `spacing`, `edge_margin`, `region`; ids por ranura | layout `scattered` |
-| 2.2 | `scatter` infinito: Poisson por celda con prioridad por hash | `world_cell` |
-| 2.3 | Patrones `cluster`, `line`, `arc`, `ring`, `grid`, `centers` | `hotspot`, `arc`, `atoll` actuales |
-| 2.4 | `land_fraction` por bisección (acotado) y por calibración (infinito) | `Terrain.Sample` |
-| 2.5 | Clasificación de 7.9 | etiquetado actual |
-| 2.6 | `Lands.Archipelago` como preset: `scattered`, `cluster`, `hotspot`, `arc`, `atoll`, `shattered`, `chain` (islas lado a lado, `chain_width`) | — |
-| 2.7 | Ejemplos de la fase y goldens (`lands_archipelago_*` regenerados) | `tests/datasets` |
+| 2.1 | Bounded `scatter`: log-uniform sizes, dart throwing with a grid, `spacing`, `edge_margin`, `region`; ids per slot | `scattered` layout |
+| 2.2 | Infinite `scatter`: per-cell Poisson with hash priority | `world_cell` |
+| 2.3 | Patterns `cluster`, `line`, `arc`, `ring`, `grid`, `centers` | current `hotspot`, `arc`, `atoll` |
+| 2.4 | `land_fraction` by bisection (bounded) and by calibration (infinite) | `Terrain.Sample` |
+| 2.5 | Classification of 7.9 | current labelling |
+| 2.6 | `Lands.Archipelago` as a preset: `scattered`, `cluster`, `hotspot`, `arc`, `atoll`, `shattered`, `chain` (islands side by side, `chain_width`) | — |
+| 2.7 | The phase's examples and goldens (`lands_archipelago_*` regenerated) | `tests/datasets` |
 
-Criterios de aceptación:
+Acceptance criteria:
 
-* "N islas de A₁ a A₂ km²": N islas en la lista, todas con área geométrica en el rango, y `--by-id` mide lo
-  mismo con un margen de 3 %.
-* Separación mínima respetada en todos los pares (canal mínimo de `metrics::Measure` ≥ `spacing` − 1 muestra).
-* `count` de N a N + 1: las N primeras con el mismo centroide y área.
-* Infinito: la misma isla, igual desde dos ventanas; fracción de tierra medida sobre 200 × 200 km dentro del
-  ±10 % del objetivo.
-* `chain` y `arc` con `chain_width` alcanzan la fracción pedida (hoy se quedan en 6 a 12 %).
+* "N islands of A₁ to A₂ km²": N islands in the list, all with geometric area in the range, and `--by-id`
+  measures the same within 3 %.
+* Minimum spacing respected for every pair (minimum channel of `metrics::Measure` ≥ `spacing` − 1 sample).
+* `count` from N to N + 1: the first N with the same centroid and area.
+* Infinite: the same island, equal from two windows; land fraction measured over 200 × 200 km within
+  ±10 % of the target.
+* `chain` and `arc` with `chain_width` reach the requested fraction (today they stop at 6 to 12 %).
 
-### Fase 3: continentes y otras tierras
+### Phase 3: continents and other lands
 
-| Paso | Contenido | Reutiliza |
+| Step | Content | Reuses |
 | --- | --- | --- |
-| 3.1 | Relieve generado en el modo `relief`: `ridge` con `spurs` y `saddles`, `massif`, `volcano`, `depression`, `escarpment`, `valley` | `Landforms`, `sample_spline` |
-| 3.2 | Presets `continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`, `peninsula`, `isthmus`, `all_land`, `lakeland`, `fractious`, `taklamakan`, `ocean_only` como composiciones (tabla abajo) | — |
-| 3.3 | `edge_margin` y porcentajes del marco | — |
-| 3.4 | `Lands.Continent` como preset; golden `lands_continent` regenerado | — |
-| 3.5 | Medir `docs/references/{islands,archipelagos,continents}` con `terrain_metrics` y fijar bandas de aceptación por tipo | `terrain_metrics` |
-| 3.6 | Ejemplos de la fase, goldens, documentación | — |
+| 3.1 | Generated relief in the `relief` mode: `ridge` with `spurs` and `saddles`, `massif`, `volcano`, `depression`, `escarpment`, `valley` | `Landforms`, `sample_spline` |
+| 3.2 | Presets `continent`, `pangea`, `old_world`, `mediterranean`, `inland_sea`, `peninsula`, `isthmus`, `all_land`, `lakeland`, `fractious`, `taklamakan`, `ocean_only` as compositions (table below) | — |
+| 3.3 | `edge_margin` and frame percentages | — |
+| 3.4 | `Lands.Continent` as a preset; `lands_continent` golden regenerated | — |
+| 3.5 | Measure `docs/references/{islands,archipelagos,continents}` with `terrain_metrics` and set acceptance bands per type | `terrain_metrics` |
+| 3.6 | The phase's examples, goldens, documentation | — |
 
-Composición de cada preset (todas con primitivas; los números son de partida y editables):
+Composition of each preset (all with primitives; the numbers are starting points and editable):
 
-| Preset | Composición |
+| Preset | Composition |
 | --- | --- |
-| `continent` | `superellipse` (n 2.5 a 4) + 2 a 4 lóbulos `radial` unidos con `smooth`; 1 a 3 `ridge` con `spurs`; 0 a 2 golfos `sector`; margen pasivo y uno activo con fosa |
-| `pangea` | 4 bloques `superellipse` en las esquinas + banda central, unidos; `trench` de agua parciales (mares interiores) |
-| `old_world` | 3 bloques grandes; 2 a 3 `band` de agua (estrechos); `ridge` largo |
-| `mediterranean` | `frame` de tierra + `ellipse` de agua alargada (`role = "sea"`) + islas por `scatter` dentro del mar |
-| `inland_sea` | bloque continental + `superellipse` de agua interior |
-| `peninsula` | bloque en un borde + `capsule`/`band` hacia el mar + islas en la punta |
-| `isthmus` | dos bloques + `capsule` estrecha entre ellos |
-| `all_land` | `frame` de tierra que cubre la ventana (o `fill` en infinito); relieve por elementos |
+| `continent` | `superellipse` (n 2.5 to 4) + 2 to 4 `radial` lobes joined with `smooth`; 1 to 3 `ridge` with `spurs`; 0 to 2 `sector` gulfs; passive margin and one active one with a trench |
+| `pangea` | 4 `superellipse` blocks in the corners + central band, joined; partial water `trench` (inland seas) |
+| `old_world` | 3 large blocks; 2 to 3 water `band` (straits); long `ridge` |
+| `mediterranean` | land `frame` + elongated water `ellipse` (`role = "sea"`) + islands by `scatter` inside the sea |
+| `inland_sea` | continental block + inland water `superellipse` |
+| `peninsula` | block on one edge + `capsule`/`band` towards the sea + islands at the tip |
+| `isthmus` | two blocks + narrow `capsule` between them |
+| `all_land` | land `frame` covering the window (or `fill` when infinite); relief by elements |
 | `lakeland` | `all_land` + `scatter{ water = true, role = "lake" }` |
-| `fractious` | 12 a 15 `radial` medianos por `scatter` con `smooth` grande + `band` de agua que los cortan |
-| `taklamakan` | `all_land` con `ridge` en los cuatro bordes y `depression` central (cuenca cerrada) |
-| `ocean_only` | sin tierra; `seamount`, `guyot`, margen ausente; llanura abisal |
+| `fractious` | 12 to 15 medium `radial` by `scatter` with large `smooth` + water `band` cutting them |
+| `taklamakan` | `all_land` with `ridge` on the four edges and a central `depression` (closed basin) |
+| `ocean_only` | no land; `seamount`, `guyot`, no margin; abyssal plain |
 
-Criterios de aceptación:
+Acceptance criteria:
 
-* `mediterranean`: un único cuerpo de agua interior clasificado `sea`, sin tocar el marco.
-* `all_land`: `land_mask = 1` en todo el mapa; `lakeland`: los lagos con el área pedida.
-* Una península de anchura W mide W ± 5 % en su eje.
-* Cordillera: altura máxima de la cresta ± 2 % de la pedida; estribaciones a `spacing` ± 10 %.
-* Métricas de forma dentro de las bandas medidas en las referencias del tipo.
+* `mediterranean`: a single inland body of water classified `sea`, not touching the frame.
+* `all_land`: `land_mask = 1` across the whole map; `lakeland`: the lakes with the requested area.
+* A peninsula of width W measures W ± 5 % on its axis.
+* Range: maximum crest height ± 2 % of the requested one; spurs at `spacing` ± 10 %.
+* Shape metrics within the bands measured on the references of the type.
 
 ---
 
-## 12. Fases posteriores (4 a 8)
+## 12. Later phases (4 to 8)
 
-### Fase 4: detalle sobre las formas
+### Phase 4: detail on the shapes
 
-1. Warp de costa de tres bandas con campo de rugosidad (7.10), por elemento.
-2. Ruido de relieve con amplitud en metros ligada a la distancia al interior (heman: `s·n` acotado) y
-   amortiguada en las cumbres (`(1 − h/H)^4`, heman).
-3. Elemento `field`: umbral de ruido con `inflate`, `round` y umbral creciente
-   (`n − (1 − inflate)·d² < 0`, mapgen2; `c > ratio·(1 + d²)`, voronoi-map), para costas totalmente
-   procedurales cuando se pidan.
-4. `Erosion.Gullies` y `Erosion.StreamPower` (vía `Terrain.Sample` → `StreamPower` → `Terrain.Grid`, como
-   ahora, con la regla de `world_cell` para el infinito); `Ranges.Carve` para cordilleras.
-5. Distancia exacta (Felzenszwalb + CPCF, acotada a `D`) en C++ solo si la erosión desplaza la costa y hay
-   que volver a medirla.
-6. Fetch: desde cada punto de costa, distancia de agua abierta a barlovento, por marcha de rayos sobre el modo
-   `coast` en la rejilla de análisis.
-7. Validación: desplazamiento máximo de la costa y amplitud de altura dentro de lo declarado.
+1. Three-band coast warp with a roughness field (7.10), per element.
+2. Relief noise with amplitude in metres tied to the inward distance (heman: bounded `s·n`) and damped on
+   the peaks (`(1 − h/H)^4`, heman).
+3. `field` element: noise threshold with `inflate`, `round` and a growing threshold
+   (`n − (1 − inflate)·d² < 0`, mapgen2; `c > ratio·(1 + d²)`, voronoi-map), for fully procedural coasts
+   when asked for.
+4. `Erosion.Gullies` and `Erosion.StreamPower` (via `Terrain.Sample` → `StreamPower` → `Terrain.Grid`, as
+   now, with the `world_cell` rule for the infinite case); `Ranges.Carve` for ranges.
+5. Exact distance (Felzenszwalb + CPCF, bounded to `D`) in C++ only if erosion moves the coast and it has
+   to be measured again.
+6. Fetch: from each coast point, the open-water distance upwind, by ray marching over the `coast` mode on
+   the analysis grid.
+7. Validation: maximum coast displacement and height amplitude within what was declared.
 
-### Fase 5: hidrología
+### Phase 5: hydrology
 
-1. `Water.Network` y `Water.Drain` sobre la superficie compuesta (ya analizan cualquier terreno con el
-   muestreador): lagos y ríos como agua. Cierra "los macros no drenan".
-2. Lagos cerrados, salados, secos y helados por balance de evaporación y aporte (Azgaar).
-3. Mares interiores (`role = "sea"`) como masas de agua con su nivel, no como lagos.
-4. Ancho de río `∝ caudal^0.7`.
-5. Drenaje ponderado por precipitación cuando exista la fase 7.
+1. `Water.Network` and `Water.Drain` on the composed surface (they already analyse any terrain with the
+   sampler): lakes and rivers as water. Closes "the macros do not drain".
+2. Closed, salt, dry and frozen lakes by evaporation and inflow balance (Azgaar).
+3. Inland seas (`role = "sea"`) as bodies of water with their own level, not as lakes.
+4. River width `∝ flow^0.7`.
+5. Drainage weighted by precipitation once phase 7 exists.
 
-### Fase 6: océano completo
+### Phase 6: full ocean
 
-1. Margen por tramo de costa (no solo por elemento).
-2. Fondo con primitivas como elementos con id:
+1. Margin per coast stretch (not only per element).
+2. Seabed with primitives as elements with an id:
 
-   | Forma | Primitiva |
+   | Shape | Primitive |
    | --- | --- |
-   | Fosa | `trench` sobre `arc` |
-   | Dorsal oceánica | `ridge` largo con hendidura central (`trench` estrecho) y fallas transformantes como desplazamientos por tramos |
-   | Cuenca | `depression` |
-   | Cañón submarino | `band` desde el borde de la plataforma, profundidad creciente |
-   | Arrecife | `ring` somero |
+   | Trench | `trench` on an `arc` |
+   | Mid-ocean ridge | long `ridge` with a central rift (narrow `trench`) and transform faults as offsets per stretch |
+   | Basin | `depression` |
+   | Submarine canyon | `band` from the shelf edge, growing depth |
+   | Reef | shallow `ring` |
 
-3. Montes submarinos y guyots por `scatter`.
-4. Detalle: colinas abisales con amplitud ∝ profundidad (`emboss` de heman).
-5. Futuro: sedimento y abanicos, erosión submarina, atolón por subsidencia.
+3. Seamounts and guyots by `scatter`.
+4. Detail: abyssal hills with amplitude ∝ depth (heman's `emboss`).
+5. Future: sediment and fans, submarine erosion, atoll by subsidence.
 
-### Fase 7: clima y biomas
+### Phase 7: climate and biomes
 
-1. Subir `kMaxOutputs` a 16 (o `outputs = { ... }`).
-2. Temperatura por latitud (tramos de Azgaar) y −6.5 °C/km; latitud por coordenada del mundo.
-3. Precipitación: marcha del viento con recarga sobre el agua, lluvia orográfica y sombra de lluvia (Azgaar),
-   con radio acotado.
-4. Humedad `1 − (d/max)^0.5` desde el agua dulce, `max` fijo en metros.
-5. Biomas por tabla de Whittaker (mapgen2), como salida opcional.
+1. Raise `kMaxOutputs` to 16 (or `outputs = { ... }`).
+2. Temperature by latitude (Azgaar's segments) and −6.5 °C/km; latitude by world coordinate.
+3. Precipitation: wind march with recharge over water, orographic rain and rain shadow (Azgaar), with a
+   bounded radius.
+4. Moisture `1 − (d/max)^0.5` from fresh water, `max` fixed in metres.
+5. Biomes by Whittaker table (mapgen2), as an optional output.
 
-### Fase 8: infraestructura
+### Phase 8: infrastructure
 
-* `engine.memo(key, fn)` o `Terrain.Bake` si el visor se resiente.
-* `check_args` guiado por tabla en todo el prelude.
-* Mensaje de fallo de goldens con caja y diferencia máxima.
-* Generación en shader de los elementos de `scatter` (9) si la `region` se queda corta.
-
----
-
-## 13. Catálogo de ejemplos
-
-### 13.1 Reglas comunes
-
-* Ubicación: `assets/scripts/lands/` (sustituyen a los actuales; los nombres actuales se mantienen como
-  presets).
-* Cabecera de cada script: qué muestra, parámetros (`params.*`), comando del visor y de exportación, con la
-  resolución recomendada para ese tamaño.
-* Todos aceptan `--param seed=N` y los parámetros propios del tipo (`count`, `area`, `size`...).
-* El visor muestra unos 28 km: los ejemplos de hasta 24 km se ven enteros; los mayores se revisan con
-  `tools/dev.sh review` (hillshade) y en el visor por zonas con `--target`.
-* Cada ejemplo tiene, como mínimo, un golden en `tests/datasets/lands_<nombre>/` a 256² (o 512² si la forma lo
-  necesita), con `tolerance 0` y medición de rendimiento, como los actuales.
-* Los ejemplos infinitos tienen además un test de solape y uno de estabilidad de ids.
-
-Resoluciones de referencia por tamaño (visor con `--resolution`; golden a 256²):
-
-| Tamaño | Visor | Golden (256²) |
-| --- | --- | --- |
-| 4 km (islote, atolón pequeño) | 2 m | 16 m |
-| 12 km (isla pequeña) | 4 m | 48 m |
-| 24 km (isla, archipiélago pequeño) | 8 m | 96 m |
-| 48 km (archipiélago) | 16 m | 192 m |
-| 96 km (región continental) | 32 m (por zonas) | 384 m |
-| 192 km (continente) | 64 m (por zonas) | 768 m |
-
-### 13.2 Fase 1: islas (acotado)
-
-| Script | Qué muestra | Tamaño |
-| --- | --- | --- |
-| `island_dome.lua` | isla radial con perfil `dome` | 24 km |
-| `island_rim.lua` | acantilados más altos que el interior (`rim`) | 12 km |
-| `island_plateau.lua` | isla meseta (`plateau`) | 12 km |
-| `island_caldera.lua` | volcán con caldera y laguna interior | 12 km |
-| `island_tilt.lua` | cuesta: alta en un lado, playa en el otro | 24 km |
-| `island_low.lua` | isla baja (`flat`), estilo cayo | 4 km |
-| `island_volcano.lua` | cono con cráter, margen activo con fosa | 24 km |
-| `island_bay.lua` | isla con bahías (`sector` de agua) y península (`capsule`) | 24 km |
-| `atoll.lua` | anillo de islotes y laguna | 4 km |
-| `island_edit.lua` | la misma isla con `edit` (escala, perfil) y `fixed`, para ver la edición | 24 km |
-| `all_land.lua` | todo tierra con relieve por elementos | 24 km |
-| `ocean_only.lua` | todo mar: margen ausente, montes submarinos y guyots | 48 km |
-
-### 13.3 Fase 1: plano infinito
-
-| Script | Qué muestra | Celda del mundo |
-| --- | --- | --- |
-| `infinite_islands.lua` | islas declaradas en coordenadas lejanas (±100 km) para probar el anclaje al mundo | 16 km |
-
-### 13.4 Fase 2: archipiélagos
-
-| Script | Qué muestra | Tamaño / celda |
-| --- | --- | --- |
-| `archipelago_scattered.lua` | `count` islas de un rango de áreas | 48 km |
-| `archipelago_cluster.lua` | racimos (Neyman–Scott) | 48 km |
-| `archipelago_hotspot.lua` | cadena que decrece | 48 km |
-| `archipelago_arc.lua` | arco insular con fosa | 96 km |
-| `archipelago_atoll.lua` | atolones dispersos | 24 km |
-| `archipelago_shattered.lua` | tierra rota por canales | 48 km |
-| `archipelago_chain.lua` | cadena ancha que alcanza la fracción pedida | 48 km |
-| `archipelago_centers.lua` | islas en posiciones dadas | 24 km |
-| `infinite_archipelago.lua` | archipiélago infinito por celdas | 16 km |
-| `infinite_cluster.lua` | racimos infinitos | 24 km |
-
-### 13.5 Fase 3: continentes y otras tierras
-
-| Script | Qué muestra | Tamaño / celda |
-| --- | --- | --- |
-| `continent.lua` | bloque con lóbulos, cordilleras con estribaciones, golfos, margen mixto | 192 km |
-| `pangea.lua` | supercontinente con mares interiores | 192 km |
-| `old_world.lua` | bloques separados por estrechos | 192 km |
-| `mediterranean.lua` | mar interior con islas | 96 km |
-| `inland_sea.lua` | continente con mar interior cerrado | 96 km |
-| `peninsula.lua` | península con islas en la punta | 48 km |
-| `isthmus.lua` | dos masas unidas por un istmo | 48 km |
-| `lakeland.lua` | todo tierra con lagos | 24 km |
-| `fractious.lua` | tierras fragmentadas | 96 km |
-| `taklamakan.lua` | cuenca cerrada rodeada de montañas | 96 km |
-| `infinite_continents.lua` | continentes infinitos (elementos grandes por celda) | 128 km |
-| `infinite_lakeland.lua` | tierra infinita con lagos | 16 km |
-
-### 13.6 Galería
-
-`assets/scripts/gallery.lua` genera una lámina por tipo para `docs/images/lands/` y `lua_reference.md`.
+* `engine.memo(key, fn)` or `Terrain.Bake` if the viewer suffers.
+* Table-driven `check_args` across the whole prelude.
+* Golden failure message with box and maximum difference.
+* Shader generation of the `scatter` elements (9) if the `region` falls short.
 
 ---
 
-## 14. Validación y tests
+## 13. Example catalogue
 
-| Test | Qué comprueba | Dónde |
+### 13.1 Common rules
+
+* Location: `assets/scripts/lands/` (they replace the current ones; the current names stay as presets).
+* Header of each script: what it shows, parameters (`params.*`), viewer and export command, with the
+  recommended resolution for that size.
+* All accept `--param seed=N` and the type's own parameters (`count`, `area`, `size`...).
+* The viewer shows about 28 km: examples up to 24 km are seen whole; larger ones are reviewed with
+  `tools/dev.sh review` (hillshade) and in the viewer by area with `--target`.
+* Each example has, at least, a golden in `tests/datasets/lands_<name>/` at 256² (or 512² if the shape
+  needs it), with `tolerance 0` and performance measurement, like the current ones.
+* Infinite examples also have an overlap test and an id stability test.
+
+Reference resolutions by size (viewer with `--resolution`; golden at 256²):
+
+| Size | Viewer | Golden (256²) |
 | --- | --- | --- |
-| Distancias de primitivas | valores cerrados en puntos elegidos; GPU = CPU | `test_geometry` |
-| Áreas de primitivas | fórmula cerrada frente a `Terrain.Sample` | `test_geometry` |
-| CSG | orden, smin con `k` (error ≤ `k/4`), resta | `test_geometry` |
-| Perfiles | posición y valor del máximo por preset; continuidad entre elementos | `test_lands` |
-| Margen | profundidad de plataforma, talud, abisal frente a lo pedido | `test_lands` |
-| Instrucciones | un caso por fila de 8.6, con la lista resuelta y `metrics::Measure`/`--by-id` | `test_lands` |
-| Estabilidad de ids | `count` N → N + 1, `seed` de otro generador, `fixed` | `test_lands` |
-| Plano infinito | exportaciones solapadas idénticas; ids iguales desde dos ventanas; fracción estadística | `test_lands` (exportando como `test_cli`) |
-| Secciones | tamaños de sección distintos idénticos | `test_seams` / `test_cli` |
-| Goldens | cada ejemplo del catálogo, `tolerance 0`, rendimiento | `test_datasets` |
-| Visor | un ejemplo acotado y uno infinito capturados con `--screenshot` contienen tierra y cambian con la cámara | `test_viewer` |
-| Errores | claves inválidas, combinaciones imposibles, `world_cell` demasiado pequeña: mensaje y línea del script | `test_lua_errors` |
-| Referencias | bandas por tipo medidas en `docs/references/` | `test_lands` |
-| Tiempo | tiempo de script por golden registrado; ninguna fase lo empeora sin justificarlo | `test_datasets` |
+| 4 km (islet, small atoll) | 2 m | 16 m |
+| 12 km (small island) | 4 m | 48 m |
+| 24 km (island, small archipelago) | 8 m | 96 m |
+| 48 km (archipelago) | 16 m | 192 m |
+| 96 km (continental region) | 32 m (by area) | 384 m |
+| 192 km (continent) | 64 m (by area) | 768 m |
 
-Todas las suites en Debug y en Release, una cada vez, antes de cada commit que toque el motor.
+### 13.2 Phase 1: islands (bounded)
 
----
-
-## 15. Riesgos y decisiones abiertas
-
-| Tema | Riesgo o decisión | Propuesta |
+| Script | What it shows | Size |
 | --- | --- | --- |
-| Op nuevo en C++/GLSL | cambio de capa (la composición sale del Lua puro) | justificado por el límite de nodos y el coste; mismo patrón que `Water`. Confirmar antes del paso 1.3 |
-| `engine.report` | binding nuevo en el motor | pequeño; confirmar antes del paso 1.8 |
-| Compatibilidad de `Lands.*` | goldens y scripts actuales cambian | regenerar goldens; claves retiradas fallan con la alternativa |
-| Distancias de 1.er orden | error lejos de la costa en `radial`/`superellipse` | exactas en la costa; el perfil absorbe el resto; tests con tolerancia declarada |
-| `smooth union` | no es una distancia exacta en la mezcla | error ≤ `k/4`; aceptable para forma; medir con `Terrain.Sample` |
-| Bins con márgenes `geologic` | `D` de 100 km hace que todos los elementos caigan en todos los bins | medir; si pasa de 16 por bin, un bin grueso aparte solo para el margen |
-| Fracción de tierra en infinito | solo estadística | documentarlo y medirla sobre ventanas grandes |
-| `region` en infinito | la lista de elementos cubre la ventana de trabajo | ±64 km por defecto; generación en shader en la fase 8 si hace falta |
-| `kMaxOutputs = 8` | Lands usa 7 | subir a 16 en la fase 7 |
-| Tiempo de la suite | más goldens | goldens a 256² y op pointwise: deberían costar menos que los actuales (6 a 27 s de script cada uno) |
+| `island_dome.lua` | radial island with a `dome` profile | 24 km |
+| `island_rim.lua` | cliffs higher than the interior (`rim`) | 12 km |
+| `island_plateau.lua` | plateau island (`plateau`) | 12 km |
+| `island_caldera.lua` | volcano with a caldera and an inner lagoon | 12 km |
+| `island_tilt.lua` | cuesta: high on one side, beach on the other | 24 km |
+| `island_low.lua` | low island (`flat`), cay style | 4 km |
+| `island_volcano.lua` | cone with a crater, active margin with a trench | 24 km |
+| `island_bay.lua` | island with bays (water `sector`) and a peninsula (`capsule`) | 24 km |
+| `atoll.lua` | ring of islets and lagoon | 4 km |
+| `island_edit.lua` | the same island with `edit` (scale, profile) and `fixed`, to see editing | 24 km |
+| `all_land.lua` | all land with relief by elements | 24 km |
+| `ocean_only.lua` | all sea: no margin, seamounts and guyots | 48 km |
+
+### 13.3 Phase 1: infinite plane
+
+| Script | What it shows | World cell |
+| --- | --- | --- |
+| `infinite_islands.lua` | islands declared at far coordinates (±100 km) to test anchoring to the world | 16 km |
+
+### 13.4 Phase 2: archipelagos
+
+| Script | What it shows | Size / cell |
+| --- | --- | --- |
+| `archipelago_scattered.lua` | `count` islands from a range of areas | 48 km |
+| `archipelago_cluster.lua` | clusters (Neyman–Scott) | 48 km |
+| `archipelago_hotspot.lua` | shrinking chain | 48 km |
+| `archipelago_arc.lua` | island arc with a trench | 96 km |
+| `archipelago_atoll.lua` | scattered atolls | 24 km |
+| `archipelago_shattered.lua` | land broken by channels | 48 km |
+| `archipelago_chain.lua` | wide chain that reaches the requested fraction | 48 km |
+| `archipelago_centers.lua` | islands at given positions | 24 km |
+| `infinite_archipelago.lua` | infinite archipelago by cells | 16 km |
+| `infinite_cluster.lua` | infinite clusters | 24 km |
+
+### 13.5 Phase 3: continents and other lands
+
+| Script | What it shows | Size / cell |
+| --- | --- | --- |
+| `continent.lua` | block with lobes, ranges with foothills, gulfs, mixed margin | 192 km |
+| `pangea.lua` | supercontinent with inland seas | 192 km |
+| `old_world.lua` | blocks separated by straits | 192 km |
+| `mediterranean.lua` | inland sea with islands | 96 km |
+| `inland_sea.lua` | continent with a closed inland sea | 96 km |
+| `peninsula.lua` | peninsula with islands at the tip | 48 km |
+| `isthmus.lua` | two masses joined by an isthmus | 48 km |
+| `lakeland.lua` | all land with lakes | 24 km |
+| `fractious.lua` | fragmented lands | 96 km |
+| `taklamakan.lua` | closed basin surrounded by mountains | 96 km |
+| `infinite_continents.lua` | infinite continents (large elements per cell) | 128 km |
+| `infinite_lakeland.lua` | infinite land with lakes | 16 km |
+
+### 13.6 Gallery
+
+`assets/scripts/gallery.lua` generates one plate per type for `docs/images/lands/` and `lua_reference.md`.
 
 ---
 
-## 16. Flujo de trabajo
+## 14. Validation and tests
 
-* **Un commit por paso**, nunca `--amend`; Conventional Commits en una línea.
-* Si un commit cambia el estado de un milestone o un item, actualiza `docs/status.md` y `docs/todo.md` en el
-  mismo commit.
-* Iterar con `tools/dev.sh test -L fast`; antes de cada commit que toque el motor, suite completa en Debug y en
-  Release, **una suite cada vez** (comparten `out/`).
-* `volume_r3` en `test_datasets` puede fallar por tiempo en Release: repetir antes de investigar.
-* Compilar con `build.cmd` (desde bash, `cmd //c` con ruta de Windows); `ctest` por su ruta completa.
-* Código en inglés; nada de `new`/`delete`/`malloc` en el motor; `ENGINE_ASSERT` sin efectos secundarios.
-* Un op nuevo necesita su entrada en `kOps` en el orden de `OpKind` (hay un `static_assert`), su shader en
-  `engine_shaders` y su referencia en `sampler.cpp`.
-* Al cerrar cada fase: ejemplos, goldens, imágenes, `lua_reference.md`, skill `terrain-author` y este plan.
+| Test | What it checks | Where |
+| --- | --- | --- |
+| Primitive distances | closed values at chosen points; GPU = CPU | `test_geometry` |
+| Primitive areas | closed formula against `Terrain.Sample` | `test_geometry` |
+| CSG | order, smin with `k` (error ≤ `k/4`), subtraction | `test_geometry` |
+| Profiles | position and value of the maximum per preset; continuity between elements | `test_lands` |
+| Margin | shelf, slope and abyssal depth against what was requested | `test_lands` |
+| Instructions | one case per row of 8.6, with the resolved list and `metrics::Measure`/`--by-id` | `test_lands` |
+| Id stability | `count` N → N + 1, `seed` of another generator, `fixed` | `test_lands` |
+| Infinite plane | identical overlapping exports; same ids from two windows; statistical fraction | `test_lands` (exporting like `test_cli`) |
+| Sections | different section sizes identical | `test_seams` / `test_cli` |
+| Goldens | every example in the catalogue, `tolerance 0`, performance | `test_datasets` |
+| Viewer | one bounded and one infinite example captured with `--screenshot` contain land and change with the camera | `test_viewer` |
+| Errors | invalid keys, impossible combinations, `world_cell` too small: message and script line | `test_lua_errors` |
+| References | bands per type measured in `docs/references/` | `test_lands` |
+| Time | script time per golden recorded; no phase worsens it without justification | `test_datasets` |
+
+All suites in Debug and in Release, one at a time, before every commit that touches the engine.
 
 ---
 
-## 17. Referencias
+## 15. Risks and open decisions
 
-Repositorios analizados:
+| Topic | Risk or decision | Proposal |
+| --- | --- | --- |
+| New op in C++/GLSL | layer change (composition leaves pure Lua) | justified by the node limit and the cost; same pattern as `Water`. Confirm before step 1.3 |
+| `engine.report` | new binding in the engine | small; confirm before step 1.8 |
+| `Lands.*` compatibility | current goldens and scripts change | regenerate goldens; removed keys fail with the alternative |
+| 1st-order distances | error far from the coast in `radial`/`superellipse` | exact on the coast; the profile absorbs the rest; tests with a declared tolerance |
+| `smooth union` | not an exact distance in the blend | error ≤ `k/4`; acceptable for shape; measure with `Terrain.Sample` |
+| Bins with `geologic` margins | a `D` of 100 km makes every element fall in every bin | measure; if it exceeds 16 per bin, a separate coarse bin just for the margin |
+| Land fraction when infinite | statistical only | document it and measure it over large windows |
+| `region` when infinite | the element list covers the working window | ±64 km by default; shader generation in phase 8 if needed |
+| `kMaxOutputs = 8` | Lands uses 7 | raise to 16 in phase 7 |
+| Suite time | more goldens | goldens at 256² and a pointwise op: they should cost less than the current ones (6 to 27 s of script each) |
+
+---
+
+## 16. Workflow
+
+* **One commit per step**, never `--amend`; single-line Conventional Commits.
+* If a commit changes the state of a milestone or an item, it updates `docs/status.md` and `docs/todo.md` in
+  the same commit.
+* Iterate with `tools/dev.sh test -L fast`; before every commit that touches the engine, full suite in Debug
+  and in Release, **one suite at a time** (they share `out/`).
+* `volume_r3` in `test_datasets` can fail on time in Release: repeat before investigating.
+* Build with `build.cmd` (from bash, `cmd //c` with a Windows path); `ctest` by its full path.
+* Code in English; no `new`/`delete`/`malloc` in the engine; `ENGINE_ASSERT` with no side effects.
+* A new op needs its entry in `kOps` in `OpKind` order (there is a `static_assert`), its shader in
+  `engine_shaders` and its reference in `sampler.cpp`.
+* When closing each phase: examples, goldens, images, `lua_reference.md`, the `terrain-author` skill and
+  this plan.
+
+---
+
+## 17. References
+
+Repositories analysed:
 
 * mapgen2: <https://github.com/redblobgames/mapgen2> (`water.js`, `elevation.js`, `rivers.js`,
-  `moisture.js`, `biomes.js`, `noisy-edges.js`); artículo "Polygonal Map Generation for Games" de Amit Patel.
+  `moisture.js`, `biomes.js`, `noisy-edges.js`); Amit Patel's article "Polygonal Map Generation for Games".
 * heman: <https://github.com/prideout/heman> (`include/heman.h`, `src/generate.c`, `src/ops.c`,
   `src/distance.c`).
 * voronoi-map-js: <https://github.com/rjanicek/voronoi-map-js> (`src/island-shape.js`, `src/map.js`,
@@ -1181,17 +1187,17 @@ Repositorios analizados:
   `lakes.ts`, `river-generator.ts`, `temperature-generator.ts`, `precipitation-generator.ts`,
   `coastline-generator.ts`, `ocean-generator.ts`, `biomes-generator.ts`).
 
-Algoritmos citados:
+Algorithms cited:
 
-* Í. Quílez, funciones de distancia 2D (`sdSegment`, `sdUnevenCapsule`, `sdArc`, `sdPie`, smin polinómico),
+* Í. Quílez, 2D distance functions (`sdSegment`, `sdUnevenCapsule`, `sdArc`, `sdPie`, polynomial smin),
   iquilezles.org.
 * R. Bridson, "Fast Poisson Disk Sampling in Arbitrary Dimensions" (2007).
 * L.-Y. Wei, "Parallel Poisson Disk Sampling" (2008).
-* Procesos de Neyman–Scott y Thomas (procesos puntuales en racimo); modelo booleano para la cobertura.
+* Neyman–Scott and Thomas processes (clustered point processes); Boolean model for coverage.
 * P. Felzenszwalb, D. Huttenlocher, "Distance Transforms of Sampled Functions" (2012).
-* Oclusión ambiental por barridos de horizonte de Sean Barrett (nothings.org).
+* Sean Barrett's ambient occlusion by horizon sweeps (nothings.org).
 
-Ficheros de YATE implicados:
+YATE files involved:
 
 * `assets/lua/prelude/10_shapes.lua`, `20_landforms.lua`, `30_ranges.lua`, `40_dunes.lua`, `45_water.lua`,
   `46_network.lua`, `50_lands.lua`
