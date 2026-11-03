@@ -7,6 +7,7 @@
 #                       [--sun az,el] [--target x,y,z] [--shot yaw,pitch,dist]... [--param k=v]...
 #                       [--seed N] [--out DIR] [--type Release|Debug]
 #   tools/dev.sh sweep <script.lua> --vary key=v1,v2,... [--ref image]... [review options...]  one sheet.png
+#   tools/dev.sh dem lat,lon --out DIR [--zoom 14] [--tiles 3]                  a real height field to measure as a reference
 #   tools/dev.sh lands <script.lua> --bounds minx,minz,maxx,maxz [--res M] [--param k=v]... [--out DIR]
 #   tools/dev.sh lands-check <script.lua> --bounds ... --expect count=N,area=MIN..MAX,land=MIN..MAX
 #   tools/dev.sh clean [DAYS]                                   removes out/ entries untouched for DAYS (7)
@@ -106,7 +107,7 @@ sweep() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --vary) vary="$2"; shift 2 ;;
-            --ref) refs+=("$2"); shift 2 ;;
+            --ref) refs+=("$(realpath "$2")"); shift 2 ;;
             --shot) rest+=("$1" "$2"); shots=$((shots + 1)); shift 2 ;;
             *) rest+=("$1"); shift ;;
         esac
@@ -156,6 +157,61 @@ sweep() {
     (cd "$tiles" && ffmpeg -loglevel error -y -framerate 1 -i t%03d.png -frames:v 1 \
         -vf "tile=${columns}x$((shots + 1)):padding=4" "$out/sheet.png")
     echo "sweep: $out/sheet.png"
+}
+
+# A real height field as a reference: N x N tiles of the AWS Terrain Tiles (open data, terrarium PNG, metres =
+# R * 256 + G + B / 256 - 32768) centred on lat,lon, joined into `height.raw` with a `metadata.json`, so
+# terrain_metrics measures it and draws its hillshade like any export. The spacing is the Mercator pixel at
+# that latitude: zoom 14 is about 7.5 m at 40 degrees, a tile 256 samples.
+dem() {
+    local at="$1"; shift
+    local zoom=14 count=3 out=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --zoom) zoom="$2"; shift 2 ;;
+            --tiles) count="$2"; shift 2 ;;
+            --out) out="$2"; shift 2 ;;
+            *) echo "dev.sh dem: unknown option $1" >&2; exit 2 ;;
+        esac
+    done
+    [[ -n "$out" ]] || { echo "dev.sh dem: --out DIR is required" >&2; exit 2; }
+    mkdir -p "$out/tiles"
+    local x0 y0 res
+    read -r x0 y0 res < <(awk -v at="$at" -v z="$zoom" -v n="$count" 'BEGIN {
+        split(at, p, ","); pi = atan2(0, -1); lat = p[1] * pi / 180; s = 2 ^ z
+        x = (p[2] + 180) / 360 * s; y = (1 - log(sin(lat) / cos(lat) + 1 / cos(lat)) / pi) / 2 * s
+        printf "%d %d %.4f\n", x - n / 2, y - n / 2, 156543.034 * cos(lat) / s }')
+    local i j files=()
+    for ((j = 0; j < count; j++)); do
+        for ((i = 0; i < count; i++)); do
+            local f="$out/tiles/$((y0 + j))_$((x0 + i)).png"
+            [[ -f "$f" ]] || curl -sfo "$f" "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/$zoom/$((x0 + i))/$((y0 + j)).png" \
+                || { echo "dev.sh dem: cannot fetch tile $zoom/$((x0 + i))/$((y0 + j))" >&2; exit 1; }
+            files+=("$(cygpath -w "$f")")
+        done
+    done
+    DEM_FILES="$(IFS='|'; echo "${files[*]}")" DEM_COUNT="$count" DEM_OUT="$(cygpath -w "$out/height.raw")" \
+        powershell.exe -NoProfile -Command '
+        Add-Type -AssemblyName System.Drawing
+        $files = $env:DEM_FILES.Split("|"); $n = [int]$env:DEM_COUNT; $w = 256 * $n
+        $h = New-Object float[] ($w * $w)
+        for ($t = 0; $t -lt $files.Length; $t++) {
+            $bmp = [System.Drawing.Bitmap]::new($files[$t])
+            $data = $bmp.LockBits([System.Drawing.Rectangle]::new(0, 0, 256, 256), "ReadOnly", "Format24bppRgb")
+            $px = New-Object byte[] ($data.Stride * 256)
+            [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $px, 0, $px.Length)
+            $ox = ($t % $n) * 256; $oz = [math]::Floor($t / $n) * 256
+            for ($z = 0; $z -lt 256; $z++) { for ($x = 0; $x -lt 256; $x++) {
+                $o = $z * $data.Stride + 3 * $x  # BGR order
+                $h[($oz + $z) * $w + $ox + $x] = $px[$o + 2] * 256 + $px[$o + 1] + $px[$o] / 256 - 32768 } }
+            $bmp.UnlockBits($data); $bmp.Dispose()
+        }
+        $bytes = New-Object byte[] ($h.Length * 4); [Buffer]::BlockCopy($h, 0, $bytes, 0, $bytes.Length)
+        [IO.File]::WriteAllBytes($env:DEM_OUT, $bytes)'
+    local size=$((256 * count))
+    printf '{ "width": %d, "height": %d, "resolution": %s, "source": "AWS Terrain Tiles terrarium z%d around %s" }\n' \
+        "$size" "$size" "$res" "$zoom" "$at" > "$out/metadata.json"
+    echo "dem: $out ($size x $size samples, $res m, $(awk "BEGIN { printf \"%.1f\", $size * $res / 1000 }") km)"
 }
 
 # Exports a Lands script raw, then prints what it asked for (`script_report.lands` in metadata.json) next to
@@ -362,11 +418,12 @@ case "${1:-}" in
     test) shift; run_tests "$@" ;;
     review) shift; review "$@" ;;
     sweep) shift; sweep "$@" ;;
+    dem) shift; dem "$@" ;;
     lands) shift; lands "$@" ;;
     lands-check) shift; lands_check "$@" ;;
     clean) shift; clean "$@" ;;
     lint) lint ;;
     docs-check) docs_check ;;
     headings) shift; headings "$@" ;;
-    *) sed -n '2,20p' "$0"; exit 2 ;;
+    *) sed -n '2,21p' "$0"; exit 2 ;;
 esac
