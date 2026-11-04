@@ -1584,11 +1584,16 @@ on the CPU and returns its fields as `Terrain.Grid` values:
    the ground keeping its bowl and the water at the spill level; any other is filled. `breach` is
    World Machine's Flow Restructure Ridge Carving; `fill_slope` (rise over run, default 0, the least
    that drains) is its Basin Restructuring, the slope a filled depression is given towards its way out.
+   Its Drain To: `outlets`, a list of one value per cell, makes every cell over 0.5 an outlet as the sea
+   is (existing rivers, a lake to drain into), and `edges = false` closes the map's edge, so water leaves
+   only by the outlets or the sea; with no way out at all the drainage is refused.
 2. **Routing and area** (D8 on the result), with `sea_level` as an outlet where given; the grid's edge
    always is one.
 3. **Rivers** where the area passes `channel_area` (1 km²): centre lines smoothed along the network,
    width `width_scale * sqrt(A / 1 km²)` and depth `depth_scale * (A / 1 km²)^0.3`, and the distance to the
-   nearest one, so a channel stays sharp at any resolution.
+   nearest one, so a channel stays sharp at any resolution. With `grain` (the bed's grain size in
+   metres, World Machine's River device's Shields depth) a reach is no deeper than where its bed shear
+   reaches the Shields threshold, `0.047 x 1.65 x grain / slope`: steep reaches run shallow.
 
 `Water.Apply{ height, water }` carves the rivers into a terrain at full resolution (a parabolic bed, banks
 rising at `bank`) and returns `height`, `lakes` and `rivers`: water surfaces, above the ground where there

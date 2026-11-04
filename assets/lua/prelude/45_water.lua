@@ -42,6 +42,7 @@ end
 local DRAIN_KEYS = {
     "values", "size", "origin", "cell", "position", "sea_level", "breach", "lake_area", "lake_depth",
     "channel_area", "width_scale", "depth_scale", "fill_slope",
+    "outlets", "edges", "grain",
 }
 
 function Water.Drain(t)
@@ -54,6 +55,7 @@ function Water.Drain(t)
         size = t.size, cell = cell, height = t.values, sea_level = t.sea_level, breach = t.breach,
         lake_area = t.lake_area, lake_depth = t.lake_depth, channel_area = t.channel_area,
         width_scale = t.width_scale, depth_scale = t.depth_scale, fill_slope = t.fill_slope,
+        outlets = t.outlets, edges = t.edges, grain = t.grain,
     }
     local function grid(values)
         return Terrain.Grid{ values = values, size = t.size, origin = t.origin, cell = cell, position = t.position }

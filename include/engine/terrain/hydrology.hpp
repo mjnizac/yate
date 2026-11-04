@@ -50,6 +50,14 @@ struct HydrologyParams {
     /// Slope (rise over run) a filled depression is given towards its way out, World Machine's Basin
     /// Restructuring; 0 is the smallest that still drains.
     f64_t fillSlope = 0.0;
+    /// Flow Restructure's Drain To: cells where this grid (one value per cell, when given) is over 0.5
+    /// are outlets as the sea is, and `edgeOutlets` cleared keeps water from leaving by the map's edge.
+    std::span<const f64_t> outlets{};
+    b8_t                   edgeOutlets = true;
+    /// The bed's grain size, metres, for the River device's Shields depth: a reach is no deeper than
+    /// the depth at which its bed shear reaches the Shields threshold, 0.047 x 1.65 x grain / slope, so
+    /// steep reaches run shallow. 0 keeps the depth from the drainage area alone.
+    f64_t grainSize = 0.0;
 };
 
 struct HydrologyResult {

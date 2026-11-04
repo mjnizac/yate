@@ -56,10 +56,13 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
     const usize_t count = static_cast<usize_t>(params.width) * params.depth;
     if (params.width < 3 || params.depth < 3 || input.size() != count || !(params.cell > 0.0)
         || !(params.breachDepth >= 0.0) || !(params.lakeArea >= 0.0) || !(params.lakeDepth >= 0.0)
-        || !(params.channelArea > 0.0) || !(params.widthScale >= 0.0) || !(params.depthScale >= 0.0)) {
+        || !(params.channelArea > 0.0) || !(params.widthScale >= 0.0) || !(params.depthScale >= 0.0)
+        || !(params.outlets.empty() || params.outlets.size() == count) || !(params.grainSize >= 0.0)
+        || !(params.edgeOutlets || !params.outlets.empty() || params.seaLevel > -1e29)) {
         ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Script,
                     "hydrology needs a grid of at least 3 x 3 with {} heights, a cell greater than zero "
-                    "and breach, lake and channel sizes of zero or more",
+                    "and breach, lake and channel sizes of zero or more; outlets need one value per cell, and "
+                    "water a way out (the edge, the sea or outlets)",
                     count);
     }
     std::pmr::memory_resource* resource = &memory::General().Resource();
@@ -90,7 +93,8 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
         }
     }
     const auto isOutlet = [&](u32_t i) {
-        return sea[i] != 0 || grid.OnEdge(static_cast<i32_t>(i % params.width), static_cast<i32_t>(i / params.width));
+        return sea[i] != 0 || (!params.outlets.empty() && params.outlets[i] > 0.5)
+               || (params.edgeOutlets && grid.OnEdge(static_cast<i32_t>(i % params.width), static_cast<i32_t>(i / params.width)));
     };
 
     std::pmr::vector<f64_t> h(input.begin(), input.end(), resource);
@@ -390,8 +394,12 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
         ++result.rivers;
         const f64_t ax = px[i], az = pz[i], bx = px[ru], bz = pz[ru];
         const f64_t w0 = widthOf(result.area[i]), w1 = widthOf(result.area[ru]);
-        const f64_t d0 = depthOf(result.area[i]), d1 = depthOf(result.area[ru]);
         const f64_t l0 = s[i], l1 = s[ru];
+        // Shields: the depth whose bed shear rho g h S is the critical 0.047 (rho_s - rho) g D.
+        const f64_t run     = std::hypot(bx - ax, bz - az) * cell;
+        const f64_t slope   = std::max((l0 - l1) / std::max(run, cell), 1e-4);
+        const f64_t shields = params.grainSize > 0.0 ? 0.047 * 1.65 * params.grainSize / slope : 1e30;
+        const f64_t d0 = std::min(depthOf(result.area[i]), shields), d1 = std::min(depthOf(result.area[ru]), shields);
         const i32_t x0 = static_cast<i32_t>(std::floor(std::min(ax, bx))) - band;
         const i32_t x1 = static_cast<i32_t>(std::ceil(std::max(ax, bx))) + band;
         const i32_t z0 = static_cast<i32_t>(std::floor(std::min(az, bz))) - band;

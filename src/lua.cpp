@@ -1618,9 +1618,16 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.widthScale  = args.Number("width_scale", 10.0);
         params.depthScale  = args.Number("depth_scale", 1.5);
         params.fillSlope   = args.Number("fill_slope", 0.0, 0.0, 10.0);
+        params.edgeOutlets = args.Boolean("edges", true);
+        params.grainSize   = args.Number("grain", 0.0, 0.0, 10.0);
         const usize_t count = static_cast<usize_t>(params.width) * params.depth;
         std::pmr::vector<f64_t> height(&memory::General().Resource());
         args.Numbers("height", count, height);
+        std::pmr::vector<f64_t> outlets(&memory::General().Resource());
+        if (args.Has("outlets")) {
+            args.Numbers("outlets", count, outlets);
+            params.outlets = outlets;
+        }
         args.Finish();
         terrain::HydrologyResult drained{
             .height        = std::pmr::vector<f64_t>(&memory::General().Resource()),

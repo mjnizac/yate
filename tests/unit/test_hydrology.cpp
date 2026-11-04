@@ -134,6 +134,28 @@ void TestFillSlope() {
     CHECK(PitShare(b) < 1e-9);
 }
 
+void TestOutlets() {
+    test::Section("an outlet mask without the edge drains the whole map to it");
+    // A plane sloping to x = 0 that may only drain into one cell in the middle: everything ends there.
+    const auto heights = Make([](f64_t x, f64_t) { return 0.5 * x + 50.0; });
+    std::pmr::vector<f64_t> mask(heights.size(), 0.0, &memory::General().Resource());
+    const usize_t centre = 32 * kSide + 32;
+    mask[centre]         = 1.0;
+    HydrologyParams p    = Params();
+    p.outlets            = mask;
+    p.edgeOutlets        = false;
+    HydrologyResult r    = Empty();
+    CHECK(terrain::Drain(heights, p, r).has_value());
+    const f64_t total = static_cast<f64_t>(heights.size()) * p.cell * p.cell;
+    std::printf("     the outlet drains %.1f %% of the map\n", 100.0 * r.area[centre] / total);
+    CHECK(r.area[centre] > 0.99 * total);
+    // With nowhere to go the drainage is refused rather than left to loop.
+    HydrologyParams none = Params();
+    none.edgeOutlets     = false;
+    HydrologyResult n    = Empty();
+    CHECK(!terrain::Drain(heights, none, n).has_value());
+}
+
 void TestValley() {
     test::Section("a V valley is one river along its floor");
     // Sides at 0.3 towards z = 32, the floor at 0.05 towards x = 0, 10 m cells: the floor gathers the
@@ -149,6 +171,15 @@ void TestValley() {
     CHECK(r.riverDistance[40 * kSide + 20] > 40.0); // capped at the band, a few widths out
     CHECK(std::fabs(r.riverWidth[mouth] - 10.0 * std::sqrt(r.area[mouth] / 1e6)) < 2.0);
     CHECK(r.rivers > 30u);
+    // The Shields depth on 5 cm gravel down a 0.05 floor: 0.047 x 1.65 x 0.05 / 0.05 = 0.078 m, shallower
+    // than the drainage area alone gives.
+    p.grainSize       = 0.05;
+    HydrologyResult g = Empty();
+    CHECK(terrain::Drain(heights, p, g).has_value());
+    const usize_t mid = 32 * kSide + 20;
+    std::printf("     floor depth %.3f m from the area, %.3f m by Shields\n", r.riverDepth[mid], g.riverDepth[mid]);
+    CHECK(std::fabs(g.riverDepth[mid] - 0.047 * 1.65 * 0.05 / 0.05) < 0.01);
+    CHECK(g.riverDepth[mid] < r.riverDepth[mid]);
 }
 
 void TestSea() {
@@ -180,6 +211,7 @@ int main() {
     TestLake();
     TestBreach();
     TestFillSlope();
+    TestOutlets();
     TestValley();
     TestSea();
     memory::Shutdown();
