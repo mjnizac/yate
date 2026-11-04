@@ -1082,13 +1082,25 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
     // --- Filters --------------------------------------------------------------------------------
 
     sol::table filters = state.create_named_table("Filters");
-    filters.set_function("Blur", [&graph](sol::this_state lua, sol::table table) {
+    filters.set_function("Blur", [&graph, spacing](sol::this_state lua, sol::table table) {
         const SourceLocation location = CallerLocation(lua);
         Args                 args(std::move(table), "Filters.Blur", location);
         const Value          input  = args.Input("input");
-        const u32_t          radius = args.Count("radius", 1, 1, terrain::kMaxBlurRadius);
+        u32_t                radius = args.Count("radius", 1, 1, terrain::kMaxBlurRadius);
+        // World Machine's World Scale: the radius in metres, at least one sample and at most the cap at
+        // fine spacings, so the same script blurs the same ground at any resolution within that range.
+        if (args.Has("metres")) {
+            const f64_t metres = args.Number("metres", 0.0, 0.0, 1e9);
+            radius = static_cast<u32_t>(std::clamp(std::round(metres / spacing), 1.0,
+                                                   static_cast<f64_t>(terrain::kMaxBlurRadius)));
+        }
+        const std::string method = args.Text("method", "mean");
         args.Finish();
-        return Handle{Unwrap(graph.AddBlur(input, radius, location))};
+        if (method != "mean" && method != "median") {
+            Fail(location, "Filters.Blur expects method mean or median, got '{}'", method);
+        }
+        return Handle{Unwrap(graph.AddBlur(input, radius, location,
+                                           method == "median" ? terrain::BlurMode::Median : terrain::BlurMode::Average))};
     });
     // The same window as Blur, taking its largest (`Expand`) or smallest (`Shrink`) value: a mask grows
     // or shrinks by `radius` samples, a height is dilated or eroded. `shape` cuts the window (World
@@ -1605,6 +1617,7 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.channelArea = args.Number("channel_area", 1e6);
         params.widthScale  = args.Number("width_scale", 10.0);
         params.depthScale  = args.Number("depth_scale", 1.5);
+        params.fillSlope   = args.Number("fill_slope", 0.0, 0.0, 10.0);
         const usize_t count = static_cast<usize_t>(params.width) * params.depth;
         std::pmr::vector<f64_t> height(&memory::General().Resource());
         args.Numbers("height", count, height);

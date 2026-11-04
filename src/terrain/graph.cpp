@@ -786,7 +786,12 @@ Result<Value> Graph::AddBlur(Value input, u32_t radius, SourceLocation location,
             ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
             "Blur radius must be between 1 and {}, got {}", kMaxBlurRadius, radius));
     }
-    if (falloff != BlurFalloff::Flat && (mode == BlurMode::Average || !std::isfinite(slope) || slope < 0.0f)) {
+    if (mode == BlurMode::Median && (radius > kMaxMedianRadius || radiusMap.has_value() || input.mapping.domain != Domain::R2)) {
+        return std::unexpected(MakeScriptError(
+            ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+            "a median blur is R2, without a radius map, and at most {} samples wide, got {}", kMaxMedianRadius, radius));
+    }
+    if (falloff != BlurFalloff::Flat && (mode == BlurMode::Average || mode == BlurMode::Median || !std::isfinite(slope) || slope < 0.0f)) {
         return std::unexpected(MakeScriptError(
             ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
             "a falloff needs Expand or Shrink and a finite slope of at least 0, got {}", slope));

@@ -581,6 +581,8 @@ local snow = Curves.Smoothstep{ input = height, min = 600.0, max = 750.0 }
 | --- | --- | --- | --- |
 | `input` | required | | any mapping |
 | `radius` | `1` | 1 … 32 | radius in **samples**, not metres |
+| `metres` | none | `>= 0` | the radius in metres instead (World Machine's World Scale): rounded to samples at the job's spacing, at least 1 and at most 32 |
+| `method` | `"mean"` | `mean`, `median` | `median` (R2, radius at most 3) takes the middle value of the window: removes speckle and one-sample spikes while keeping edges and cliff lips sharp |
 
 | `radius = 1` | `8` | `32` |
 | --- | --- | --- |
@@ -589,7 +591,7 @@ local snow = Curves.Smoothstep{ input = height, min = 600.0, max = 750.0 }
 Two things to watch.
 
 **The radius is in samples**, so the same script blurs a different distance at a different resolution.
-If you want a blur of `D` metres, write `radius = math.max(1, math.floor(D / params.resolution))`.
+For a blur of `D` metres write `metres = D`; past 32 samples (fine spacings) it is capped, so it is the same ground only between the spacings where `D` is 1 to 32 samples.
 
 **It is the most expensive halo in the engine per unit of effect**: radius 32 adds 32 to the halo of
 everything upstream, which on a 512 section is 576² instead of 512², a 27% surcharge for one op. Prefer
@@ -1569,7 +1571,9 @@ on the CPU and returns its fields as `Terrain.Grid` values:
 
 1. **Breach or fill, per depression** (Lindsay's hybrid): one no deeper than `breach` (3 m) is cut open
    along its way out; one larger than `lake_area` (20 ha) and deeper than `lake_depth` (2 m) is a lake,
-   the ground keeping its bowl and the water at the spill level; any other is filled.
+   the ground keeping its bowl and the water at the spill level; any other is filled. `breach` is
+   World Machine's Flow Restructure Ridge Carving; `fill_slope` (rise over run, default 0, the least
+   that drains) is its Basin Restructuring, the slope a filled depression is given towards its way out.
 2. **Routing and area** (D8 on the result), with `sea_level` as an outlet where given; the grid's edge
    always is one.
 3. **Rivers** where the area passes `channel_area` (1 km²): centre lines smoothed along the network,

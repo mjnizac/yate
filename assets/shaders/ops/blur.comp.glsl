@@ -5,7 +5,8 @@
 // Parameters:
 //   0  radius      taps on each side, at least 1
 //   1  components
-//   2  mode        0 the mean, 1 the largest value, 2 the smallest (a dilation or an erosion)
+//   2  mode        0 the mean, 1 the largest value, 2 the smallest (a dilation or an erosion), 3 the
+//                  median (R2, radius at most 3: World Machine's Median blur, which keeps edges)
 //   3  shape       the window over x and z (in R3 a prism of the same reach in y): 0 the square,
 //                  1 the regular octagon inscribed in it, 2 the diamond, 3 the disk
 //   4  radius map  1 when input 1 is an Rn -> R1 field scaling the radius per sample (clamped to
@@ -57,6 +58,40 @@ void main() {
     int spanY = IsR3() ? radius : 0;
 
     for (uint c = 0u; c < count; ++c) {
+        if (mode == 3u) {
+            // The median by counting: the value with fewer than half the window below it and at least
+            // half at or below it. Order-free, so every section agrees bit for bit.
+            float window[49];
+            uint  n = 0u;
+            for (int dz = -radius; dz <= radius; ++dz) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    float ax = abs(float(dx));
+                    float az = abs(float(dz));
+                    bool  inside = shape == 1u ? max(ax, az) <= reach && ax + az <= reach * 1.41421356
+                                 : shape == 2u ? ax + az <= reach
+                                 : shape == 3u ? ax * ax + az * az <= reach * (reach + 1.0)
+                                               : max(ax, az) <= reach;
+                    if (inside && n < 49u && InputContains(0u, local, ivec3(dx, 0, dz))) {
+                        window[n++] = source.values[InputIndexOffset(0u, local, ivec3(dx, 0, dz)) * count + c];
+                    }
+                }
+            }
+            float median = 0.0;
+            uint  middle = n / 2u;
+            for (uint i = 0u; i < n; ++i) {
+                uint below = 0u;
+                uint equal = 0u;
+                for (uint j = 0u; j < n; ++j) {
+                    below += window[j] < window[i] ? 1u : 0u;
+                    equal += window[j] == window[i] ? 1u : 0u;
+                }
+                if (below <= middle && middle < below + equal) {
+                    median = window[i];
+                }
+            }
+            target.values[index * count + c] = median;
+            continue;
+        }
         float sum  = 0.0;
         float taps = 0.0;
         float most = -3.402823e38;

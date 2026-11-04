@@ -47,6 +47,9 @@ struct HydrologyParams {
     f64_t channelArea = 1e6;
     f64_t widthScale  = 10.0;
     f64_t depthScale  = 1.5;
+    /// Slope (rise over run) a filled depression is given towards its way out, World Machine's Basin
+    /// Restructuring; 0 is the smallest that still drains.
+    f64_t fillSlope = 0.0;
 };
 
 struct HydrologyResult {

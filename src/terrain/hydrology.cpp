@@ -121,7 +121,8 @@ Status Drain(std::span<const f64_t> input, const HydrologyParams& params, Hydrol
             const u32_t q = static_cast<u32_t>(nz * grid.width + nx);
             if (done[q] == 0) {
                 done[q]  = 1;
-                level[q] = std::max(h[q], level[c] + kEpsilon);
+                const f64_t run = (kDx[d] != 0 && kDz[d] != 0 ? 1.41421356 : 1.0) * params.cell;
+                level[q] = std::max(h[q], level[c] + std::max(kEpsilon, params.fillSlope * run));
                 open.Push(level[q], q);
             }
         }

@@ -1873,6 +1873,28 @@ void TestMultiscaleAgreesWithSampler() {
     CHECK(worst < 0.01f);
 }
 
+/// The median keeps what a mean smears: a tilted plane and a sharp step both come out as they went in, and
+/// a blur by `metres` is the same as one by the equivalent samples.
+void TestMedianBlur() {
+    test::Section("the median blur keeps planes and edges, the metre radius is the sample one");
+    const Field diff = Export("median_blur", R"(
+    local c     = Terrain.Coords{}
+    local plane = c.x * 0.3 + c.y * 0.2
+    local step  = Curves.Clamp{ input = c.x * 1000, min = -1, max = 1 } * 10
+    local result = Filters.Blur{ input = plane, radius = 3, method = "median" } - plane
+                   + Filters.Blur{ input = step, radius = 3, method = "median" } - step
+                   + Filters.Blur{ input = step, metres = 24 } - Filters.Blur{ input = step, radius = 3 })");
+    CHECK(diff.Ok());
+    float worst = 0.0f;
+    for (const float v : diff.values) {
+        worst = std::max(worst, std::fabs(v));
+    }
+    std::printf("     worst difference %.6f\n", static_cast<double>(worst));
+    CHECK(worst < 1e-4f);
+    const Field refused = Export("median_wide", "    local result = Filters.Blur{ input = Terrain.Coords{}.x, radius = 4, method = 'median' }");
+    CHECK(!refused.Ok() && refused.error.find("at most 3") != std::string::npos);
+}
+
 /// Cells read through a position field on the GPU and on the CPU sampler. A constant position makes the
 /// whole field one cell's value, which a kernel ignoring its position (the first version did, the flag
 /// sat in a word the iteration overwrites) cannot produce; the sampler must read the same value.
@@ -1924,6 +1946,7 @@ int main() {
     TestDisplaceAgreesWithSampler();
     TestCellsPosition();
     TestMultiscaleAgreesWithSampler();
+    TestMedianBlur();
     TestShapeSets();
     TestSectionsAndInteraction();
     TestTerrainIndicators();

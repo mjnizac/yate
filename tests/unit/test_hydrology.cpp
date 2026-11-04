@@ -112,6 +112,28 @@ void TestBreach() {
     CHECK(PitShare(r) < 1e-9);
 }
 
+void TestFillSlope() {
+    test::Section("a fill slope tilts a filled depression towards its way out");
+    // A 12 m pit five cells across on a plane sloping to x = 0: filled, its floor rises from the spill.
+    const auto heights = Make([](f64_t x, f64_t z) {
+        return 0.5 * x + 50.0 - (std::hypot(x - 40.0, z - 40.0) < 5.0 ? 12.0 : 0.0);
+    });
+    HydrologyParams flat = Params();
+    flat.breachDepth     = 0.0;
+    HydrologyParams tilted = flat;
+    tilted.fillSlope       = 0.02;
+    HydrologyResult a = Empty();
+    HydrologyResult b = Empty();
+    CHECK(terrain::Drain(heights, flat, a).has_value());
+    CHECK(terrain::Drain(heights, tilted, b).has_value());
+    const usize_t centre = 40 * kSide + 40;
+    const f64_t   raised = b.height[centre] - a.height[centre];
+    std::printf("     the pit's centre lies %.3f m higher with a slope of 0.02\n", raised);
+    // Four cells or more from the spill on the low side, each at least 0.02 x cell higher than the last.
+    CHECK(raised > 3.0 * 0.02 * flat.cell);
+    CHECK(PitShare(b) < 1e-9);
+}
+
 void TestValley() {
     test::Section("a V valley is one river along its floor");
     // Sides at 0.3 towards z = 32, the floor at 0.05 towards x = 0, 10 m cells: the floor gathers the
@@ -157,6 +179,7 @@ int main() {
     }
     TestLake();
     TestBreach();
+    TestFillSlope();
     TestValley();
     TestSea();
     memory::Shutdown();

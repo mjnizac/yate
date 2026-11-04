@@ -212,7 +212,10 @@ enum class VectorOp : u32_t { Extract = 0, Combine };
 
 /// What a Blur node takes over its window: the mean, or the largest or smallest value (a dilation or an
 /// erosion, World Machine's Expander).
-enum class BlurMode : u32_t { Average = 0, Maximum, Minimum };
+enum class BlurMode : u32_t { Average = 0, Maximum, Minimum, Median };
+
+/// Widest window the median takes, in taps on each side: 7 x 7 values counted per sample.
+inline constexpr u32_t kMaxMedianRadius = 3;
 
 /// The window a Blur node reads, over x and z (in R3 a prism of the same reach in y): the square of
 /// `radius` taps on each side, the regular octagon inscribed in it, the diamond (|dx| + |dz| <= r) or
