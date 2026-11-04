@@ -11,6 +11,7 @@
 --   Curves.Equalize                 the Equalizer, with a captured sample over a fixed region
 --   Strata.Apply                    the Strata device: tilted beds incised into the slopes
 --   Erosion.Accumulate              the Snow device driven by a direction: material built up downwind
+--   Erosion.Multiscale              Erosion's Multiscale Synthesis: a coarse StreamPower pass in metres, then fine detail
 --   Erosion.Coastal                 Coastal Erosion: beaches, cliffs on a wave-cut platform, a smoothed sea floor
 --   Erosion.Snow                    the Snow device: snowfall above a line, sliding off steep ground
 --   Erosion.Weathering              Thermal Weathering's Fracture Size and Talus Size
@@ -387,6 +388,48 @@ function Erosion.Weathering(t)
         return eroded + Combine.Min{ a = talus, b = zero + t.boulders * 0.5 } * bumps, talus
     end
     return eroded, talus
+end
+
+-- World Machine's Erosion with Multiscale Synthesis and Scale Independence: the drainage from a coarse
+-- pass, the detail from a fine one. `input` is sampled every `cell` metres over `region` ({ x0, z0, x1,
+-- z1 }) and eroded there by Erosion.StreamPower (`iterations`, `k`, `talus`, `diffusion`, no uplift), which
+-- works in metres and so cuts the same valleys at every resolution; `amount` of what it cut is added back
+-- at full resolution through Terrain.Grid, fading out at the region's edge, and `detail` iterations of
+-- Erosion.Hydraulic (with `hardness`) add the channels finer than the cell. The sample runs on the CPU,
+-- which reads neighbourhood and erosion ops through, so give it a field before them. Returns the height
+-- and the coarse cut.
+function Erosion.Multiscale(t)
+    check("Erosion.Multiscale", t, { "input", "region", "cell", "iterations", "k", "talus", "diffusion", "amount",
+                                     "detail", "hardness", "seed" })
+    local region = t.region or fail("Erosion.Multiscale needs 'region', { x0, z0, x1, z1 }")
+    local cell   = t.cell or 50
+    local n      = math.floor((region[3] - region[1]) / cell) + 1
+    local m      = math.floor((region[4] - region[2]) / cell) + 1
+    local h = Terrain.Sample{ value = t.input, origin = { region[1], region[2] }, size = { n, m }, cell = cell,
+                              seed = t.seed or 0 }
+    local still = {}
+    for i = 1, #h do
+        still[i] = 0
+    end
+    local carved = Erosion.StreamPower{
+        size = { n, m }, cell = cell, height = h, uplift = still, iterations = t.iterations or 40, k = t.k or 0.004,
+        m = 0.5, talus = t.talus or 0.6, diffusion = t.diffusion or 0.012 * cell * cell, refresh = 4,
+    }
+    local cut = {}
+    for i = 1, #h do
+        cut[i] = (carved[i] - h[i]) * (t.amount or 1)
+    end
+    -- 1 inside the region, 0 a cell beyond its edge, so the grid's held edge does not run on outside.
+    local c  = Terrain.Coords{}
+    local hx, hz = (region[3] - region[1]) * 0.5, (region[4] - region[2]) * 0.5
+    local out = Combine.Max{ a = abs(c.x - (region[1] + hx)) - hx, b = abs(c.y - (region[2] + hz)) - hz }
+    local inside = 1 - Curves.Smoothstep{ input = out, min = -cell, max = 0 }
+    local coarse = Terrain.Grid{ values = cut, size = { n, m }, origin = { region[1], region[2] }, cell = cell } * inside
+    local height = t.input + coarse
+    if (t.detail or 16) > 0 then
+        height = Erosion.Hydraulic{ input = height, iterations = t.detail or 16, hardness = t.hardness }
+    end
+    return height, coarse
 end
 
 -- --- Curves and selectors ---------------------------------------------------------------------------

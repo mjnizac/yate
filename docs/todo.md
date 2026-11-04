@@ -82,11 +82,14 @@ The goal is that a terrain is composed from validated examples and judged by num
       bedding, `Curves.Ramp`), recreated against the forum threads they came from; none is in the alpine
       script yet. Since then: `multiscale` noise (the likeliest fix for the missing fine relief), hydraulic
       `hardness`, `Erosion.Coastal`, `Weathering`, `Snow`, `Masks.Curvature` and `Wetness`.
-- [ ] **World Machine's multiscale erosion** (Erosion's Multiscale Synthesis and Scale Independence) needs a
-      coarse-to-fine pass the sectioned graph cannot run: the erosion at a coarser grid than the job's. A
-      design decision (a coarse GPU grid op, or `Terrain.Bake` in section 5), not a parameter.
-- [ ] Not taken from World Machine: vector displacement (VDM, build 4059: overhangs and caves), Flow
-      Restructure's drainage-mask outlets, the River device's Shields depth and its GCS library.
+- [ ] `Erosion.Multiscale` (World Machine's Multiscale Synthesis) needs a bounded region and samples its input
+      on the CPU, so it sees no neighbourhood op upstream and repeats its simulation on every level change in
+      the viewer (the `engine.memo` item in section 5 would cache it); an unbounded multiscale pass would need a
+      coarse GPU grid op.
+- [ ] `Erosion.Coastal` cliffs alias into teeth along a curved coast at 2 m: the wall rises its full height
+      within one or two samples. A larger `transition` softens them at the cost of steepness.
+- [ ] Not taken from World Machine: vector displacement (VDM, build 4059: overhangs and caves; a new data
+      type, a spec change) and the River device's GCS library.
 - [ ] **Cliffs, what is open:** no heightmap reference with a known scale exists, so its case holds guards, not
       ranges; the chutes' heads are rounded capsules; the sea cliffs are low against the escarpment; 0.3 % of the
       land is closed depressions; `strata` and `debris` outputs are not used by the viewer's palette; the

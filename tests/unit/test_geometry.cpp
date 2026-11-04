@@ -1955,6 +1955,28 @@ void TestPreludeDevices() {
     local v = Terrain.Sample{ value = Noises.fBm{ frequency = 1 / 300, amplitude = 60 }.value, origin = { -256, -256 }, size = { n, n }, cell = 16 }
     local result = Masks.Wetness{ values = v, size = { n, n }, origin = { -256, -256 }, cell = 16 })");
     CHECK(wet.Ok() && range(wet).first >= -1e-3f && range(wet).second <= 1.0f + 1e-3f && range(wet).second > 0.5f);
+    // Multiscale erosion cuts the coarse valleys inside its region and nothing a cell beyond it.
+    const Field coarse = Export("multiscale_erosion", R"(
+    local c = Terrain.Coords{}
+    local base = Curves.Clamp{ input = 1 - (c.x * c.x + c.y * c.y) * (1 / (150 * 150)), min = 0, max = 1 } * 80
+                 + Noises.fBm{ frequency = 1 / 120, amplitude = 10 }.value
+    local _, cut = Erosion.Multiscale{ input = base, region = { -160, -160, 160, 160 }, cell = 8, iterations = 30, detail = 0 }
+    local result = cut)");
+    CHECK(coarse.Ok());
+    float deepest = 0.0f, outside = 0.0f;
+    for (std::size_t row = 0; coarse.Ok() && row < coarse.grid.side; ++row) {
+        for (std::size_t column = 0; column < coarse.grid.side; ++column) {
+            const float v = coarse.values[row * coarse.grid.side + column];
+            deepest       = std::min(deepest, v);
+            if (std::fabs(WorldX(coarse, column)) > 170.0 || std::fabs(WorldZ(coarse, row)) > 170.0) {
+                outside = std::max(outside, std::fabs(v));
+            }
+        }
+    }
+    std::printf("     multiscale: deepest coarse cut %.2f m, %.4f m outside the region\n", static_cast<double>(deepest),
+                static_cast<double>(outside));
+    CHECK(deepest < -1.0f);
+    CHECK(outside < 1e-4f);
 }
 
 /// Cells read through a position field on the GPU and on the CPU sampler. A constant position makes the
