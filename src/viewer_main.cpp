@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <string_view>
 
 using namespace engine;
@@ -70,6 +71,8 @@ void PrintUsage() {
                "  --screenshot <file>    write the last frame as a PNG (implies --frames 90)\n"
                "  --shot yaw,pitch,dist=<file>  move the camera there, wait for the ring to stream\n"
                "                         in and write a PNG; repeatable, exits after the last one\n"
+               "                         (each PNG gets a .json beside it: the view, the script's\n"
+               "                         outputs and the command that takes the same shot again)\n"
                "  --device <uuid>        force a physical device by its 32-hex-character UUID\n"
                "  --log-format <text|json>  log encoding (default text)\n"
                "  --log-level <level>    trace, debug, info, warn, error or off (default info)\n"
@@ -106,6 +109,21 @@ struct Options {
     usize_t              shotCount = 0;
 };
 
+/// Writes the viewer's report beside a screenshot: `view.png` gets `view.json`, so whoever reads the image
+/// knows what it shows and has the command that takes it again.
+void WriteSidecar(ViewerLayer& viewer, std::string_view image) {
+    const usize_t     dot  = image.rfind('.');
+    const std::string path = std::string(image.substr(0, dot == std::string_view::npos ? image.size() : dot)) + ".json";
+    const std::string_view report = viewer.ViewReport();
+    std::FILE*             file   = std::fopen(path.c_str(), "wb");
+    if (file == nullptr || std::fwrite(report.data(), 1, report.size(), file) != report.size()) {
+        std::fprintf(stderr, "terrain_viewer: could not write %s\n", path.c_str());
+    }
+    if (file != nullptr) {
+        std::fclose(file);
+    }
+}
+
 /// Takes the `--shot` screenshots in order: moves the camera, waits until the ring has streamed in for a
 /// few frames in a row, captures the next frame and stops the application after the last one. One
 /// process for every view, so the script is loaded once.
@@ -139,6 +157,7 @@ public:
         if (!m_window.CaptureNextFrame(shot.path.data())) {
             App().AddExit(ExitCode::FailedToInitializeEngine);
         }
+        WriteSidecar(m_viewer, shot.path);
         ++m_next;
         m_frames  = 0;
         m_settled = 0;
@@ -551,6 +570,10 @@ int main(int argc, char** argv) {
 
     (*application)->Run();
     const ExitCode exit = (*application)->Exit();
+    // The layers live until shutdown, so the viewer still says what the last frame showed.
+    if (!options->screenshot.empty()) {
+        WriteSidecar(viewer, options->screenshot);
+    }
 
     if (Status closed = engine::shutdown(*application); !closed) {
         std::fprintf(stderr, "%s\n", closed.error().Format().data());

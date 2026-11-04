@@ -447,6 +447,12 @@ b8_t Ui::Draw(Panels& panels) {
     ImGui::SetNextWindowSize(ImVec2(width, viewport->WorkSize.y - status));
     if (ImGui::Begin("YATE", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextDisabled("%s", panels.scriptPath);
+        // The whole view as one command line: what a person tuned by hand, handed to an agent or a header.
+        panels.copyCommand = ImGui::Button("Copy as command (C)");
+        if (panels.copied) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("copied, and in the log");
+        }
         if (ImGui::BeginTabBar("tabs")) {
             if (ImGui::BeginTabItem("World")) {
                 changed = WorldTab(panels) || changed;
@@ -497,6 +503,12 @@ void Ui::Record(VkCommandBuffer commands) {
     }
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
+}
+
+void Ui::CopyToClipboard(const char* text) {
+    if (IsValid()) {
+        ImGui::SetClipboardText(text);
+    }
 }
 
 b8_t Ui::WantsMouse() const {

@@ -91,6 +91,9 @@ public:
         b8_t                 frameMap = false;
         /// Keep the map square while its size is edited (World Machine's "square aspect").
         b8_t squareMap = false;
+        /// Set when the user asks for the view's command; `copied` shows that it was, for a moment.
+        b8_t copyCommand = false;
+        b8_t copied      = false;
         u32_t                      outputCount = 0;
         i32_t                      shown       = -1;
         b8_t                       showIds     = false;
@@ -110,6 +113,9 @@ public:
 
     /// Records the panels into `commands`, which must be inside the render pass given to `Initialize`.
     void Record(VkCommandBuffer commands);
+
+    /// Puts `text` on the system clipboard.
+    void CopyToClipboard(const char* text);
 
     /// True while the pointer or the keyboard is over a panel, so the camera should ignore them.
     [[nodiscard]] b8_t WantsMouse() const;

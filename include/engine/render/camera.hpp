@@ -217,6 +217,9 @@ public:
     void Pan(f32_t deltaRightPixels, f32_t deltaUpPixels) noexcept;
 
     [[nodiscard]] f32_t Distance() const noexcept { return m_distance; }
+    /// Radians, as `SetView` takes them: the view `--view` would reproduce.
+    [[nodiscard]] f32_t Yaw() const noexcept { return m_yaw; }
+    [[nodiscard]] f32_t Pitch() const noexcept { return m_pitch; }
     [[nodiscard]] f32_t NearPlane() const noexcept { return m_near; }
     [[nodiscard]] f32_t FarPlane() const noexcept { return m_far; }
     [[nodiscard]] f32_t Speed() const noexcept { return m_speed; }

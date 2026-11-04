@@ -185,6 +185,14 @@ View: camera, plan view, map scale, sun, rings and tiles; Display: water, a show
 Script: its parameters and a reload), and a status bar along the bottom with the frame time, the tiles
 and the level.
 
+"Copy as command" at the top of the sidebar (or `C`) puts on the clipboard, and in the log, the
+`terrain_viewer` command that opens the view on screen again: the script and its parameters, `--target`
+and `--view` for the camera, and every setting that is not its default. A view tuned by hand becomes one
+line to paste to an agent or into a script's header. Every `--screenshot` and `--shot` writes a `.json`
+beside its PNG with the same command, the camera, the map, the spacing drawn, the script's outputs with
+their ranges, what was shown over the relief, the sun, the water, the guide and the tiles; run its
+`command` with `--screenshot` to take the same image again.
+
 Left-drag turns, middle-drag pans, the wheel zooms. `F` switches between orbit and fly; in fly mode
 `WASD` moves, `Q` and `E` go down and up, and shift goes faster. `R` reloads the script, which also
 happens on its own about a quarter of a second after the file changes. `T` toggles wireframe, which is

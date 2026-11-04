@@ -31,6 +31,7 @@ enum class Key : u32_t {
     ToggleMode,
     Reload,
     Wireframe,
+    CopyCommand,
     Count,
 };
 

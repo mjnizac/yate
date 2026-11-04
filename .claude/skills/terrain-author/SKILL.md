@@ -59,7 +59,10 @@ summary; read the images with the Read tool. A reference heightmap is measured d
 `--no-panels` keeps the panel off the terrain; `--plan --bounds <same bounds>` gives a top-down shot laid
 out like `hillshade.png`, and with `--guide <reference.png>` the reference is drawn over it, so an outline
 is compared in place, not side by side; `--show <output>` (`--show-ids` for ids) paints a mask, wetness,
-strata or biome over the relief, to check where it falls; `--sun az,el` lights the shots.
+strata or biome over the relief, to check where it falls; `--sun az,el` lights the shots. Each
+`view_N.png` has a `view_N.json` beside it: the camera, the spacing drawn, the script's outputs with their
+ranges, what was shown, and the `command` that takes the same shot again. When the user tunes a view by
+hand, ask for its command (`C` or "Copy as command" in the viewer) rather than a description.
 
 Use the same three views every run (oblique, grazing, top-down) and keep them in the script's header
 comment. The viewer has no cast shadows: judge geometry on the hillshade, with the sun in front of the

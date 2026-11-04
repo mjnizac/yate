@@ -182,6 +182,14 @@ public:
     /// Replaces the water settings. Takes effect on the next frame and costs no evaluation.
     void SetWater(const Water& water) noexcept;
 
+    /// The `terrain_viewer` command that reopens this view: script, parameters, camera and every setting
+    /// that is not its default. Valid until the next call. `C` and the panel copy it to the clipboard.
+    [[nodiscard]] std::string_view ViewCommand();
+
+    /// What is on screen as JSON: camera, map, spacing, the script's outputs, what is drawn over the
+    /// relief, the tiles and `ViewCommand`. Written beside every screenshot. Valid until the next call.
+    [[nodiscard]] std::string_view ViewReport();
+
     /// Blocks until a reload in flight has finished. For tests, which cannot wait on a frame count.
     void WaitForReload();
 

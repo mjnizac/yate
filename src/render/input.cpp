@@ -25,6 +25,7 @@ constexpr std::array<Binding, static_cast<usize_t>(Key::Count)> kBindings{{
     {Key::ToggleMode, {GLFW_KEY_F, GLFW_KEY_UNKNOWN}},
     {Key::Reload, {GLFW_KEY_R, GLFW_KEY_UNKNOWN}},
     {Key::Wireframe, {GLFW_KEY_T, GLFW_KEY_UNKNOWN}},
+    {Key::CopyCommand, {GLFW_KEY_C, GLFW_KEY_UNKNOWN}},
 }};
 
 constexpr std::array<int, static_cast<usize_t>(MouseButton::Count)> kButtons{

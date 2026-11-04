@@ -31,6 +31,9 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
+#include <iterator>
+#include <string>
 #include <memory_resource>
 #include <mutex>
 #include <new>
@@ -322,6 +325,12 @@ struct ViewerLayer::State {
     b8_t reshow = false;
     /// The panel's square lock on the map's size.
     b8_t squareMap = false;
+    /// The last command `ViewCommand` built, null-terminated for the clipboard, and when it was copied.
+    std::array<char, 8192> command{};
+    /// The last report `ViewReport` built.
+    std::string            report;
+    f64_t                  copiedSeconds = -1e9;
+    b8_t                   copyRequested = false;
     terrain::Params       params;
 
     vulkan::Context*        context  = nullptr;
@@ -809,6 +818,8 @@ void ViewerLayer::UpdateInput() {
     if (!uiHasKeyboard && state.input.Pressed(Key::Wireframe)) {
         state.wireframe = !state.wireframe;
     }
+    // Copied while the panels are recorded, where the UI is in a frame and the clipboard is reachable.
+    state.copyRequested = state.copyRequested || (!uiHasKeyboard && state.input.Pressed(Key::CopyCommand));
 
     // Left drag turns, middle drag pans, wheel zooms. Dragging rather than captured-cursor look, because
     // the viewer also wants a usable pointer for the parameter panel.
@@ -905,6 +916,8 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.bounded           = state.settings.bounded;
     panels.bounds            = state.settings.bounds;
     panels.squareMap         = state.squareMap;
+    // "copied" stays beside the button for two seconds.
+    panels.copied            = NowSeconds() - state.copiedSeconds < 2.0;
     static_assert(Ui::Panels::kMaxOutputs == terrain::Graph::kMaxOutputs);
     for (usize_t i = 0; state.live != nullptr && i < state.live->graph.OutputCount(); ++i) {
         const terrain::OutputRequest& output = state.live->graph.Output(i);
@@ -944,6 +957,13 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     if (panels.frameMap) {
         FrameMap();
     }
+    if (panels.copyCommand || state.copyRequested) {
+        state.copyRequested = false;
+        state.copiedSeconds = NowSeconds();
+        const std::string_view command = ViewCommand();
+        state.ui.CopyToClipboard(command.data());
+        LOG_INFO("view command: {}", command);
+    }
     if (panels.shown != shown) {
         detail::CopyBounded(state.showName, panels.shown >= 0 ? std::string_view{panels.outputs[static_cast<usize_t>(panels.shown)]}
                                                               : std::string_view{});
@@ -957,6 +977,145 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     }
 
     state.ui.Record(commands);
+}
+
+/// The `terrain_viewer` command that opens this view again: the script and its parameters, the camera,
+/// and every setting that is not its default. What a person tuned by hand reaches an agent, or a script's
+/// header, as one line.
+std::string_view ViewerLayer::ViewCommand() {
+    if (m_state == nullptr) {
+        return {};
+    }
+    const State&    state = *m_state;
+    const Settings& s     = state.settings;
+    const Settings  defaults;
+    std::string     out;
+    const auto      add = [&out]<typename... Args>(std::format_string<Args...> format, Args&&... args) {
+        std::format_to(std::back_inserter(out), format, std::forward<Args>(args)...);
+    };
+    // Forward slashes, which Windows takes as well, so the line pastes into bash unchanged.
+    std::string directory{platform::ExecutableDirectory()};
+    std::replace(directory.begin(), directory.end(), '\\', '/');
+    add("\"{}terrain_viewer\" --script \"{}\"", directory, s.script);
+    if (!s.shapes.empty()) {
+        add(" --shapes \"{}\"", s.shapes);
+    }
+    if (s.seed != defaults.seed) {
+        add(" --seed {}", s.seed);
+    }
+    add(" --resolution {:g}", s.resolution);
+    for (usize_t i = 0; i < state.params.Count(); ++i) {
+        add(" --param \"{}={}\"", state.params.KeyAt(i), state.params.ValueAt(i));
+    }
+    // The orbit camera as `--target` and `--view`: in fly mode, the point it looks at from its distance.
+    constexpr f32_t kDegrees = 180.0f / 3.14159265358979f;
+    const Camera&   camera   = state.camera;
+    const Vec3      target   = camera.Mode() == CameraMode::Orbit ? camera.Focus()
+                                                                  : camera.Position() + camera.Forward() * camera.Distance();
+    add(" --target {:.1f},{:.1f},{:.1f} --view {:.2f},{:.2f},{:.1f}", target.x, target.y, target.z,
+        camera.Yaw() * kDegrees, camera.Pitch() * kDegrees, camera.Distance());
+    if (s.bounded) {
+        add(" --bounds {:g},{:g},{:g},{:g}", s.bounds[0], s.bounds[1], s.bounds[2], s.bounds[3]);
+    }
+    if (s.ringRadius != defaults.ringRadius) {
+        add(" --ring {}", s.ringRadius);
+    }
+    if (s.maxLevel != defaults.maxLevel) {
+        add(" --max-level {}", s.maxLevel);
+    }
+    if (s.detail != defaults.detail) {
+        add(" --detail {}", s.detail);
+    }
+    if (s.mapScale != defaults.mapScale) {
+        add(" --map-scale {:g}", s.mapScale);
+    }
+    if (s.follow) {
+        add(" --follow");
+    }
+    if (s.plan) {
+        add(" --plan");
+    }
+    if (s.sun != defaults.sun) {
+        add(" --sun {:.1f},{:.1f}", s.sun[0], s.sun[1]);
+    }
+    if (s.water.enabled) {
+        add(" --water --water-level {:g} --water-color {:.2f},{:.2f},{:.2f} --water-opacity {:.2f}", s.water.level,
+            s.water.colour[0], s.water.colour[1], s.water.colour[2], s.water.opacity);
+    }
+    if (state.terrain.shownOutput != kNoOutput) {
+        add(" --show {}{}", s.show, s.showIds ? " --show-ids" : "");
+    }
+    if (state.guide.texels.IsValid()) {
+        add(" --guide \"{}\" --guide-bounds {:g},{:g},{:g},{:g} --guide-opacity {:.2f}", s.guide, s.guideBounds[0],
+            s.guideBounds[1], s.guideBounds[2], s.guideBounds[3], s.guideOpacity);
+    }
+    detail::CopyBounded(m_state->command, std::string_view{out});
+    return std::string_view{m_state->command.data()};
+}
+
+/// What is on screen, as JSON: written beside every screenshot, so whoever reads the image (an agent,
+/// usually) knows the camera, the map, the spacing, the script's outputs and what was drawn over the
+/// relief, and has the command that takes the same shot again.
+std::string_view ViewerLayer::ViewReport() {
+    if (m_state == nullptr) {
+        return {};
+    }
+    // Strings are paths and a command line: backslashes and quotes are all JSON needs escaped here.
+    const auto quoted = [](std::string_view text) {
+        std::string out = "\"";
+        for (const char c : text) {
+            out += c == '\\' || c == '"' ? std::string{'\\', c} : std::string{c};
+        }
+        return out + "\"";
+    };
+    const std::string command = quoted(ViewCommand());
+    const State&      state   = *m_state;
+    const Settings&   s       = state.settings;
+    std::string&      out     = m_state->report;
+    const auto        add     = [&out]<typename... Args>(std::format_string<Args...> format, Args&&... args) {
+        std::format_to(std::back_inserter(out), format, std::forward<Args>(args)...);
+    };
+    constexpr f32_t kDegrees = 180.0f / 3.14159265358979f;
+    const Camera&   camera   = state.camera;
+    const Vec3      focus    = camera.Focus();
+    out.clear();
+    add("{{\n  \"command\": {},\n  \"script\": {},\n  \"seed\": {},\n", command, quoted(s.script), s.seed);
+    add("  \"resolution_m\": {:g},\n  \"level\": {},\n  \"spacing_m\": {:g},\n", s.resolution, state.level,
+        SpacingOf(s.resolution, state.level));
+    add("  \"camera\": {{\"mode\": \"{}\", \"plan\": {}, \"focus\": [{:.1f}, {:.1f}, {:.1f}], \"yaw_deg\": {:.2f}, "
+        "\"pitch_deg\": {:.2f}, \"distance_m\": {:.1f}, \"map_scale\": {:g}}},\n",
+        camera.Mode() == CameraMode::Orbit ? "orbit" : "fly", s.plan, focus.x, focus.y, focus.z, camera.Yaw() * kDegrees,
+        camera.Pitch() * kDegrees, camera.Distance(), s.mapScale);
+    if (s.bounded) {
+        add("  \"bounds\": [{:g}, {:g}, {:g}, {:g}],\n", s.bounds[0], s.bounds[1], s.bounds[2], s.bounds[3]);
+    } else {
+        add("  \"bounds\": null,\n");
+    }
+    add("  \"heights_m\": [{:g}, {:g}],\n  \"outputs\": [", state.terrain.heightMinimum, state.terrain.heightMaximum);
+    for (usize_t i = 0; state.live != nullptr && i < state.live->graph.OutputCount(); ++i) {
+        const terrain::OutputRequest& output = state.live->graph.Output(i);
+        add("{}{{\"name\": {}, \"components\": {}, \"range\": [{:g}, {:g}]}}", i == 0 ? "" : ", ",
+            quoted(output.name.data()), output.value.mapping.components, output.rangeMin, output.rangeMax);
+    }
+    add("],\n");
+    if (state.terrain.shownOutput != kNoOutput) {
+        add("  \"shown\": {{\"output\": {}, \"ids\": {}, \"range\": [{:g}, {:g}]}},\n", quoted(s.show), s.showIds,
+            state.terrain.shownMinimum, state.terrain.shownMaximum);
+    } else {
+        add("  \"shown\": null,\n");
+    }
+    add("  \"sun_deg\": [{:.1f}, {:.1f}],\n", s.sun[0], s.sun[1]);
+    add("  \"water\": {{\"enabled\": {}, \"sea\": {}, \"lakes\": {}, \"rivers\": {}, \"level_m\": {:g}}},\n", s.water.enabled,
+        s.water.sea, s.water.lakes, s.water.rivers, s.water.level);
+    if (state.guide.texels.IsValid()) {
+        add("  \"guide\": {{\"image\": {}, \"bounds\": [{:g}, {:g}, {:g}, {:g}], \"opacity\": {:.2f}}},\n", quoted(s.guide),
+            s.guideBounds[0], s.guideBounds[1], s.guideBounds[2], s.guideBounds[3], s.guideOpacity);
+    } else {
+        add("  \"guide\": null,\n");
+    }
+    add("  \"tiles\": {{\"drawn\": {}, \"resident\": {}, \"missing\": {}}},\n  \"error\": {}\n}}\n", state.tilesDrawn,
+        state.cache.tiles.size(), state.missingTiles, state.hasError ? quoted(state.lastError.data()) : "null");
+    return out;
 }
 
 /// Puts the whole map on screen, centred: straight down in the plan view, from the south at 40 degrees
