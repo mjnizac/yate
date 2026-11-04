@@ -184,6 +184,18 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
             "Noise lacunarity must be strictly greater than zero, got {}", params.lacunarity));
     }
 
+    const b8_t multiscale = params.multiscale != Multiscale::None;
+    if (multiscale) {
+        if (Status checked = CheckValue(params.multiscalePower, "Noise multiscale power", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(params.multiscalePower.mapping == Mapping{params.domain, 1})) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "Noise expects the multiscale power to be {}, got {}", ToString(Mapping{params.domain, 1}),
+                ToString(params.multiscalePower.mapping)));
+        }
+    }
     if ((params.kind == NoiseKind::Cellular || params.kind == NoiseKind::Cellular3) && params.domain == Domain::R3) {
         return std::unexpected(MakeScriptError(ErrorCode::InvalidArgument, ErrorStage::Validation,
                                               location.file, location.line,
@@ -207,13 +219,16 @@ Result<Value> Graph::AddNoise(const NoiseParams& params, SourceLocation location
     Node node;
     node.kind      = OpKind::Noise;
     node.nodeClass = NodeClass::Pointwise;
-    // Three variant axes: the base function, whether the octave sum is normalized, and whether a
-    // position field is read.
-    node.variant      = PackVariant(static_cast<u32_t>(params.kind), params.normalize ? 1u : 0u,
-                                    warped ? 1u : 0u);
+    // Three variant axes: the base function, the normalization (bit 0) with the multiscale type
+    // above it, and whether a position field is read.
+    node.variant = PackVariant(static_cast<u32_t>(params.kind),
+                               (params.normalize ? 1u : 0u) | (static_cast<u32_t>(params.multiscale) << 1u),
+                               warped ? 1u : 0u);
     if (warped) {
-        node.inputCount = 1;
-        node.inputs[0]  = params.position;
+        node.inputs[node.inputCount++] = params.position;
+    }
+    if (multiscale) {
+        node.inputs[node.inputCount++] = params.multiscalePower;
     }
     node.channelCount = 2;
     node.channels[0]  = Mapping{params.domain, 1};

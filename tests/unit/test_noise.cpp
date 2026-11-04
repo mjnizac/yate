@@ -214,9 +214,12 @@ void PackFloat(KernelPushConstants& constants, usize_t word, f32_t value) {
 }
 
 void CheckDerivative(NoiseKind kind, Domain domain, u32_t octaves, const char* label,
-                     f32_t base = 0.0f, f64_t tolerance = kDerivativeTolerance) {
+                     f32_t base = 0.0f, f64_t tolerance = kDerivativeTolerance,
+                     terrain::Multiscale multiscale = terrain::Multiscale::None) {
     Graph::NoiseParams params = MakeNoiseParams(kind, domain);
     params.octaves            = octaves;
+    params.multiscale         = multiscale;
+    params.power              = 0.7f;
     const usize_t components  = domain == Domain::R3 ? 3 : 2;
 
     u32_t checked = 0;
@@ -392,6 +395,10 @@ int main() {
             {"simplex R3", NoiseKind::Simplex, Domain::R3, {.x = 16, .y = 16, .z = 16}},
             {"ridged R3", NoiseKind::Ridged, Domain::R3, {.x = 16, .y = 16, .z = 16}},
             {"billow R3", NoiseKind::Billow, Domain::R3, {.x = 16, .y = 16, .z = 16}},
+            {"flat middle R2", NoiseKind::FlatMiddle, Domain::R2, {.x = 32, .y = 1, .z = 32}},
+            {"terraced R2", NoiseKind::Terraced, Domain::R2, {.x = 32, .y = 1, .z = 32}},
+            {"flat middle R3", NoiseKind::FlatMiddle, Domain::R3, {.x = 16, .y = 16, .z = 16}},
+            {"terraced R3", NoiseKind::Terraced, Domain::R3, {.x = 16, .y = 16, .z = 16}},
         };
 
         test::Section("one octave stays inside its declared band");
@@ -411,6 +418,18 @@ int main() {
         test::Section("four octaves: the fractal chain rule");
         CheckDerivative(NoiseKind::Simplex, Domain::R2, kOctaves, "simplex R2");
         CheckDerivative(NoiseKind::Simplex, Domain::R3, kOctaves, "simplex R3");
+
+        // World Machine's multiscale types: the weight of each octave depends on the ones before, and
+        // its gradient is carried along, so the sum's gradient must still be the derivative.
+        test::Section("multiscale octaves: the weighted chain rule");
+        CheckDerivative(NoiseKind::Simplex, Domain::R2, kOctaves, "signal R2", 0.0f, kDerivativeTolerance,
+                        terrain::Multiscale::Signal);
+        CheckDerivative(NoiseKind::Simplex, Domain::R2, kOctaves, "elevation R2", 0.0f, kDerivativeTolerance,
+                        terrain::Multiscale::Elevation);
+        CheckDerivative(NoiseKind::Simplex, Domain::R3, kOctaves, "signal R3", 0.0f, kDerivativeTolerance,
+                        terrain::Multiscale::Signal);
+        CheckDerivative(NoiseKind::Terraced, Domain::R2, kOctaves, "terraced elevation R2", 0.0f,
+                        kDerivativeTolerance, terrain::Multiscale::Elevation);
 
         // The same sweep about 5e5 metres out. This is the check that pins down what f32 coordinates
         // cost at that distance: if the answer stayed in the same order of magnitude as near the
@@ -543,7 +562,10 @@ int main() {
             // a percent of them, which is why the criterion is a fraction and not the worst case.
             // The value is asserted on directly: it is continuous everywhere, so two correct
             // implementations cannot disagree by more than the precision available.
-            CHECK(valueError < originCase.tolerance);
+            // Flat middle and terraced reshape the base with a slope of up to 3 (3 n^2 and the
+            // quintic's 1.875 per half step), so they carry up to three times the base's far error.
+            const b8_t shaped = testCase.kind == NoiseKind::FlatMiddle || testCase.kind == NoiseKind::Terraced;
+            CHECK(valueError < originCase.tolerance * (shaped && originCase.fraction > 1.0 ? 3.0 : 1.0));
             // The gradient is asserted on by fraction, not by worst case. Where ridged or billow
             // crosses zero the derivative genuinely jumps, and which side an implementation lands on
             // is decided by the last bit of the base value, so two correct implementations differ by

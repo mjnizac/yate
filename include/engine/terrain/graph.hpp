@@ -202,7 +202,10 @@ inline constexpr u32_t kMaxShapeSegments = 128;
 /// Base function of a noise. `Cellular` is Worley's F2 - F1, ridges along the cell boundaries;
 /// `Cellular3` is F3 - F1, which also breaks along the lines where the second and third nearest swap,
 /// so it has more break lines and triple junctions: cracks and blocks rather than cells. R2 only.
-enum class NoiseKind : u32_t { Simplex = 0, Ridged, Billow, Cellular, Cellular3 };
+enum class NoiseKind : u32_t { Simplex = 0, Ridged, Billow, Cellular, Cellular3, FlatMiddle, Terraced };
+
+/// World Machine's multiscale type: how each octave of a noise is weighted by what came before.
+enum class Multiscale : u32_t { None = 0, Signal, Elevation };
 
 /// What a `Vector` node does.
 enum class VectorOp : u32_t { Extract = 0, Combine };
@@ -341,6 +344,12 @@ public:
         /// slope of the unwarped noise carried along, not the slope of the warped surface; take
         /// `Terrain.Gradient` of the result where the true slope matters.
         Value position{};
+        /// Each octave weighted by the previous signal or by the elevation so far, mixed towards 1
+        /// by `1 - power`. `power` is an `Rn -> R1` field, clamped to [0, 1], required when set.
+        Multiscale multiscale = Multiscale::None;
+        Value      multiscalePower{};
+        /// The power the CPU reference uses (`EvalNoise` has no fields); the GPU reads the field.
+        f32_t      power = 0.0f;
     };
 
     /// Returns the value channel. `Channel(value, 1)` selects the analytic gradient.

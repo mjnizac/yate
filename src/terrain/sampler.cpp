@@ -541,7 +541,10 @@ private:
             case OpKind::Noise: {
                 Graph::NoiseParams params;
                 params.kind        = static_cast<NoiseKind>(node.variant & kVariantFieldMask);
-                params.normalize   = ((node.variant >> kVariantFieldBits) & kVariantFieldMask) != 0;
+                const u32_t flags  = (node.variant >> kVariantFieldBits) & kVariantFieldMask;
+                params.normalize   = (flags & 1u) != 0;
+                params.multiscale  = static_cast<Multiscale>(flags >> 1u);
+                const b8_t  warped = ((node.variant >> (2 * kVariantFieldBits)) & kVariantFieldMask) != 0;
                 params.domain      = Domain::R2;
                 params.frequency   = Word(node, 0);
                 params.octaves     = node.params[1];
@@ -551,7 +554,9 @@ private:
                 params.offset      = Word(node, 5);
                 const u32_t seed   = m_seed ^ (node.params[7] * kHashPhi);
                 for (usize_t p = 0; p < positions.size(); ++p) {
-                    const b8_t  warped = node.inputCount == 1;
+                    if (params.multiscale != Multiscale::None) {
+                        params.power = input(warped ? 1 : 0, p)[0];
+                    }
                     const f32_t x      = warped ? input(0, p)[0] : positions[p][0];
                     const f32_t z      = warped ? input(0, p)[1] : positions[p][1];
                     const NoiseSample s = EvalNoise(params, seed, {x, 0.0f, z});

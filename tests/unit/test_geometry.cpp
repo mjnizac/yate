@@ -1851,6 +1851,28 @@ void TestDisplaceAgreesWithSampler() {
     CHECK(worst < 0.01f);
 }
 
+/// World Machine's multiscale octaves and the Flat Middle and Terraced styles on the GPU against the
+/// sampler's reference, one with a constant power and one with a field; every sample is a grid node.
+void TestMultiscaleAgreesWithSampler() {
+    test::Section("multiscale noise draws what the CPU sampler reads");
+    const Field diff = Export("multiscale_agree", R"(
+    local c = Terrain.Coords{}
+    local a = Noises.fBm{ frequency = 1 / 300, amplitude = 50, multiscale = "signal", multiscale_power = 0.8 }
+    local b = Noises.fBm{ kind = "terraced", frequency = 1 / 400, amplitude = 50, multiscale = "elevation",
+                          multiscale_power = Curves.Clamp{ input = c.x / 256 * 0.5 + 0.5, min = 0, max = 1 } }
+    local d = Noises.fBm{ kind = "flat_middle", frequency = 1 / 200, amplitude = 50 }
+    local v = a + b + d
+    local s = Terrain.Sample{ value = v, origin = { -256, -256 }, size = { 64, 64 }, cell = 8 }
+    local result = v - Terrain.Grid{ values = s, size = { 64, 64 }, origin = { -256, -256 }, cell = 8 })");
+    CHECK(diff.Ok());
+    float worst = 0.0f;
+    for (const float v : diff.values) {
+        worst = std::max(worst, std::fabs(v));
+    }
+    std::printf("     worst difference %.5f m\n", static_cast<double>(worst));
+    CHECK(worst < 0.01f);
+}
+
 /// Cells read through a position field on the GPU and on the CPU sampler. A constant position makes the
 /// whole field one cell's value, which a kernel ignoring its position (the first version did, the flag
 /// sat in a word the iteration overwrites) cannot produce; the sampler must read the same value.
@@ -1901,6 +1923,7 @@ int main() {
     TestWaterAgreesWithSampler();
     TestDisplaceAgreesWithSampler();
     TestCellsPosition();
+    TestMultiscaleAgreesWithSampler();
     TestShapeSets();
     TestSectionsAndInteraction();
     TestTerrainIndicators();

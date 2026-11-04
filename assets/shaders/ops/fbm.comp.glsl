@@ -6,8 +6,12 @@
 //
 // Variants (specialization constants, so both fold away when the pipeline is created):
 //   3  base function, see ENGINE_BASE_* in lib/noise.lib.glsl
-//   4  normalize: 1 divides by the sum of the octave amplitudes, 0 is the classic unnormalized sum
+//   4  bit 0 normalize: 1 divides by the sum of the octave amplitudes, 0 is the classic unnormalized
+//      sum; bits 1-2 the multiscale type, ENGINE_MULTISCALE_* in lib/fbm.lib.glsl
 //   5  warped: 1 reads input 0, a position field in metres, instead of the sample's own position
+//
+// Inputs: the position field when warped, then the multiscale power (an Rn -> R1 field in [0, 1])
+// when a multiscale type is set.
 //
 // A warped noise reports the gradient at the position it sampled; it does not include the Jacobian
 // of the field that moved it.
@@ -31,8 +35,10 @@
 #include "lib/noise.lib.glsl"
 
 layout(constant_id = 3) const uint kBaseFunction = ENGINE_BASE_SIMPLEX;
-layout(constant_id = 4) const uint kFbmNormalize = 1u;
+layout(constant_id = 4) const uint kFbmFlags = 1u;
 layout(constant_id = 5) const uint kWarped = 0u;
+const uint kFbmNormalize  = kFbmFlags & 1u;
+const uint kFbmMultiscale = kFbmFlags >> 1u;
 
 #include "lib/fbm.lib.glsl"
 
@@ -41,41 +47,57 @@ ENGINE_DEFINE_FBM(Fbm2Ridged, vec2, vec3, FbmWeight2, Ridged2D)
 ENGINE_DEFINE_FBM(Fbm2Billow, vec2, vec3, FbmWeight2, Billow2D)
 ENGINE_DEFINE_FBM(Fbm2Cellular, vec2, vec3, FbmWeight2, Cellular2D)
 ENGINE_DEFINE_FBM(Fbm2Cellular3, vec2, vec3, FbmWeight2, Cellular2DF3)
+ENGINE_DEFINE_FBM(Fbm2FlatMiddle, vec2, vec3, FbmWeight2, FlatMiddle2D)
+ENGINE_DEFINE_FBM(Fbm2Terraced, vec2, vec3, FbmWeight2, Terraced2D)
 
 ENGINE_DEFINE_FBM(Fbm3Simplex, vec3, vec4, FbmWeight3, Simplex3D)
 ENGINE_DEFINE_FBM(Fbm3Ridged, vec3, vec4, FbmWeight3, Ridged3D)
 ENGINE_DEFINE_FBM(Fbm3Billow, vec3, vec4, FbmWeight3, Billow3D)
+ENGINE_DEFINE_FBM(Fbm3FlatMiddle, vec3, vec4, FbmWeight3, FlatMiddle3D)
+ENGINE_DEFINE_FBM(Fbm3Terraced, vec3, vec4, FbmWeight3, Terraced3D)
 
 #define CHANNEL_VALUE    0u
 #define CHANNEL_GRADIENT 1u
 
 // `kBaseFunction` is a specialization constant, so exactly one branch survives in the pipeline.
 vec3 Fbm2(vec2 p, uint octaves, float amplitude, float persistence, float frequency,
-          float lacunarity, uint seed) {
+          float lacunarity, uint seed, float power) {
     if (kBaseFunction == ENGINE_BASE_RIDGED) {
-        return Fbm2Ridged(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        return Fbm2Ridged(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
     }
     if (kBaseFunction == ENGINE_BASE_BILLOW) {
-        return Fbm2Billow(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        return Fbm2Billow(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
     }
     if (kBaseFunction == ENGINE_BASE_CELLULAR) {
-        return Fbm2Cellular(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        return Fbm2Cellular(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
     }
     if (kBaseFunction == ENGINE_BASE_CELLULAR3) {
-        return Fbm2Cellular3(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        return Fbm2Cellular3(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
     }
-    return Fbm2Simplex(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+    if (kBaseFunction == ENGINE_BASE_FLAT_MIDDLE) {
+        return Fbm2FlatMiddle(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
+    }
+    if (kBaseFunction == ENGINE_BASE_TERRACED) {
+        return Fbm2Terraced(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
+    }
+    return Fbm2Simplex(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
 }
 
 vec4 Fbm3(vec3 p, uint octaves, float amplitude, float persistence, float frequency,
-          float lacunarity, uint seed) {
+          float lacunarity, uint seed, float power) {
     if (kBaseFunction == ENGINE_BASE_RIDGED) {
-        return Fbm3Ridged(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        return Fbm3Ridged(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
     }
     if (kBaseFunction == ENGINE_BASE_BILLOW) {
-        return Fbm3Billow(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        return Fbm3Billow(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
     }
-    return Fbm3Simplex(p, octaves, amplitude, persistence, frequency, lacunarity, seed);
+    if (kBaseFunction == ENGINE_BASE_FLAT_MIDDLE) {
+        return Fbm3FlatMiddle(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
+    }
+    if (kBaseFunction == ENGINE_BASE_TERRACED) {
+        return Fbm3Terraced(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
+    }
+    return Fbm3Simplex(p, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
 }
 
 void main() {
@@ -95,13 +117,16 @@ void main() {
     float offset      = ParamFloat(5);
     float resolution  = ParamFloat(6);
     uint  seed        = pc.seed ^ (ParamUint(7) * ENGINE_HASH_PHI);
+    float power       = kFbmMultiscale != ENGINE_MULTISCALE_NONE
+                            ? clamp(LoadScalar(kWarped, InputIndex(kWarped, local)), 0.0, 1.0)
+                            : 0.0;
 
     if (IsR3()) {
         // Positions come from the integer sample times the sample spacing, never accumulated, so
         // neighbouring sections agree exactly on their shared samples.
         vec3 position = kWarped != 0u ? LoadVec3(0u, InputIndex(0u, local))
                                       : vec3(world) * resolution;
-        vec4 n = Fbm3(position, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        vec4 n = Fbm3(position, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
 
         if (WantsChannel(CHANNEL_VALUE)) {
             StoreScalar(CHANNEL_VALUE, index, n.x + offset);
@@ -112,7 +137,7 @@ void main() {
     } else {
         vec2 position = kWarped != 0u ? LoadVec2(0u, InputIndex(0u, local))
                                       : vec2(float(world.x), float(world.z)) * resolution;
-        vec3 n = Fbm2(position, octaves, amplitude, persistence, frequency, lacunarity, seed);
+        vec3 n = Fbm2(position, octaves, amplitude, persistence, frequency, lacunarity, seed, power);
 
         if (WantsChannel(CHANNEL_VALUE)) {
             StoreScalar(CHANNEL_VALUE, index, n.x + offset);

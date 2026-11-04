@@ -8,6 +8,7 @@
 #    include <tracy/Tracy.hpp>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -47,8 +48,9 @@ constexpr OpInfo kOps[] = {
      .name           = "Noise",
      .shader         = "ops/fbm.comp.spv",
      .nodeClass      = NodeClass::Pointwise,
-     // One optional input: the position field the noise is sampled at, in metres.
-     .maxInputs      = 1,
+     // Two optional inputs: the position field the noise is sampled at, in metres, and the
+     // multiscale power.
+     .maxInputs      = 2,
      .maxChannels    = 2,
      .channelNames   = {"value", "gradient"},
      .resolutionWord = 6,
@@ -596,6 +598,23 @@ void ShapeBase(NoiseKind kind, BaseSample<Axes>& sample) {
     if (kind == NoiseKind::Simplex || kind == NoiseKind::Cellular || kind == NoiseKind::Cellular3) {
         return;
     }
+    if (kind == NoiseKind::FlatMiddle) {
+        const f32_t n = sample.value;
+        sample.value  = n * n * n;
+        for (usize_t i = 0; i < Axes; ++i) {
+            sample.gradient[i] *= 3.0f * n * n;
+        }
+        return;
+    }
+    if (kind == NoiseKind::Terraced) {
+        const f32_t t = 2.0f * (sample.value + 1.0f);
+        const f32_t u = t - std::floor(t);
+        sample.value  = (std::floor(t) + u * u * u * (u * (6.0f * u - 15.0f) + 10.0f)) * 0.5f - 1.0f;
+        for (usize_t i = 0; i < Axes; ++i) {
+            sample.gradient[i] *= 30.0f * u * u * (u - 1.0f) * (u - 1.0f);
+        }
+        return;
+    }
     const f32_t sign = sample.value < 0.0f ? -1.0f : 1.0f;
     if (kind == NoiseKind::Ridged) {
         const f32_t r = 1.0f - sign * sample.value;
@@ -619,9 +638,11 @@ template <usize_t Axes, typename Base>
 [[nodiscard]] BaseSample<Axes> Fbm(const Graph::NoiseParams& params, u32_t seed,
                                    const std::array<f32_t, Axes>& point, Base base) {
     BaseSample<Axes> sum;
-    f32_t            a    = 1.0f;
-    f32_t            f    = params.frequency;
-    f32_t            norm = 0.0f;
+    BaseSample<Axes> w{.value = 1.0f};
+    f32_t            a     = 1.0f;
+    f32_t            f     = params.frequency;
+    f32_t            norm  = 0.0f;
+    const f32_t      power = std::clamp(params.power, 0.0f, 1.0f);
 
     for (u32_t octave = 0; octave < params.octaves; ++octave) {
         std::array<f32_t, Axes> scaled{};
@@ -631,10 +652,38 @@ template <usize_t Axes, typename Base>
         BaseSample<Axes> n = base(scaled, seed + octave * kHashPhi);
         ShapeBase(params.kind, n);
 
-        const f32_t af = a * f;
-        sum.value += n.value * a;
-        for (usize_t i = 0; i < Axes; ++i) {
-            sum.gradient[i] += n.gradient[i] * af;
+        if (params.multiscale == Multiscale::None) {
+            const f32_t af = a * f;
+            sum.value += n.value * a;
+            for (usize_t i = 0; i < Axes; ++i) {
+                sum.gradient[i] += n.gradient[i] * af;
+            }
+        } else {
+            // Mirrors the multiscale branch of ENGINE_DEFINE_FBM: the weight carries its gradient.
+            for (usize_t i = 0; i < Axes; ++i) {
+                n.gradient[i] *= f;
+            }
+            if (params.multiscale == Multiscale::Elevation && octave > 0) {
+                const f32_t e     = 0.5f + 0.5f * sum.value / norm;
+                const b8_t  inner = e > 0.0f && e < 1.0f;
+                for (usize_t i = 0; i < Axes; ++i) {
+                    w.gradient[i] = inner ? sum.gradient[i] * (0.5f * power / norm) : 0.0f;
+                }
+                w.value = 1.0f - power + power * std::clamp(e, 0.0f, 1.0f);
+            }
+            sum.value += n.value * w.value * a;
+            for (usize_t i = 0; i < Axes; ++i) {
+                sum.gradient[i] += (n.gradient[i] * w.value + w.gradient[i] * n.value) * a;
+            }
+            if (params.multiscale == Multiscale::Signal) {
+                const f32_t s     = 0.5f + 0.5f * n.value;
+                const f32_t m     = 1.0f - power + power * std::clamp(s, 0.0f, 1.0f);
+                const b8_t  inner = s > 0.0f && s < 1.0f;
+                for (usize_t i = 0; i < Axes; ++i) {
+                    w.gradient[i] = w.gradient[i] * m + (inner ? n.gradient[i] * (0.5f * power) : 0.0f) * w.value;
+                }
+                w.value *= m;
+            }
         }
         norm += a;
         a *= params.persistence;

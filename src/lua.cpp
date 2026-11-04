@@ -56,6 +56,7 @@ using terrain::Domain;
 using terrain::Graph;
 using terrain::Mapping;
 using terrain::OpKind;
+using terrain::Multiscale;
 using terrain::NoiseKind;
 using terrain::SourceLocation;
 using terrain::Value;
@@ -265,6 +266,12 @@ public:
             WrongType(key, "a string");
         }
         return *value;
+    }
+
+    /// Reads a key as it is, for a value that may be a number or a field; nil when absent.
+    [[nodiscard]] sol::object Object(const char* key) {
+        Accept(key);
+        return m_table[key];
     }
 
     /// Reads a handle. Numbers are not accepted here: an op that takes a field needs a field, and
@@ -488,8 +495,15 @@ private:
     if (name == "cellular") {
         return NoiseKind::Cellular;
     }
+    if (name == "flat_middle") {
+        return NoiseKind::FlatMiddle;
+    }
+    if (name == "terraced") {
+        return NoiseKind::Terraced;
+    }
     ENGINE_FAIL(ErrorCode::ScriptError, ErrorStage::Script,
-                "unknown noise kind '{}'; expected simplex, ridged, billow or cellular", name);
+                "unknown noise kind '{}'; expected simplex, ridged, billow, cellular, flat_middle or terraced",
+                name);
 }
 
 // --- Erosion and the sample spacing ---------------------------------------------------------------
@@ -729,6 +743,25 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         // noise is sampled where it points instead of where the sample is.
         if (args.Has("position")) {
             params.position = args.Input("position");
+        }
+        // World Machine's multiscale type, with its power as a number or a field in [0, 1].
+        const std::string multiscale = args.Text("multiscale", "none");
+        if (multiscale == "signal") {
+            params.multiscale = Multiscale::Signal;
+        } else if (multiscale == "elevation") {
+            params.multiscale = Multiscale::Elevation;
+        } else if (multiscale != "none") {
+            Fail(location, "{} expects multiscale none, signal or elevation, got '{}'", op, multiscale);
+        }
+        const sol::object power = args.Object("multiscale_power");
+        if (power.is<Handle>()) {
+            params.multiscalePower = power.as<Handle>().value;
+        } else if (power.valid() && !power.is<f64_t>()) {
+            Fail(location, "{} expects multiscale_power to be a number or a graph value", op);
+        } else if (params.multiscale != Multiscale::None) {
+            params.power           = power.valid() ? static_cast<f32_t>(power.as<f64_t>()) : 0.5f;
+            params.multiscalePower = Unwrap(graph.AddConst(Mapping{params.domain, 1}, {params.power, 0.0f, 0.0f, 0.0f},
+                                                           location));
         }
         args.Finish();
 

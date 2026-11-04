@@ -283,11 +283,48 @@ vec3 Cellular2DF3(vec2 p, uint seed) {
     return vec3(1.0 - 1.4 * f, -1.4 * g);
 }
 
+// --- World Machine's Flat Middle and Terraced styles -----------------------------------------------
+//
+//   flat middle: v = n^3, dv = 3 n^2 dn                     level ground around the mean, steep extremes
+//   terraced:    t = 2 (n + 1), u = fract(t), v = (floor(t) + q(u)) / 2 - 1, dv = q'(u) dn
+//
+// with q the quintic smoothstep, flat at both ends of each of the four steps, so the treads are level
+// and the gradient is exact everywhere (zero on a tread, never discontinuous).
+
+float TerraceQ(float u) { return u * u * u * (u * (6.0 * u - 15.0) + 10.0); }
+float TerraceDq(float u) { return 30.0 * u * u * (u - 1.0) * (u - 1.0); }
+
+vec3 FlatMiddle2D(vec2 p, uint seed) {
+    vec3 n = Simplex2D(p, seed);
+    return vec3(n.x * n.x * n.x, (3.0 * n.x * n.x) * n.yz);
+}
+
+vec4 FlatMiddle3D(vec3 p, uint seed) {
+    vec4 n = Simplex3D(p, seed);
+    return vec4(n.x * n.x * n.x, (3.0 * n.x * n.x) * n.yzw);
+}
+
+vec3 Terraced2D(vec2 p, uint seed) {
+    vec3  n = Simplex2D(p, seed);
+    float t = 2.0 * (n.x + 1.0);
+    float u = t - floor(t);
+    return vec3((floor(t) + TerraceQ(u)) * 0.5 - 1.0, TerraceDq(u) * n.yz);
+}
+
+vec4 Terraced3D(vec3 p, uint seed) {
+    vec4  n = Simplex3D(p, seed);
+    float t = 2.0 * (n.x + 1.0);
+    float u = t - floor(t);
+    return vec4((floor(t) + TerraceQ(u)) * 0.5 - 1.0, TerraceDq(u) * n.yzw);
+}
+
 // Base function ids, matching engine::terrain::NoiseKind.
-#define ENGINE_BASE_SIMPLEX   0u
-#define ENGINE_BASE_RIDGED    1u
-#define ENGINE_BASE_BILLOW    2u
-#define ENGINE_BASE_CELLULAR  3u
-#define ENGINE_BASE_CELLULAR3 4u
+#define ENGINE_BASE_SIMPLEX     0u
+#define ENGINE_BASE_RIDGED      1u
+#define ENGINE_BASE_BILLOW      2u
+#define ENGINE_BASE_CELLULAR    3u
+#define ENGINE_BASE_CELLULAR3   4u
+#define ENGINE_BASE_FLAT_MIDDLE 5u
+#define ENGINE_BASE_TERRACED    6u
 
 #endif // ENGINE_LIB_NOISE_GLSL

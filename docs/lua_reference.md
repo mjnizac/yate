@@ -177,7 +177,7 @@ the same thing written the other way.
 
 | Key | Type | Default | Valid | Meaning |
 | --- | --- | --- | --- | --- |
-| `kind` | string | `"simplex"` | `simplex`, `ridged`, `billow` | base function; only on `fBm` |
+| `kind` | string | `"simplex"` | `simplex`, `ridged`, `billow`, `cellular`, `flat_middle`, `terraced` | base function; only on `fBm`. `flat_middle` is `n^3` (level ground around the mean, World Machine's Flat Middle), `terraced` four level treads per octave joined by quintic risers (Terraced) |
 | `domain` | number | `2` | 2 or 3 | `R2` is `(x, z)`, `R3` is `(x, y, z)` |
 | `frequency` | number | `0.002` | `> 0` | cycles per metre: wavelength is `1 / frequency` |
 | `octaves` | number | `6` | 1 … 32 | how many scales are summed |
@@ -187,6 +187,8 @@ the same thing written the other way.
 | `offset` | number | `0.0` | any | added after accumulation |
 | `seed` | number | `0` | any | salt, decorrelates nodes sharing the job seed |
 | `normalize` | boolean | `true` | | divide by the sum of amplitudes |
+| `multiscale` | string | `"none"` | `none`, `signal`, `elevation` | World Machine's multiscale type: `signal` weights each octave by the previous one's signal (Musgrave's hybrid multifractal, detail on crests, smooth hollows), `elevation` by the height summed so far (detail on high ground, smooth lowlands) |
+| `multiscale_power` | number or field | `0.5` | `[0, 1]`, clamped | how far the weighting goes: 0 is the plain sum, 1 the full weight; a field varies it in space. Taken as locally constant by the gradient |
 
 Channel 0 is the value, channel 1 is `gradient` (`R2->R2` or `R3->R3`).
 
