@@ -343,6 +343,9 @@ int main() {
             settings.ringRadius    = 2;
             settings.tilesPerFrame = 4;
             settings.params        = &params;
+            // The pixels read below are the terrain's: the docked sidebar and the status bar would cover the
+            // part of the frame they are read from.
+            settings.panels        = false;
 
             ViewerLayer& viewer = (*application)->PushLayer<ViewerLayer>(settings);
             // A radius of two is a 5x5 ring, filled completely before the first frame.
@@ -593,7 +596,10 @@ int main() {
                 const Frame under = shoot("water_camera_under");
                 CHECK(under.width > 0);
                 // Tinted all over rather than a colour from nowhere: still terrain, still covering the frame.
-                CHECK(CoveredFraction(under) > 0.5);
+                // Compared with the dry shot of the same view: an absolute share counted the panels once.
+                std::printf("     under the surface: %.3f of the frame covered, %.3f dry\n", CoveredFraction(under),
+                            CoveredFraction(dry));
+                CHECK(CoveredFraction(under) > 0.9 * CoveredFraction(dry));
                 CHECK(MeanDifferenceClear(dry, under) > 8.0);
 
                 test::Section("nearer terrain hides farther terrain");

@@ -177,6 +177,12 @@ It writes the last frame before the viewer stops, so it implies `--frames 90` un
 the first frames show a half-streamed ring. The copy comes out of the presented swapchain image, so the
 file is what the window showed.
 
+The panels follow World Machine's project dialog: a sidebar docked on the right with four tabs (World:
+the finest resolution, the spacing drawn, the script's height range and its outputs with their ranges;
+View: camera, plan view, map scale, sun, rings and tiles; Display: water, a shown output and the guide;
+Script: its parameters and a reload), and a status bar along the bottom with the frame time, the tiles
+and the level.
+
 Left-drag turns, middle-drag pans, the wheel zooms. `F` switches between orbit and fly; in fly mode
 `WASD` moves, `Q` and `E` go down and up, and shift goes faster. `R` reloads the script, which also
 happens on its own about a quarter of a second after the file changes. `T` toggles wireframe, which is
@@ -191,11 +197,11 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --vie
 ```
 
 `--sun az,el` places the sun in degrees, the azimuth clockwise from -z as `terrain_metrics --sun` counts
-it (default 126,31.7); the panel's "View" section has the same two sliders, and neither re-evaluates.
+it (default 126,31.7); the panel's View tab has the same two sliders, and neither re-evaluates.
 A script's `shadow` output is not recomputed: it stays cast from the sun the script assumed.
 `--no-panels` leaves the panels out, so a screenshot shows the terrain alone.
 
-`--plan` (or "Plan view" in the panel) looks straight down with no perspective, +x to the right and +z
+`--plan` (or "Plan view" in the View tab) looks straight down with no perspective, +x to the right and +z
 down the screen, the way an exported heightmap and `hillshade.png` are laid out, so a shot of a map
 compares with them and with a reference outline pixel for pixel. With `--bounds` and no `--view` it opens
 framed on the bounds; the orbit camera's target stays the centre and the wheel zooms. In a `--shot` the
@@ -205,7 +211,7 @@ distance is the zoom: the shot's height covers `1.155 x distance` metres.
 build/Release/bin/terrain_viewer --script assets/scripts/lands/archipelago_arc.lua --resolution 128 --bounds -48000,-48000,48000,48000 --plan --water --no-panels --screenshot out/arc_plan.png
 ```
 
-`--show <output>` (or "Show" in the panel) paints any of the script's R2->R1 outputs over the terrain,
+`--show <output>` (or "Output" in the Display tab) paints any of the script's R2->R1 outputs over the terrain,
 still lit: a ramp from dark blue at the bottom of the range the script declared for it, through green and
 yellow, to red at the top. `--show-ids` ("As ids") paints one colour a whole value instead, for ids such
 as biomes or strata, with a legend in the panel. The script does not run again; the tiles are copied
@@ -218,7 +224,7 @@ build/Release/bin/terrain_viewer --script assets/scripts/terrains/cliffs.lua --t
 `--guide <file.png>` lays an image over the terrain as a tracing aid, as World Machine's guide image
 does: a reference map, an outline or a hillshade, its first row at min z, stretched over
 `--guide-bounds minx,minz,maxx,maxz` (default `--bounds`; one of the two is required).
-`--guide-opacity <0-1>` (default 0.5, "Guide" in the panel) is how much of it shows; its alpha is kept,
+`--guide-opacity <0-1>` (default 0.5, the Display tab) is how much of it shows; its alpha is kept,
 so a transparent outline shows only its lines. With `--plan` a shot compares a terrain's outline with
 the one wanted at a glance:
 
@@ -253,8 +259,8 @@ to evaluate for the sample script.
 The ring follows the camera and switches to a coarser sample spacing as it pulls away. `--max-level` adds
 that many rings of detail beyond it (a clipmap), each a level coarser, twice the spacing and twice as far;
 0 is the finest ring alone. Tiles stream in nearest and faced first: at least `--tiles-per-frame` a frame,
-then more while `--stream-ms` (4) of the frame are not spent. The panel's "View" section changes the
-resolution, the detail rings, the tiles each way and the map scale while the viewer runs.
+then more while `--stream-ms` (4) of the frame are not spent. The panel's World tab changes the
+resolution and its View tab the detail rings, the tiles each way and the map scale while the viewer runs.
 
 `--follow` re-runs the script when the camera's focus has moved a quarter of the ring away, with
 `params.bounds` round it, for a world built only where it is looked at (`assets/scripts/lands/infinite_world.lua`);

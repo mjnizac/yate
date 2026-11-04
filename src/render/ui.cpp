@@ -46,6 +46,219 @@ constexpr i32_t kMaxLegendIds = 32;
     return colour;
 }
 
+/// Width of the docked sidebar in pixels, at most half the window.
+constexpr f32_t kSidebarWidth = 380.0f;
+
+/// The look: the dark theme with rounded controls, roomier spacing and one blue accent, so the panel reads
+/// as a settings pane and not as a debug overlay.
+void ApplyStyle() {
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style      = ImGui::GetStyle();
+    style.WindowRounding   = 0.0f;
+    style.FrameRounding    = 4.0f;
+    style.GrabRounding     = 4.0f;
+    style.TabRounding      = 4.0f;
+    style.PopupRounding    = 4.0f;
+    style.WindowPadding    = ImVec2(12.0f, 10.0f);
+    style.FramePadding     = ImVec2(8.0f, 4.0f);
+    style.ItemSpacing      = ImVec2(8.0f, 6.0f);
+    style.WindowBorderSize = 0.0f;
+    ImVec4* colours                 = style.Colors;
+    colours[ImGuiCol_WindowBg]      = ImVec4(0.09f, 0.10f, 0.12f, 0.94f);
+    colours[ImGuiCol_TitleBgActive] = ImVec4(0.12f, 0.14f, 0.17f, 1.00f);
+    colours[ImGuiCol_TitleBg]       = colours[ImGuiCol_TitleBgActive];
+    colours[ImGuiCol_FrameBg]       = ImVec4(0.16f, 0.18f, 0.22f, 1.00f);
+    colours[ImGuiCol_Tab]           = ImVec4(0.14f, 0.16f, 0.20f, 1.00f);
+    colours[ImGuiCol_TabActive]     = ImVec4(0.20f, 0.42f, 0.70f, 1.00f);
+    colours[ImGuiCol_TabHovered]    = ImVec4(0.26f, 0.50f, 0.80f, 1.00f);
+    colours[ImGuiCol_Header]        = ImVec4(0.20f, 0.42f, 0.70f, 0.55f);
+    colours[ImGuiCol_SliderGrab]    = ImVec4(0.30f, 0.56f, 0.90f, 1.00f);
+    colours[ImGuiCol_CheckMark]     = colours[ImGuiCol_SliderGrab];
+    colours[ImGuiCol_Button]        = ImVec4(0.20f, 0.42f, 0.70f, 0.70f);
+    // The swapchain is sRGB and ImGui's colours are sRGB too: written as they are they come out brighter,
+    // which made the panel a washed-out grey. Linearised, they come out as chosen.
+    for (ImVec4& colour : style.Colors) {
+        colour = ImVec4(std::pow(colour.x, 2.2f), std::pow(colour.y, 2.2f), std::pow(colour.z, 2.2f), colour.w);
+    }
+}
+
+/// A section heading inside a tab.
+void Section(const char* title) {
+    ImGui::Spacing();
+    ImGui::SeparatorText(title);
+}
+
+/// World Machine's Scene Setup: the spacing the script is run at, its heights and what it outputs.
+[[nodiscard]] b8_t WorldTab(Ui::Panels& panels) {
+    b8_t changed = false;
+    Section("Resolution");
+    // Powers of two only: a level's lattice is then a subset of the finer one's, as for the levels. The
+    // finest spacing reaches the script (it sees the spacing), so a change reloads.
+    i32_t exponent = static_cast<i32_t>(std::lround(std::log2(std::max(panels.resolution, 0.125f))));
+    std::array<char, 32> spacing{};
+    std::snprintf(spacing.data(), spacing.size(), "%g m", std::exp2(static_cast<f64_t>(exponent)));
+    if (ImGui::SliderInt("Finest", &exponent, -3, 14, spacing.data(), ImGuiSliderFlags_AlwaysClamp)) {
+        panels.resolution = static_cast<f32_t>(std::exp2(static_cast<f64_t>(exponent)));
+        changed           = true;
+    }
+    ImGui::Text("drawn at level %u: %g m per sample", panels.level, static_cast<f64_t>(panels.spacing));
+
+    Section("Heights");
+    ImGui::Text("%.0f .. %.0f m, as the script declares", static_cast<f64_t>(panels.heightRange[0]),
+                static_cast<f64_t>(panels.heightRange[1]));
+
+    Section("Outputs");
+    for (u32_t i = 0; i < panels.outputCount; ++i) {
+        ImGui::BulletText("%s  %g .. %g", panels.outputs[i], static_cast<f64_t>(panels.outputRanges[i][0]),
+                          static_cast<f64_t>(panels.outputRanges[i][1]));
+    }
+    return changed;
+}
+
+/// The camera and how the ring of tiles is laid round it: none of it reaches the script.
+void ViewTab(Ui::Panels& panels) {
+    Section("Camera");
+    ImGui::TextUnformatted(panels.cameraMode);
+    ImGui::Text("eye %.0f, %.0f, %.0f", static_cast<f64_t>(panels.eye[0]), static_cast<f64_t>(panels.eye[1]),
+                static_cast<f64_t>(panels.eye[2]));
+    ImGui::Checkbox("Plan view (top-down, no perspective)", &panels.plan);
+    ImGui::SliderFloat("Map scale", &panels.mapScale, 0.25f, 16.0f, "x%.2f",
+                       ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+
+    Section("Sun");
+    ImGui::SliderFloat("Azimuth", &panels.sun[0], 0.0f, 360.0f, "%.0f deg");
+    ImGui::SliderFloat("Elevation", &panels.sun[1], 1.0f, 90.0f, "%.0f deg");
+
+    Section("Tiles");
+    // Rings of detail beyond the finest, each a level coarser and twice as far: no reload.
+    ImGui::SliderInt("Detail rings", &panels.maxLevel, 0, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderInt("Tiles each way", &panels.ringRadius, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+}
+
+/// The ids' colours of a shown output, as many as its range holds, up to `kMaxLegendIds`.
+void IdLegend(const Ui::Panels& panels) {
+    const i32_t first = static_cast<i32_t>(std::ceil(panels.shownRange[0]));
+    const i32_t last  = std::min(static_cast<i32_t>(std::floor(panels.shownRange[1])), first + kMaxLegendIds - 1);
+    for (i32_t id = first; id <= last; ++id) {
+        const std::array<f32_t, 3> colour = IdColour(id);
+        std::array<char, 16>       label{};
+        std::snprintf(label.data(), label.size(), "%d", id);
+        if ((id - first) % 8 != 0) {
+            ImGui::SameLine();
+        }
+        ImGui::ColorButton(label.data(), ImVec4{colour[0], colour[1], colour[2], 1.0f}, ImGuiColorEditFlags_NoTooltip,
+                           ImVec2{14.0f, 14.0f});
+        ImGui::SameLine();
+        ImGui::TextUnformatted(label.data());
+    }
+}
+
+/// What is drawn over the relief: water, a shown output and the guide image. Viewer state, no reload.
+void DisplayTab(Ui::Panels& panels) {
+    Section("Water");
+    ImGui::Checkbox("Water", &panels.waterEnabled);
+    if (panels.waterEnabled) {
+        // The level is the sea's; lakes and rivers carry their own surfaces from the script.
+        ImGui::Checkbox("Sea", &panels.waterSea);
+        ImGui::SameLine();
+        ImGui::Checkbox("Lakes", &panels.waterLakes);
+        ImGui::SameLine();
+        ImGui::Checkbox("Rivers", &panels.waterRivers);
+        ImGui::DragFloat("Sea level (m)", &panels.waterLevel, 1.0f);
+        ImGui::ColorEdit3("Colour", panels.waterColour.data());
+        ImGui::SliderFloat("Opacity", &panels.waterOpacity, 0.0f, 1.0f);
+    }
+
+    // Any R2->R1 output painted over the terrain: a ramp over its declared range, or a colour an id.
+    Section("Show output");
+    const char* current = panels.shown >= 0 ? panels.outputs[static_cast<usize_t>(panels.shown)] : "(none)";
+    if (ImGui::BeginCombo("Output", current)) {
+        if (ImGui::Selectable("(none)", panels.shown < 0)) {
+            panels.shown = -1;
+        }
+        for (u32_t i = 0; i < panels.outputCount; ++i) {
+            if (ImGui::Selectable(panels.outputs[i], panels.shown == static_cast<i32_t>(i))) {
+                panels.shown = static_cast<i32_t>(i);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (panels.shown >= 0) {
+        ImGui::Checkbox("As ids", &panels.showIds);
+        ImGui::SameLine();
+        ImGui::Text("%g .. %g", static_cast<f64_t>(panels.shownRange[0]), static_cast<f64_t>(panels.shownRange[1]));
+        if (panels.showIds) {
+            IdLegend(panels);
+        }
+    }
+
+    if (panels.guide) {
+        Section("Guide image");
+        ImGui::SliderFloat("Opacity##guide", &panels.guideOpacity, 0.0f, 1.0f, "%.2f");
+    }
+}
+
+/// The script's parameters, generated from whatever it was given: the engine does not know what a
+/// parameter means, only its name and its text, so a numeric one gets a drag field and anything else a
+/// text box. Returns true when one changed or a reload was asked for.
+[[nodiscard]] b8_t ScriptTab(Ui::Panels& panels) {
+    b8_t changed = ImGui::Button("Reload (R)");
+    ImGui::SameLine();
+    ImGui::TextDisabled("load %llu", static_cast<unsigned long long>(panels.loadCount));
+    Section("Parameters");
+    if (panels.params == nullptr || panels.params->Count() == 0) {
+        ImGui::TextDisabled("none given (--param key=value)");
+        return changed;
+    }
+    for (usize_t i = 0; i < panels.params->Count(); ++i) {
+        const std::string_view key  = panels.params->KeyAt(i);
+        const std::string_view text = panels.params->ValueAt(i);
+
+        std::array<char, 64> label{};
+        detail::CopyBounded(label, key);
+        std::array<char, 64> value{};
+        detail::CopyBounded(value, text);
+        char*       end     = nullptr;
+        const f64_t number  = std::strtod(value.data(), &end);
+        const b8_t  numeric = end != nullptr && *end == 0 && value[0] != 0;
+
+        ImGui::PushID(static_cast<int>(i));
+        if (numeric) {
+            f32_t editable = static_cast<f32_t>(number);
+            // Step scaled to the value, so a frequency of 0.002 and an amplitude of 400 are both
+            // adjustable with the same gesture.
+            const f32_t step = std::max(std::abs(editable) * 0.01f, 1e-4f);
+            if (ImGui::DragFloat(label.data(), &editable, step)) {
+                std::array<char, 64> updated{};
+                std::snprintf(updated.data(), updated.size(), "%g", static_cast<f64_t>(editable));
+                (void)panels.params->Set(key, std::string_view{updated.data()});
+                changed = true;
+            }
+        } else if (ImGui::InputText(label.data(), value.data(), value.size(), ImGuiInputTextFlags_EnterReturnsTrue)) {
+            (void)panels.params->Set(key, std::string_view{value.data()});
+            changed = true;
+        }
+        ImGui::PopID();
+    }
+    return changed;
+}
+
+/// One line along the bottom: what the frame costs and what the ring is doing.
+void StatusBar(const Ui::Panels& panels, f32_t height) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - height));
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, height));
+    if (ImGui::Begin("status", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoFocusOnAppearing)) {
+        ImGui::Text("%.0f fps  %.2f ms   |   %u of %u tiles drawn, %u streaming   |   level %u, %g m/sample   |   %s%s",
+                    static_cast<f64_t>(panels.framesPerSecond), static_cast<f64_t>(panels.frameMilliseconds),
+                    panels.tilesDrawn, panels.tileCount, panels.missingTiles, panels.level,
+                    static_cast<f64_t>(panels.spacing), panels.plan ? "plan view" : panels.cameraMode,
+                    panels.wireframe ? ", wireframe" : "");
+    }
+    ImGui::End();
+}
+
 /// ImGui allocates through the engine's general allocator rather than `malloc`, so it shows up as part
 /// of `CPU/General` instead of swelling the untracked `operator new` pool.
 ///
@@ -106,7 +319,7 @@ Status Ui::Initialize(vulkan::Context& context, const vulkan::Window& window,
     // No .ini: the viewer has one layout and writing a file next to the executable would be a surprise.
     io.IniFilename  = nullptr;
     io.LogFilename  = nullptr;
-    ImGui::StyleColorsDark();
+    ApplyStyle();
 
     const std::array<VkDescriptorPoolSize, 1> sizes{
         VkDescriptorPoolSize{.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -181,165 +394,46 @@ b8_t Ui::Draw(Panels& panels) {
     }
     b8_t changed = false;
 
-    ImGui::SetNextWindowPos(ImVec2(12.0f, 12.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Terrain", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted(panels.scriptPath);
-        ImGui::Text("%u of %u tiles drawn, %u streaming", panels.tilesDrawn, panels.tileCount,
-                    panels.missingTiles);
-        ImGui::Text("level %u, %.2f m per sample%s", panels.level,
-                    static_cast<f64_t>(panels.spacing), panels.wireframe ? ", wireframe" : "");
-        ImGui::Text("%.1f fps (%.2f ms)", panels.framesPerSecond, panels.frameMilliseconds);
-        ImGui::Text("load %llu", static_cast<unsigned long long>(panels.loadCount));
-        ImGui::Separator();
-
-        ImGui::TextUnformatted(panels.cameraMode);
-        ImGui::SameLine();
-        ImGui::Checkbox("Plan view", &panels.plan);
-        ImGui::Text("eye %.0f, %.0f, %.0f", static_cast<f64_t>(panels.eye[0]),
-                    static_cast<f64_t>(panels.eye[1]), static_cast<f64_t>(panels.eye[2]));
-
-        // The view. The finest spacing reaches the script (it sees the spacing), so it reloads; the rings,
-        // the tiles and the map's horizontal scale are the viewer's own and take effect at once.
-        ImGui::Separator();
-        // Folded by default, so the panel covers no more of the terrain than it did.
-        if (ImGui::CollapsingHeader("View")) {
-            // Powers of two only: a level's lattice is then a subset of the finer one's, as for the levels.
-            i32_t exponent = static_cast<i32_t>(std::lround(std::log2(std::max(panels.resolution, 0.125f))));
-            std::array<char, 32> spacing{};
-            std::snprintf(spacing.data(), spacing.size(), "%g m", std::exp2(static_cast<f64_t>(exponent)));
-            if (ImGui::SliderInt("Resolution", &exponent, -3, 14, spacing.data(), ImGuiSliderFlags_AlwaysClamp)) {
-                panels.resolution = static_cast<f32_t>(std::exp2(static_cast<f64_t>(exponent)));
-                changed           = true;
+    // A sidebar docked to the right, the full height above the status bar, as the settings pane of a
+    // modern tool is: fixed, so it never wanders over the terrain, and tabbed after World Machine's
+    // project dialog (its world, the view, what is drawn over it, and the script).
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const f32_t          status   = ImGui::GetFrameHeight() + 2.0f * ImGui::GetStyle().WindowPadding.y;
+    const f32_t          width    = std::min(kSidebarWidth, viewport->WorkSize.x * 0.5f);
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - width, viewport->WorkPos.y));
+    ImGui::SetNextWindowSize(ImVec2(width, viewport->WorkSize.y - status));
+    if (ImGui::Begin("YATE", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextDisabled("%s", panels.scriptPath);
+        if (ImGui::BeginTabBar("tabs")) {
+            if (ImGui::BeginTabItem("World")) {
+                changed = WorldTab(panels) || changed;
+                ImGui::EndTabItem();
             }
-            // Rings of detail beyond the finest, each a level coarser and twice as far: no reload.
-            ImGui::SliderInt("Detail rings", &panels.maxLevel, 0, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
-            ImGui::SliderInt("Tiles each way", &panels.ringRadius, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
-            ImGui::SliderFloat("Map scale", &panels.mapScale, 0.25f, 16.0f, "x%.2f",
-                               ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
-            ImGui::SliderFloat("Sun azimuth", &panels.sun[0], 0.0f, 360.0f, "%.0f deg");
-            ImGui::SliderFloat("Sun elevation", &panels.sun[1], 1.0f, 90.0f, "%.0f deg");
-        }
-
-        // Water is a property of the viewer, not of the script, so its controls are always here and
-        // changing one never asks for a reload.
-        ImGui::Separator();
-        ImGui::Checkbox("Water", &panels.waterEnabled);
-        if (panels.waterEnabled) {
-            // The level is the sea's; lakes and rivers carry their own surfaces from the script.
-            ImGui::Checkbox("Sea", &panels.waterSea);
-            ImGui::SameLine();
-            ImGui::Checkbox("Lakes", &panels.waterLakes);
-            ImGui::SameLine();
-            ImGui::Checkbox("Rivers", &panels.waterRivers);
-            ImGui::DragFloat("Sea level (m)", &panels.waterLevel, 1.0f);
-            ImGui::ColorEdit3("Colour", panels.waterColour.data());
-            ImGui::SliderFloat("Opacity", &panels.waterOpacity, 0.0f, 1.0f);
-        }
-
-        if (panels.guide) {
-            ImGui::Separator();
-            ImGui::SliderFloat("Guide", &panels.guideOpacity, 0.0f, 1.0f, "%.2f");
-        }
-
-        // Any R2->R1 output painted over the terrain: a ramp over its declared range, or a colour an id.
-        if (panels.outputCount != 0) {
-            ImGui::Separator();
-            const char* current = panels.shown >= 0 ? panels.outputs[static_cast<usize_t>(panels.shown)] : "(none)";
-            if (ImGui::BeginCombo("Show", current)) {
-                if (ImGui::Selectable("(none)", panels.shown < 0)) {
-                    panels.shown = -1;
-                }
-                for (u32_t i = 0; i < panels.outputCount; ++i) {
-                    if (ImGui::Selectable(panels.outputs[i], panels.shown == static_cast<i32_t>(i))) {
-                        panels.shown = static_cast<i32_t>(i);
-                    }
-                }
-                ImGui::EndCombo();
+            if (ImGui::BeginTabItem("View")) {
+                ViewTab(panels);
+                ImGui::EndTabItem();
             }
-            if (panels.shown >= 0) {
-                ImGui::Checkbox("As ids", &panels.showIds);
-                ImGui::SameLine();
-                ImGui::Text("%g .. %g", static_cast<f64_t>(panels.shownRange[0]), static_cast<f64_t>(panels.shownRange[1]));
+            if (ImGui::BeginTabItem("Display")) {
+                DisplayTab(panels);
+                ImGui::EndTabItem();
             }
-            // The ids' colours, as many as the range holds, up to `kMaxLegendIds`; none for a ramp.
-            const i32_t first = static_cast<i32_t>(std::ceil(panels.shownRange[0]));
-            const i32_t last  = panels.shown >= 0 && panels.showIds
-                                    ? std::min(static_cast<i32_t>(std::floor(panels.shownRange[1])), first + kMaxLegendIds - 1)
-                                    : first - 1;
-            for (i32_t id = first; id <= last; ++id) {
-                const std::array<f32_t, 3> colour = IdColour(id);
-                std::array<char, 16>       label{};
-                std::snprintf(label.data(), label.size(), "%d", id);
-                if ((id - first) % 8 != 0) {
-                    ImGui::SameLine();
-                }
-                ImGui::ColorButton(label.data(), ImVec4{colour[0], colour[1], colour[2], 1.0f},
-                                   ImGuiColorEditFlags_NoTooltip, ImVec2{14.0f, 14.0f});
-                ImGui::SameLine();
-                ImGui::TextUnformatted(label.data());
+            if (ImGui::BeginTabItem("Script")) {
+                changed = ScriptTab(panels) || changed;
+                ImGui::EndTabItem();
             }
-        }
-
-        // The parameter list is generated from whatever the script was given, which is the whole of
-        // "auto-generated": the engine does not know what a parameter means, only its name and its text,
-        // so a numeric one gets a drag field and anything else gets a text box.
-        if (panels.params != nullptr && panels.params->Count() != 0) {
-            ImGui::Separator();
-            ImGui::TextUnformatted("Parameters");
-            for (usize_t i = 0; i < panels.params->Count(); ++i) {
-                const std::string_view key  = panels.params->KeyAt(i);
-                const std::string_view text = panels.params->ValueAt(i);
-
-                std::array<char, 64> label{};
-                detail::CopyBounded(label, key);
-
-                char*       end    = nullptr;
-                std::array<char, 64> value{};
-                detail::CopyBounded(value, text);
-                const f64_t number = std::strtod(value.data(), &end);
-                const b8_t  numeric = end != nullptr && *end == 0 && value[0] != 0;
-
-                ImGui::PushID(static_cast<int>(i));
-                if (numeric) {
-                    f32_t editable = static_cast<f32_t>(number);
-                    // Step scaled to the value, so a frequency of 0.002 and an amplitude of 400 are both
-                    // adjustable with the same gesture.
-                    const f32_t step =
-                        std::max(std::abs(editable) * 0.01f, 1e-4f);
-                    if (ImGui::DragFloat(label.data(), &editable, step)) {
-                        std::array<char, 64> updated{};
-                        std::snprintf(updated.data(), updated.size(), "%g",
-                                      static_cast<f64_t>(editable));
-                        (void)panels.params->Set(key, std::string_view{updated.data()});
-                        changed = true;
-                    }
-                } else {
-                    std::array<char, 64> editable{};
-                    detail::CopyBounded(editable, text);
-                    if (ImGui::InputText(label.data(), editable.data(), editable.size(),
-                                         ImGuiInputTextFlags_EnterReturnsTrue)) {
-                        (void)panels.params->Set(key, std::string_view{editable.data()});
-                        changed = true;
-                    }
-                }
-                ImGui::PopID();
-            }
-            if (ImGui::Button("Reload")) {
-                changed = true;
-            }
+            ImGui::EndTabBar();
         }
     }
     ImGui::End();
+    StatusBar(panels, status);
 
     // The error panel is the spec's requirement that an error reaches the person looking at the screen
-    // and not only the log (spec section 11). Red, pinned to the bottom, and only present when there is
-    // something to say.
+    // and not only the log (spec section 11). Red, over the status bar left of the sidebar, and only
+    // present when there is something to say.
     if (panels.error != nullptr && panels.error[0] != 0) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(12.0f, viewport->WorkSize.y - 12.0f), ImGuiCond_Always,
-                                ImVec2(0.0f, 1.0f));
-        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - 24.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 12.0f, viewport->WorkPos.y + viewport->WorkSize.y - status - 12.0f),
+                                ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - width - 24.0f, 0.0f), ImGuiCond_Always);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.30f, 0.06f, 0.06f, 0.92f));
         if (ImGui::Begin("Script error", nullptr,
                          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar

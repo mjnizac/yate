@@ -880,7 +880,7 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.tilesDrawn        = state.tilesDrawn;
     panels.tileCount         = static_cast<u32_t>(state.cache.tiles.size());
     panels.level             = state.level;
-    panels.spacing           = state.terrain.spacing;
+    panels.spacing           = SpacingOf(state.settings.resolution, state.level);
     panels.missingTiles      = state.missingTiles;
     panels.wireframe         = state.wireframe;
     panels.loadCount         = state.loadCount;
@@ -905,13 +905,15 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.guide             = state.guide.texels.IsValid();
     panels.guideOpacity      = state.settings.guideOpacity;
     panels.shownRange        = {state.terrain.shownMinimum, state.terrain.shownMaximum};
+    panels.heightRange       = {state.terrain.heightMinimum, state.terrain.heightMaximum};
     static_assert(Ui::Panels::kMaxOutputs == terrain::Graph::kMaxOutputs);
     for (usize_t i = 0; state.live != nullptr && i < state.live->graph.OutputCount(); ++i) {
         const terrain::OutputRequest& output = state.live->graph.Output(i);
         if (output.value.mapping == terrain::Mapping{terrain::Domain::R2, 1}) {
             panels.shown = std::string_view{output.name.data()} == state.settings.show
                                ? static_cast<i32_t>(panels.outputCount) : panels.shown;
-            panels.outputs[panels.outputCount++] = output.name.data();
+            panels.outputRanges[panels.outputCount] = {output.rangeMin, output.rangeMax};
+            panels.outputs[panels.outputCount++]    = output.name.data();
         }
     }
     const i32_t shown = panels.shown;

@@ -78,6 +78,9 @@ public:
         /// As many as a graph has outputs (`Graph::kMaxOutputs`, asserted where the list is filled).
         static constexpr usize_t kMaxOutputs = 8;
         std::array<const char*, kMaxOutputs> outputs{};
+        /// Each output's declared range, and the height's, for the World tab.
+        std::array<std::array<f32_t, 2>, kMaxOutputs> outputRanges{};
+        std::array<f32_t, 2>                          heightRange{};
         u32_t                      outputCount = 0;
         i32_t                      shown       = -1;
         b8_t                       showIds     = false;
