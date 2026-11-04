@@ -290,6 +290,16 @@ Milestone state is in `docs/status.md`, open work in `docs/todo.md`, and the pro
   `15_filters.lua`; a curve through points is a dense `Terrain.Grid` read at the input, and the Equalizer a
   captured `Terrain.Sample`, so both stay the same in every section. Strata are weighted by slope, since
   on flat ground a tilted terrace is a stripe pattern the device does not have.
+- **The second World Machine pass (2026-11-04), from build 4020's own preset and project files.** The
+  licence forbids disassembly, so the catalogue came from the parameter blocks the `.tmd`, `.dev` and
+  `.pre` files carry, checked against single-device presets and the help site. Ops gained what no
+  composition reaches: the multiscale octave weighting and the Flat Middle and Terraced styles in the fBm
+  macro (the weight carries its gradient, so the gradient stays exact; the power is an input field, since
+  the noise's ten parameter words are full), a hydraulic hardness map, a median blur (counted, not sorted,
+  so it is order-free), a blur radius in metres and the drainage fill slope (Basin Restructuring).
+  Everything else is prelude: Coastal Erosion is a remap of height around the water (it has no distance
+  to the coast, so a cliff's face is as wide as the input takes to rise), Snow keeps only the depth a
+  thermal pass leaves above the input, Mimic and wetness measure on the CPU grid.
 - **Parameter words 8 and 9 belong to every dispatch.** The compiler writes the iteration count and index
   there for all nodes, not only iterative ones; `Cells` first kept its warp flag in word 9 and silently
   ignored its position. Flags go in a shared word; `test_geometry` checks a warped `Cells`.

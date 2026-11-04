@@ -671,6 +671,16 @@ they are built. Each returns handles like any op.
 | `Curves.Equalize{ input, region, cell = 64, amount = 1 }` | Equalizer with a captured sample | `Terrain.Sample` over `region`, its quantiles as a `Curves.Table` | the input spread evenly over its own range, the same in every section |
 | `Strata.Apply{ input, step, tilt, heading, strength, sharpness, layers, bedding, mask, smoothness, flat, steep }` | Strata | a terrace of `input + plane`, the plane tilted `tilt` degrees towards `heading`, minus the plane, blended in on slopes only | height, exposure, bed index |
 | `Erosion.Accumulate{ input, direction, lift = 0.2, talus = 0.6, iterations = 32 }` | Snow on a gradient with an angle selector | tilt, `Erosion.Thermal{ mass_balance = 1 }`, untilt | material built up on the side facing away from `direction` |
+| `Erosion.Coastal{ input, level = 0, beach = 4, flatness = 0.25, cliffs = 0, cliff_height = 20, lip = 4, shelf = 8, transition = 1, smooth_underwater = 0, depth = 30 }` | Coastal Erosion | a remap of the height around `level`: the band within `beach` m flattened, or where `cliffs` (number or field) is 1 a wall `cliff_height` high with a lip rounded over `lip` m of rise on a platform `shelf` deep; the sea floor blurred | height, beach mask, cliff mask |
+| `Erosion.Snow{ input, snowfall = 2, line, taper = 50, stickiness = 0.6, iterations = 24, melt }` | Snow | `Erosion.Thermal` over the terrain plus the snow that fell, keeping only the depth above the input | surface, depth |
+| `Erosion.Weathering{ input, fracture, boulders, intensity = 1, production, talus = 0.7, rock = 1, iterations = 24, mass_balance, seed }` | Thermal Weathering, Fracture Size and Talus Size | two-phase `Erosion.Thermal` whose strength map is Cells plates `fracture` m across; Cells F1 domes `boulders` m across raised on the talus | surface, talus depth |
+| `Curves.SoftClamp{ input, min = 0, max = 1, softness = (max - min) / 10, normalize }` | Clamp, Soft Clipping and Normalize | `SmoothMin` and `SmoothMax` with the bounds | the input bent into its bounds, `[0, 1]` when normalized |
+| `Masks.Curvature{ input, kind = "profile", radius = 0, scale = 1 }` | Select Convexity, curvature types | second derivatives by `Terrain.Gradient` twice (Zevenbergen and Thorne): `profile`, `plan`, `tangent`, `total` | curvature in 1/m, positive where convex |
+| `Combine.HeightMatch{ a, b, mask, strength = 50, favor = "higher" }` | Chooser, Height Matching | the partial mask shifted by `(b - a) / strength` | where the mask is partial, the higher (or lower) input wins |
+| `Terrain.Mimic{ input, reference, region, cell = 32, radius = 8, elevation = 1, roughness = 1 }` | Mimic | `Terrain.Sample` of both over `region`: mean, spread and roughness; an affine map and the detail above a blur scaled | the input with the reference's elevation and roughness |
+| `Shapes.Scatter{ object, spacing = 200, jitter = 1, density = 1, size_jitter = 0.3, height_jitter = 0.3, seed }` | Instance Scattering, jittered grid | `Noises.Cells` sites, `object(position)` in each cell's local metres | instances (each cut at its cell's edge), the random value per cell |
+
+`Erosion.Coastal` works in heights, not distances: how wide a cliff's face is depends on how fast the input rises through `transition` and `lip`, so give it a coast that already rises (a `Lands` height, or `Masks.Slope` as `cliffs`). For a coast drawn as a distance, `Lands.*` has its own beach and cliff profiles. `Erosion.Snow` keeps the ground the thermal pass moves out of the result, so the snow depth is never negative and the ground is the input. `Terrain.Mimic` measures on the CPU like `Curves.Equalize`.
 
 `Curves.Equalize` measures on the CPU, where neighbourhood and erosion ops read their input unchanged, so
 measure the field before them. `Strata.Apply` shows beds where the input blurred over `smoothness`
@@ -1583,6 +1593,14 @@ on the CPU and returns its fields as `Terrain.Grid` values:
 `Water.Apply{ height, water }` carves the rivers into a terrain at full resolution (a parabolic bed, banks
 rising at `bank`) and returns `height`, `lakes` and `rivers`: water surfaces, above the ground where there
 is water and below it elsewhere. Outputs named `lakes` and `rivers` are drawn by the viewer's water.
+World Machine's River device options: `channel = "trapezoid"` with `aspect` (0 a box, 1 a triangle;
+default 0.5) cuts a flat-bottomed bed instead of the parabola, and `floodplain = { height, width }` lowers
+the ground beside each river to `height` metres over its water out to `width` metres past its banks.
+
+`Masks.Wetness{ values, size, origin, cell, sea_level, wetness = 0.5 }` is Select Wetness on the same kind
+of grid: the topographic wetness index `ln(a / tan b)` (drained area per metre of contour over the slope
+of the drained surface) mapped to [0, 1], a `Terrain.Grid`. More `wetness` saturates the valleys first and
+then the hillslopes.
 
 ```lua
 local water = Water.Drain{ values = carved, size = { n, n }, origin = { x0, z0 }, cell = 50, sea_level = 0 }

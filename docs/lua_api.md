@@ -78,7 +78,7 @@ numbers drift, and this one is the index.
 
 | Call | Produces | Notes |
 | --- | --- | --- |
-| `Noises.fBm`, `Noises.Ridged`, `Noises.Billow`, `Noises.Cellular` | `Rn -> R1` value, `Rn -> Rn` gradient | fractal noise with its exact analytic gradient, both out of one evaluation; `fBm{ kind = ... }` is the same op. `Cellular` (R2 only) is Worley's F2 - F1 as `1 - 2 (F2 - F1)`: ridges on the cell boundaries around a pit at each point, planar faces between; `order = 3` makes it F3 - F1, with more break lines and triple junctions (cracks and blocks). `position = Shapes.Warp{}` (any `R2->R2` field in metres) samples it elsewhere, which curves ridges; the gradient is then the noise's at that position, without the warp's Jacobian |
+| `Noises.fBm`, `Noises.Ridged`, `Noises.Billow`, `Noises.Cellular` | `Rn -> R1` value, `Rn -> Rn` gradient | fractal noise with its exact analytic gradient, both out of one evaluation; `fBm{ kind = ... }` is the same op. `Cellular` (R2 only) is Worley's F2 - F1 as `1 - 2 (F2 - F1)`: ridges on the cell boundaries around a pit at each point, planar faces between; `order = 3` makes it F3 - F1, with more break lines and triple junctions (cracks and blocks). `position = Shapes.Warp{}` (any `R2->R2` field in metres) samples it elsewhere, which curves ridges; the gradient is then the noise's at that position, without the warp's Jacobian. `kind = "flat_middle"` or `"terraced"` and `multiscale = "signal"` or `"elevation"` (with `multiscale_power`) are World Machine's Advanced Perlin styles and multiscale types |
 | `Terrain.Const` | `Rn -> R1` | a constant; usually unnecessary, since a bare number works wherever a field does |
 | `Terrain.Coords` | `Rn -> Rn` | the world position **in metres**; on an `R2->R2` world z is `.z` (the second component) |
 | `Terrain.Normals` | `R2->R3` | takes a **gradient**, not a height |
@@ -91,7 +91,7 @@ numbers drift, and this one is the index.
 | `Filters.Expand`, `Filters.Shrink` | the input's mapping | the same window taking its largest or smallest value: grows or shrinks a mask, dilates or erodes a height; `falloff = "cone"` or `"round"` with a `slope` is the constant-slope (Linear Slope) or rounded (Gaussian) expander |
 | `Noises.Cells` | `R2->R1` value, `.cell` `R2->R3` | one octave of Voronoi: F1..F4 and their differences, or a random value per cell; four metrics, jitter, square or hex lattice; `.cell` is the nearest site in metres and its random value, Crystallize through `position` |
 | `Combine.Atan2` | the shared mapping | the angle of (x, y) in radians |
-| `Filters.Open`, `Close`, `FrequencySplit`, `DirectionalBlur`, `Masks.Convexity`, `Aspect`, `Curves.Table`, `Ramp`, `Equalize`, `Strata.Apply`, `Erosion.Accumulate` | as their input | World Machine devices composed in `15_filters.lua` |
+| `Filters.Open`, `Close`, `FrequencySplit`, `DirectionalBlur`, `Masks.Convexity`, `Curvature`, `Aspect`, `Curves.Table`, `Ramp`, `Equalize`, `SoftClamp`, `Strata.Apply`, `Erosion.Accumulate`, `Coastal`, `Snow`, `Weathering`, `Combine.HeightMatch`, `Terrain.Mimic`, `Shapes.Scatter` | as their input | World Machine devices composed in `15_filters.lua`; `Masks.Wetness` (Select Wetness) is in `45_water.lua` |
 | `Filters.Displace` | `R2->R1` | a finished field read where `by` (`R2->R2`, metres) moves each sample, capped at `radius` samples; bends what a neighbourhood op made |
 | `Vec.Combine` | `Rn -> Rm` | a positional list of 2 to 4 scalars |
 | `Terrain.Transform` | `R2->R2` | moves, turns and scales a position field; what places a shape |

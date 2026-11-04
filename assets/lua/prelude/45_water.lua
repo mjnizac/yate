@@ -72,8 +72,39 @@ function Water.Drain(t)
     }
 end
 
+-- World Machine's Select Wetness: the topographic wetness index ln(a / tan b) of a grid the script built
+-- (Water.Drain's `values`, `size`, `origin`, `cell`), where a is the area drained through each cell per
+-- metre of contour and b its slope on the drained surface, mapped to [0, 1]: `wetness` in [0, 1] is how
+-- much water there is, so more of the valleys and then the hillslopes saturate. A Terrain.Grid.
+function Masks.Wetness(t)
+    check("Masks.Wetness", t, { "values", "size", "origin", "cell", "position", "sea_level", "wetness" })
+    if type(t.values) ~= "table" or type(t.size) ~= "table" or type(t.origin) ~= "table" then
+        fail("Masks.Wetness needs 'values' (a list of heights, x fastest), 'size' = { w, d } and 'origin' = { x, z }")
+    end
+    local cell = t.cell or 50.0
+    local d = Hydrology.Drain{ size = t.size, cell = cell, height = t.values, sea_level = t.sea_level, channel_area = 1e30 }
+    local n, m, h = t.size[1], t.size[2], d.height
+    local lo = 14 - 10 * (t.wetness or 0.5)
+    local wet = {}
+    for z = 1, m do
+        for x = 1, n do
+            local i  = (z - 1) * n + x
+            local gx = (h[(z - 1) * n + math.min(x + 1, n)] - h[(z - 1) * n + math.max(x - 1, 1)]) / (2 * cell)
+            local gz = (h[(math.min(z + 1, m) - 1) * n + x] - h[(math.max(z - 1, 1) - 1) * n + x]) / (2 * cell)
+            local twi = math.log(d.area[i] / cell / math.max(math.sqrt(gx * gx + gz * gz), 1e-3))
+            wet[i] = math.min(math.max((twi - lo) / 6, 0), 1)
+        end
+    end
+    -- Clamped, because Catmull-Rom overshoots where the index saturates within a cell.
+    return Curves.Clamp{ input = Terrain.Grid{ values = wet, size = t.size, origin = t.origin, cell = cell,
+                                               position = t.position }, min = 0, max = 1 }
+end
+
+-- `channel = "trapezoid"` cuts a flat-bottomed bed whose sides slant by `aspect` (0 a box, 1 a triangle)
+-- instead of the parabola, and `floodplain = { height, width }` lowers the ground beside each river to
+-- `height` metres over its water out to `width` metres from its banks, the River device's options.
 function Water.Apply(t)
-    check("Water.Apply", t, { "height", "water", "bank", "rivers" })
+    check("Water.Apply", t, { "height", "water", "bank", "rivers", "channel", "aspect", "floodplain" })
     local w = t.water
     if type(w) ~= "table" or w.distance == nil then
         fail("Water.Apply needs 'water', the result of Water.Drain")
@@ -88,9 +119,22 @@ function Water.Apply(t)
         -- Half the width, never zero, so the bed's shape stays defined where no river is near.
         local half = w.width * 0.5 + 1.0
         local u    = w.distance / half
-        local bed  = w.level - w.depth * Curves.Clamp{ input = 1.0 - u * u, min = 0.0, max = 1.0 }
+        local shape = 1.0 - u * u
+        if t.channel == "trapezoid" then
+            shape = (1.0 - u) * (1 / math.max(t.aspect or 0.5, 1e-3))
+        elseif t.channel ~= nil and t.channel ~= "curved" then
+            fail("Water.Apply expects channel curved or trapezoid, got '" .. tostring(t.channel) .. "'")
+        end
+        local bed  = w.level - w.depth * Curves.Clamp{ input = shape, min = 0.0, max = 1.0 }
         local rise = Curves.Clamp{ input = w.distance - half, min = 0.0, max = 100000.0 } * bank
-        height = Combine.Min{ a = height, b = bed + rise }
+        local channel = bed + rise
+        if t.floodplain ~= nil then
+            local fp = t.floodplain
+            local plain = w.level + (fp[1] or fp.height or 2.0)
+                          + Curves.Clamp{ input = w.distance - half - (fp[2] or fp.width or 100.0), min = 0.0, max = 100000.0 } * bank
+            channel = Combine.Min{ a = channel, b = plain }
+        end
+        height = Combine.Min{ a = height, b = channel }
         -- The river's level over its bed, falling 200 m away within a few metres of the banks, so the
         -- surface lies under the ground everywhere a river is not.
         rivers = w.level - Curves.Smoothstep{ input = w.distance - half, min = 0.0, max = 6.0 } * 200.0

@@ -80,7 +80,13 @@ The goal is that a terrain is composed from validated examples and judged by num
       The World Machine devices these lean on now exist (`Noises.Cells` with every F-style and metric,
       cone/round `Filters.Expand`, thermal `mass_balance` and `two_phase`, `Strata.Apply` with spatial
       bedding, `Curves.Ramp`), recreated against the forum threads they came from; none is in the alpine
-      script yet.
+      script yet. Since then: `multiscale` noise (the likeliest fix for the missing fine relief), hydraulic
+      `hardness`, `Erosion.Coastal`, `Weathering`, `Snow`, `Masks.Curvature` and `Wetness`.
+- [ ] **World Machine's multiscale erosion** (Erosion's Multiscale Synthesis and Scale Independence) needs a
+      coarse-to-fine pass the sectioned graph cannot run: the erosion at a coarser grid than the job's. A
+      design decision (a coarse GPU grid op, or `Terrain.Bake` in section 5), not a parameter.
+- [ ] Not taken from World Machine: vector displacement (VDM, build 4059: overhangs and caves), Flow
+      Restructure's drainage-mask outlets, the River device's Shields depth and its GCS library.
 - [ ] **Cliffs, what is open:** no heightmap reference with a known scale exists, so its case holds guards, not
       ranges; the chutes' heads are rounded capsules; the sea cliffs are low against the escarpment; 0.3 % of the
       land is closed depressions; `strata` and `debris` outputs are not used by the viewer's palette; the

@@ -1895,6 +1895,68 @@ void TestMedianBlur() {
     CHECK(!refused.Ok() && refused.error.find("at most 3") != std::string::npos);
 }
 
+/// The World Machine devices composed in the prelude, each against what it is built to do.
+void TestPreludeDevices() {
+    test::Section("prelude devices: coast, soft clamp, curvature, height match, mimic, snow, scatter, wetness");
+    const auto range = [](const Field& field) {
+        float lo = 1e30f, hi = -1e30f;
+        for (const float v : field.values) {
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+        return std::pair{lo, hi};
+    };
+    // Beaches: the band within 4 m of the water at a quarter of its slope, the rest moved by the band.
+    const Field beach = Export("coastal_beach", R"(
+    local p = Terrain.Coords{}.x * 0.05
+    local result = Erosion.Coastal{ input = p, beach = 4 } - (p - Curves.Clamp{ input = p, min = -4, max = 4 } * 0.75))");
+    CHECK(beach.Ok() && std::max(std::fabs(range(beach).first), std::fabs(range(beach).second)) < 1e-4f);
+    // Cliffs: below the transition the water is cut to the 8 m platform; above the lip the land is a 20 m wall.
+    const Field cliff = Export("coastal_cliff", "    local result = Erosion.Coastal{ input = Terrain.Coords{}.x * 0.05, cliffs = 1 }");
+    CHECK(cliff.Ok());
+    unsigned wrong = 0;
+    for (std::size_t row = 0; cliff.Ok() && row < cliff.grid.side; ++row) {
+        for (std::size_t column = 0; column < cliff.grid.side; ++column) {
+            const double d = WorldX(cliff, column) * 0.05;
+            const float  v = cliff.values[row * cliff.grid.side + column];
+            wrong += (d < -1.0 && v > std::min(d, -8.0) + 1e-4) || (d >= 4.0 && v < std::max(d, 20.0) - 1e-4) ? 1 : 0;
+        }
+    }
+    CHECK_EQ(wrong, 0u);
+    // Soft clipping stays inside its bounds; a paraboloid of radius 500 m has a total curvature of 2 / 500.
+    const Field soft = Export("soft_clamp", "    local result = Curves.SoftClamp{ input = Terrain.Coords{}.x, min = -100, max = 100, softness = 20 }");
+    CHECK(soft.Ok() && range(soft).first >= -100.0f - 1e-3f && range(soft).second <= 100.0f + 1e-3f);
+    const Field curvature = Export("curvature_total", R"(
+    local c = Terrain.Coords{}
+    local result = Masks.Curvature{ input = (c.x * c.x + c.y * c.y) * (-1 / 1000), kind = "total" } - 2 / 500)");
+    CHECK(curvature.Ok() && std::max(std::fabs(range(curvature).first), std::fabs(range(curvature).second)) < 1e-4f);
+    // A half mask between 0 and 100 m: the higher wins, or with favor lower the lower.
+    const Field match = Export("height_match", R"(
+    local z = Terrain.Coords{}.x * 0
+    local result = Combine.HeightMatch{ a = z, b = z + 100, mask = z + 0.5 }
+                   + Combine.HeightMatch{ a = z, b = z + 100, mask = z + 0.5, favor = "lower" } * 1000)");
+    CHECK(match.Ok() && std::fabs(range(match).first - 100.0f) < 1e-3f && std::fabs(range(match).second - 100.0f) < 1e-3f);
+    // Mimic in elevation alone is the affine map onto the reference: half the plane plus 3 becomes the plane.
+    const Field mimic = Export("mimic", R"(
+    local p = Terrain.Coords{}.x * 0.1
+    local result = Terrain.Mimic{ input = p * 0.5 + 3, reference = p, region = { -256, -256, 248, 248 }, cell = 8, roughness = 0 } - p)");
+    CHECK(mimic.Ok() && std::max(std::fabs(range(mimic).first), std::fabs(range(mimic).second)) < 1e-2f);
+    // Snow is never negative and lies somewhere; a constant object scattered everywhere is 0.7 to 1 of it.
+    const Field snow = Export("snow", R"(
+    local n = Noises.fBm{ frequency = 1 / 200, amplitude = 40 }.value
+    local _, depth = Erosion.Snow{ input = n, snowfall = 2 }
+    local result = depth)");
+    CHECK(snow.Ok() && range(snow).first >= 0.0f && range(snow).second > 0.5f);
+    const Field scatter = Export("scatter", R"(
+    local result = Shapes.Scatter{ object = function(p) return p.x * 0 + 5 end, spacing = 64 })");
+    CHECK(scatter.Ok() && range(scatter).first >= 3.5f - 1e-3f && range(scatter).second <= 5.0f + 1e-3f);
+    const Field wet = Export("wetness", R"(
+    local n = 33
+    local v = Terrain.Sample{ value = Noises.fBm{ frequency = 1 / 300, amplitude = 60 }.value, origin = { -256, -256 }, size = { n, n }, cell = 16 }
+    local result = Masks.Wetness{ values = v, size = { n, n }, origin = { -256, -256 }, cell = 16 })");
+    CHECK(wet.Ok() && range(wet).first >= -1e-3f && range(wet).second <= 1.0f + 1e-3f && range(wet).second > 0.5f);
+}
+
 /// Cells read through a position field on the GPU and on the CPU sampler. A constant position makes the
 /// whole field one cell's value, which a kernel ignoring its position (the first version did, the flag
 /// sat in a word the iteration overwrites) cannot produce; the sampler must read the same value.
@@ -1947,6 +2009,7 @@ int main() {
     TestCellsPosition();
     TestMultiscaleAgreesWithSampler();
     TestMedianBlur();
+    TestPreludeDevices();
     TestShapeSets();
     TestSectionsAndInteraction();
     TestTerrainIndicators();
