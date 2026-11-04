@@ -108,6 +108,12 @@ public:
         std::string_view       shapes;
         Water                  water;
         View                   view;
+        /// Where the sun is (`--sun`, "Sun" in the panel), in degrees: azimuth clockwise from -z (the
+        /// top of a hillshade, as `terrain_metrics --sun` counts it) and elevation over the horizon.
+        /// Viewer state: changing it never re-evaluates a tile.
+        std::array<f32_t, 2> sun{126.03f, 31.70f};
+        /// Draw the panels; off (`--no-panels`) a screenshot shows the terrain alone.
+        b8_t panels = true;
     };
 
     ViewerLayer(Application& application, const Settings& settings);

@@ -5,6 +5,7 @@
 #   tools/dev.sh test  [Debug|Release] [ctest arguments...]     e.g. -L fast, -R test_relief
 #   tools/dev.sh review <script.lua> --bounds minx,minz,maxx,maxz [--res M] [--level L | --no-sea]
 #                       [--sun az,el] [--target x,y,z] [--shot yaw,pitch,dist]... [--param k=v]...
+#                       [--viewer "flags"]   (more terrain_viewer flags for the shots, e.g. "--plan --water")
 #                       [--seed N] [--out DIR] [--type Release|Debug]
 #   tools/dev.sh sweep <script.lua> --vary key=v1,v2,... [--ref image]... [review options...]  one sheet.png
 #   tools/dev.sh dem lat,lon --out DIR [--zoom 14] [--tiles 3]                  a real height field to measure as a reference
@@ -51,14 +52,15 @@ run_tests() {
 review() {
     local script="$1"; shift
     local bounds="" res="8" sea="--no-sea" sun="315,35" target="0,0,0" seed="0" out="" type="Release"
-    local shots=() params=()
+    local shots=() params=() viewer=() extra=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --bounds) bounds="$2"; shift 2 ;;
             --res) res="$2"; shift 2 ;;
             --level) sea="--level $2"; shift 2 ;;
             --no-sea) sea="--no-sea"; shift ;;
-            --sun) sun="$2"; shift 2 ;;
+            --sun) sun="$2"; viewer+=(--sun "$2"); shift 2 ;;
+            --viewer) read -ra extra <<<"$2"; viewer+=("${extra[@]}"); shift 2 ;;
             --target) target="$2"; shift 2 ;;
             --shot) shots+=("$2"); shift 2 ;;
             --param) params+=(--param "$2"); shift 2 ;;
@@ -88,7 +90,7 @@ review() {
             args+=(--shot "$shot=$out/view_$i.png"); i=$((i + 1))
         done
         "$bin/terrain_viewer" --script "$script" --seed "$seed" --target "$target" --ring 5 \
-            --log-level warn "${params[@]}" "${args[@]}"
+            --log-level warn "${params[@]}" "${viewer[@]}" "${args[@]}"
     fi
     grep -o '"timings_ms": {[^}]*}' "$out/metadata.json" | grep -o '"total": [0-9.]*\|"script": [0-9.]*' \
         | tr '\n' ' '

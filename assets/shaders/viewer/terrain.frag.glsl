@@ -6,12 +6,20 @@
 
 #version 460
 
+#extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 
 #include "lib/water.lib.glsl"
 
-// The same block the vertex stage declares, member for member under scalar layout. The two 64-bit
-// addresses are `uvec2` here because this stage never dereferences them.
+// What is the same for every tile of a frame. Must match `ViewerGlobals` in `vulkan/pipeline.hpp`.
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Globals {
+    vec3 eye;
+    // Unit vector towards the sun (`--sun`, "Sun" in the panel).
+    vec3 sun;
+};
+
+// The same block the vertex stage declares, member for member under scalar layout. The tile addresses
+// are `uvec2` here because this stage never dereferences them.
 layout(push_constant, scalar) uniform Push {
     mat4  viewProjection;
     vec3  tileOrigin;
@@ -21,9 +29,9 @@ layout(push_constant, scalar) uniform Push {
     float waterLevel;
     uint  waterColour;
     uvec2 heights;
-    uvec2 normals;
-    vec3  eye;
-    uint  look;
+    uvec2   normals;
+    Globals globals;
+    uint    look;
 }
 pc;
 
@@ -41,9 +49,7 @@ layout(location = 3) in float vWater;
 
 layout(location = 0) out vec4 outColor;
 
-// About 32 degrees up and warm: low enough that a face turned from it is in shade and ridges and gullies
-// read as light against dark, high enough that a valley floor is still lit. The sky fills the shade.
-const vec3 kSunDirection = normalize(vec3(0.55, 0.42, 0.40));
+// The sun is warm; where it points is the viewer's (`ViewerLayer::Settings::sun`). The sky fills the shade.
 const vec3 kSunColor     = vec3(1.05, 0.98, 0.88);
 const vec3 kSkyColor     = vec3(0.34, 0.42, 0.56);
 
@@ -209,7 +215,7 @@ void main() {
         albedo     = ramp;
     }
 
-    float sun = max(dot(normal, kSunDirection), 0.0) * sunlit;
+    float sun = max(dot(normal, pc.globals.sun), 0.0) * sunlit;
     // Hemispheric ambient rather than a constant: it brightens upward faces and darkens downward ones,
     // which is most of what makes an unlit slope legible.
     float sky = 0.5 + 0.5 * normal.y;
@@ -230,7 +236,8 @@ void main() {
     float level = max((pc.samples & 0x30000000u) == 0x20000000u ? pc.waterLevel : -1e30, vWater);
     vec4 water = unpackUnorm4x8(pc.waterColour);
     if (water.a > 0.0) {
-        vec3  toFragment = vWorldPosition - pc.eye;
+        vec3  eye        = pc.globals.eye;
+        vec3  toFragment = vWorldPosition - eye;
         float distance_  = length(toFragment);
         vec3  direction  = toFragment / max(distance_, 1e-4);
 
@@ -239,9 +246,9 @@ void main() {
         // either side of the surface: it begins at 0 if the eye is under and at the crossing if not, and
         // ends at 1 if the fragment is under and at the crossing if not.
         float dy       = toFragment.y;
-        float crossing = abs(dy) > 1e-6 ? clamp((level - pc.eye.y) / dy, 0.0, 1.0)
-                                        : (pc.eye.y < level ? 1.0 : 0.0);
-        float begin    = pc.eye.y < level ? 0.0 : crossing;
+        float crossing = abs(dy) > 1e-6 ? clamp((level - eye.y) / dy, 0.0, 1.0)
+                                        : (eye.y < level ? 1.0 : 0.0);
+        float begin    = eye.y < level ? 0.0 : crossing;
         float end      = vWorldPosition.y < level ? 1.0 : crossing;
         float path     = max(end - begin, 0.0) * distance_;
 
@@ -250,7 +257,7 @@ void main() {
 
         // The surface is in front of this fragment only when the eye and the fragment are on opposite
         // sides of it. Then what the pixel shows is the surface, and a surface reflects.
-        if ((pc.eye.y - level) * (vWorldPosition.y - level) < 0.0) {
+        if ((eye.y - level) * (vWorldPosition.y - level) < 0.0) {
             lit = mix(lit, WaterSurface(lit, direction), water.a);
         }
     }

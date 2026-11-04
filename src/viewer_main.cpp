@@ -43,6 +43,9 @@ void PrintUsage() {
                "  --bounds minx,minz,maxx,maxz  evaluate and draw only the tiles that overlap the map;\n"
                "                         whole tiles, so the edge is exact when 127 x resolution divides it\n"
                "  --water                draw water at the water level (off by default)\n"
+               "  --sun az,el            sun azimuth (clockwise from -z, as terrain_metrics) and\n"
+               "                         elevation in degrees (default 126,31.7)\n"
+               "  --no-panels            draw no panels, so a screenshot shows the terrain alone\n"
                "  --follow               re-run the script as the camera moves, with params.bounds round\n"
                "                         it: for a world built only where it is looked at\n"
                "  --map-scale <f>        draw the map f times wider, heights and water level unchanged\n"
@@ -227,6 +230,10 @@ template <typename T>
             options.viewer.water.enabled = true;
             continue;
         }
+        if (argument == "--no-panels") {
+            options.viewer.panels = false;
+            continue;
+        }
         if (argument == "--no-cull") {
             options.viewer.cull = false;
             continue;
@@ -355,6 +362,12 @@ template <typename T>
             }
             options.viewer.bounds  = *bounds;
             options.viewer.bounded = true;
+        } else if (argument == "--sun") {
+            Result<std::array<f32_t, 2>> sun = ParseNumbers<2>(argument, value);
+            if (!sun) {
+                return std::unexpected(sun.error());
+            }
+            options.viewer.sun = *sun;
         } else if (argument == "--water-level") {
             Result<f64_t> level = cli::ParseFinite(argument, value);
             if (!level) {

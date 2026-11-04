@@ -131,7 +131,9 @@ and refuses to start while another run holds `out/.ctest.lock`, since two suites
 run the suites go 4 at a time (`CTEST_PARALLEL_LEVEL`, or `-j N`; `test_datasets` stays serial for its
 timings): the full suite took 350 s serial and 231 s at `-j4` in Release, about 800 s and 430 s in Debug. Both exit with the build's or ctest's status.
 `review` is one terrain iteration: a raw export with warnings only, `metrics.json`, a hillshade, the
-viewer shots in one process, and a four-line relief summary, all under `out/review/<script>/`.
+viewer shots in one process, and a four-line relief summary, all under `out/review/<script>/`. A
+`--sun` given lights the shots as it lights the hillshade, and `--viewer "<flags>"` passes more
+`terrain_viewer` flags to the shots (`"--no-panels --water --bounds ..."`).
 Stream-power results are cached on disk (`<bin>/cache/`) until the engine is rebuilt, so repeating a
 review within one build skips the simulation.
 
@@ -187,6 +189,10 @@ them the ring is framed as before. They exist so a reference image can be regene
 ```bash
 build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --view 25,-32,4200 --screenshot out/canyon.png
 ```
+
+`--sun az,el` places the sun in degrees, the azimuth clockwise from -z as `terrain_metrics --sun` counts
+it (default 126,31.7); the panel's "View" section has the same two sliders, and neither re-evaluates.
+`--no-panels` leaves the panels out, so a screenshot shows the terrain alone.
 
 `--water` draws water at the water level, which is off by default and costs no evaluation to change.
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the

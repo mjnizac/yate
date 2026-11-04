@@ -34,7 +34,8 @@ layout(push_constant, scalar) uniform Push {
     uint  waterColour;
     FloatBuffer heights;
     FloatBuffer normals;
-    vec3 eye;
+    // The fragment stage's per-frame block; never dereferenced here.
+    uvec2 globals;
     uint look;
 }
 pc;

@@ -257,6 +257,9 @@ struct ViewerLayer::State {
     /// terrain visible from above and culled from below).
     vulkan::Buffer indices;
     u32_t          indexCount = 0;
+    /// One `ViewerGlobals` per frame in flight, host-visible: a frame writes its own while the GPU may
+    /// still read the other's.
+    vulkan::Buffer globals;
     b8_t                     wireframe = false;
     Camera                   camera;
     Input                    input;
@@ -465,6 +468,16 @@ void ViewerLayer::OnAttach() {
         if (Status flushed = m_state->context->Memory().FlushBuffer(m_state->indices, 0, bytes); !flushed) {
             LOG_WARN("could not flush the grid indices: {}", flushed.error().Format().data());
         }
+        Result<vulkan::Buffer> globals = m_state->context->Memory().CreateBuffer(vulkan::BufferDesc{
+            .size = sizeof(vulkan::ViewerGlobals) * vulkan::kFramesInFlight, .usage = 0,
+            .category = vulkan::VramCategory::Viewer, .hostVisible = true});
+        if (!globals) {
+            LOG_ERROR("could not create the viewer globals: {}", globals.error().Format().data());
+            App().AddExit(ExitCode::FailedToInitializeEngine);
+            App().Stop();
+            return;
+        }
+        m_state->globals = *globals;
     }
 
     // The camera is framed and the level chosen *before* the script runs, because the script is given
@@ -604,6 +617,9 @@ void ViewerLayer::OnDetach() {
     if (m_state->context != nullptr && m_state->indices.IsValid()) {
         m_state->context->Memory().DestroyBuffer(m_state->indices);
     }
+    if (m_state->context != nullptr && m_state->globals.IsValid()) {
+        m_state->context->Memory().DestroyBuffer(m_state->globals);
+    }
     m_state->pipeline     = vulkan::GraphicsPipeline{};
     m_state->wirePipeline = vulkan::GraphicsPipeline{};
     m_state->seaPipeline  = vulkan::GraphicsPipeline{};
@@ -732,7 +748,7 @@ void ViewerLayer::UpdatePanels() {
 /// on the first frame. Keeping the pair together removes the ordering question instead of answering it.
 void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     State& state = *m_state;
-    if (!state.ui.IsValid()) {
+    if (!state.ui.IsValid() || !state.settings.panels) {
         return;
     }
     state.ui.Begin();
@@ -765,6 +781,7 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.maxLevel          = static_cast<i32_t>(state.settings.maxLevel);
     panels.ringRadius        = static_cast<i32_t>(state.settings.ringRadius);
     panels.mapScale          = state.settings.mapScale;
+    panels.sun               = state.settings.sun;
 
     // Editing a parameter reloads: the script is what turns a parameter into terrain, so there is no
     // shortcut that updates push constants instead. The spec's "only numeric parameters changed, so no
@@ -783,6 +800,7 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     state.settings.resolution    = panels.resolution;
     state.settings.maxLevel      = static_cast<u32_t>(panels.maxLevel);
     state.settings.ringRadius    = static_cast<u32_t>(panels.ringRadius);
+    state.settings.sun           = panels.sun;
     if (panels.mapScale != state.settings.mapScale) {
         // The camera keeps looking at the same ground: what it is about is moved with the map.
         state.camera.ScaleGround(panels.mapScale / state.settings.mapScale);
@@ -945,9 +963,22 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
                         | (water.lakes ? kDrawLakes : 0u) | (water.rivers ? kDrawRivers : 0u)
                         | (seaOutput ? kSeaOutput : 0u);
     constants.look           = state.terrain.look;
-    constants.eye            = {eye.x, eye.y, eye.z};
     constants.waterLevel     = water.level;
     constants.waterColour    = shadeWater ? PackWater(water) : 0u;
+
+    // This frame's globals, in its own slot of the buffer.
+    constexpr f32_t      kDegrees = 3.14159265358979f / 180.0f;
+    const f32_t          azimuth  = state.settings.sun[0] * kDegrees;
+    const f32_t          altitude = state.settings.sun[1] * kDegrees;
+    vulkan::ViewerGlobals globals{
+        .eye = {eye.x, eye.y, eye.z},
+        .sun = {std::sin(azimuth) * std::cos(altitude), std::sin(altitude), -std::cos(azimuth) * std::cos(altitude)}};
+    const VkDeviceSize slot = sizeof(vulkan::ViewerGlobals) * frame.frameIndex;
+    std::memcpy(static_cast<u8_t*>(state.globals.mapped) + slot, &globals, sizeof(globals));
+    if (Status flushed = state.context->Memory().FlushBuffer(state.globals, slot, sizeof(globals)); !flushed) {
+        LOG_WARN("could not flush the viewer globals: {}", flushed.error().Format().data());
+    }
+    constants.globals = state.globals.address + slot;
 
     const vulkan::GraphicsPipeline& pipeline =
         state.wireframe && state.wirePipeline.IsValid() ? state.wirePipeline : state.pipeline;
@@ -1018,7 +1049,7 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
         }
         vulkan::SeaPushConstants sea{};
         sea.viewProjection = viewProjection.m;
-        sea.eye            = constants.eye;
+        sea.eye            = globals.eye;
         sea.level          = water.level;
         sea.centre         = {(minX + maxX) * 0.5f, (minZ + maxZ) * 0.5f};
         sea.halfExtent     = {(maxX - minX) * 0.5f, (maxZ - minZ) * 0.5f};

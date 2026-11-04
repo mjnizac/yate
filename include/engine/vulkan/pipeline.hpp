@@ -205,12 +205,23 @@ struct TerrainPushConstants {
     u32_t           waterColour = 0;
     VkDeviceAddress heights     = 0;
     VkDeviceAddress normals     = 0;
-    /// World position of the camera, for the length of the ray that runs under the water.
-    std::array<f32_t, 3> eye{};
+    /// This frame's `ViewerGlobals`: what is the same for every tile and too big for the 128 bytes.
+    VkDeviceAddress globals = 0;
     /// The script's look: palette in the low byte, wind direction in whole degrees [0, 360) in the next
     /// nine bits, and the snow line in whole metres in bits 17 and up (0: the shader's default).
     u32_t look = 0;
 };
+
+/// What the terrain fragment stage reads once a frame through `TerrainPushConstants::globals`. Must match
+/// `Globals` in `viewer/terrain.frag.glsl` field for field under scalar block layout.
+struct ViewerGlobals {
+    /// World position of the camera, for the length of the ray that runs under the water.
+    std::array<f32_t, 3> eye{};
+    /// Unit vector towards the sun.
+    std::array<f32_t, 3> sun{};
+};
+
+static_assert(offsetof(ViewerGlobals, sun) == 12);
 
 // 128 bytes is the minimum a device must offer, so this fits everywhere. Every offset is asserted:
 // a field out of place does not raise a validation error, it draws garbage.
@@ -224,7 +235,8 @@ static_assert(offsetof(TerrainPushConstants, waterLevel) == 88);
 static_assert(offsetof(TerrainPushConstants, waterColour) == 92);
 static_assert(offsetof(TerrainPushConstants, heights) == 96);
 static_assert(offsetof(TerrainPushConstants, normals) == 104);
-static_assert(offsetof(TerrainPushConstants, eye) == 112);
+static_assert(offsetof(TerrainPushConstants, globals) == 112);
+static_assert(offsetof(TerrainPushConstants, look) == 120);
 
 /// What the open-sea quad reads. Must match `viewer/water.vert.glsl` and `water.frag.glsl`.
 struct SeaPushConstants {

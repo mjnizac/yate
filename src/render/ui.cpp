@@ -201,6 +201,8 @@ b8_t Ui::Draw(Panels& panels) {
             ImGui::SliderInt("Tiles each way", &panels.ringRadius, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
             ImGui::SliderFloat("Map scale", &panels.mapScale, 0.25f, 16.0f, "x%.2f",
                                ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SliderFloat("Sun azimuth", &panels.sun[0], 0.0f, 360.0f, "%.0f deg");
+            ImGui::SliderFloat("Sun elevation", &panels.sun[1], 1.0f, 90.0f, "%.0f deg");
         }
 
         // Water is a property of the viewer, not of the script, so its controls are always here and
