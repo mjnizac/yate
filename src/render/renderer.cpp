@@ -320,6 +320,8 @@ struct ViewerLayer::State {
     std::array<char, 64> showName{};
     /// The shown output changed: the tiles are copied again (see `OnUpdate`).
     b8_t reshow = false;
+    /// The panel's square lock on the map's size.
+    b8_t squareMap = false;
     terrain::Params       params;
 
     vulkan::Context*        context  = nullptr;
@@ -601,14 +603,8 @@ void ViewerLayer::OnAttach() {
         constexpr f32_t kDegrees = 3.14159265358979f / 180.0f;
         m_state->camera.SetView(Vec3{view.target[0], view.target[1], view.target[2]},
                                 view.yaw * kDegrees, view.pitch * kDegrees, view.distance);
-    } else if (const Settings& s = m_state->settings; s.plan && s.bounded) {
-        // A plan view of a map starts with the whole map on screen, centred.
-        const VkExtent2D extent = m_state->swapchain->Extent();
-        const f32_t aspect = extent.height != 0 ? static_cast<f32_t>(extent.width) / static_cast<f32_t>(extent.height) : 1.0f;
-        const f32_t half   = std::max(s.bounds[3] - s.bounds[1], (s.bounds[2] - s.bounds[0]) / aspect) * 0.5f * s.mapScale;
-        m_state->camera.SetView(Vec3{(s.bounds[0] + s.bounds[2]) * 0.5f * s.mapScale, 0.0f,
-                                     (s.bounds[1] + s.bounds[3]) * 0.5f * s.mapScale},
-                                0.0f, -1.55f, half / kPlanTangent);
+    } else if (m_state->settings.plan && m_state->settings.bounded) {
+        FrameMap();
     }
     // The script runs once, at the finest spacing; the rings, from the level the distance picks out,
     // compile the same graph at theirs.
@@ -906,6 +902,9 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.guideOpacity      = state.settings.guideOpacity;
     panels.shownRange        = {state.terrain.shownMinimum, state.terrain.shownMaximum};
     panels.heightRange       = {state.terrain.heightMinimum, state.terrain.heightMaximum};
+    panels.bounded           = state.settings.bounded;
+    panels.bounds            = state.settings.bounds;
+    panels.squareMap         = state.squareMap;
     static_assert(Ui::Panels::kMaxOutputs == terrain::Graph::kMaxOutputs);
     for (usize_t i = 0; state.live != nullptr && i < state.live->graph.OutputCount(); ++i) {
         const terrain::OutputRequest& output = state.live->graph.Output(i);
@@ -939,6 +938,12 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     state.settings.plan          = panels.plan;
     state.settings.showIds       = panels.showIds;
     state.settings.guideOpacity  = panels.guideOpacity;
+    state.settings.bounded       = panels.bounded;
+    state.settings.bounds        = panels.bounds;
+    state.squareMap              = panels.squareMap;
+    if (panels.frameMap) {
+        FrameMap();
+    }
     if (panels.shown != shown) {
         detail::CopyBounded(state.showName, panels.shown >= 0 ? std::string_view{panels.outputs[static_cast<usize_t>(panels.shown)]}
                                                               : std::string_view{});
@@ -952,6 +957,26 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     }
 
     state.ui.Record(commands);
+}
+
+/// Puts the whole map on screen, centred: straight down in the plan view, from the south at 40 degrees
+/// otherwise (World Machine's "set the camera to a distance that can view the entire scene").
+void ViewerLayer::FrameMap() {
+    State&           state  = *m_state;
+    const Settings&  s      = state.settings;
+    const VkExtent2D extent = state.swapchain->Extent();
+    const f32_t      height = std::max(static_cast<f32_t>(extent.height), 1.0f);
+    // In the plan view the map goes in the part of the window the sidebar leaves clear.
+    const f32_t sidebar = s.panels && s.plan ? SidebarWidth(static_cast<f32_t>(extent.width)) : 0.0f;
+    const f32_t aspect  = std::max(static_cast<f32_t>(extent.width) - sidebar, 1.0f) / height;
+    const f32_t half    = std::max(s.bounds[3] - s.bounds[1], (s.bounds[2] - s.bounds[0]) / aspect) * 0.5f * s.mapScale;
+    // Half the sidebar's width in metres: moving the camera that far right moves the map that far left.
+    const f32_t shift = sidebar * 0.5f * 2.0f * half / height;
+    constexpr f32_t kPlanPitch    = -1.55f;
+    constexpr f32_t kObliquePitch = -0.70f;
+    state.camera.SetView(Vec3{(s.bounds[0] + s.bounds[2]) * 0.5f * s.mapScale + shift, 0.0f,
+                              (s.bounds[1] + s.bounds[3]) * 0.5f * s.mapScale},
+                         0.0f, s.plan ? kPlanPitch : kObliquePitch, half / kPlanTangent);
 }
 
 /// Copies the ring again with the shown output the panel picked. The script does not run: the graph it

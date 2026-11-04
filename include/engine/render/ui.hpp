@@ -18,6 +18,9 @@ class Window;
 
 namespace engine::render {
 
+/// Width in pixels of the docked sidebar in a window `windowWidth` wide: what framing leaves clear.
+[[nodiscard]] f32_t SidebarWidth(f32_t windowWidth) noexcept;
+
 /// The viewer's panels.
 ///
 /// No UI-library type appears here, the same arrangement `lua.hpp` has with Sol2: the whole of Dear
@@ -81,6 +84,13 @@ public:
         /// Each output's declared range, and the height's, for the World tab.
         std::array<std::array<f32_t, 2>, kMaxOutputs> outputRanges{};
         std::array<f32_t, 2>                          heightRange{};
+        /// The map (`--bounds`: min x, min z, max x, max z), edited in place; `frameMap` is set when the
+        /// user asks for the whole map on screen.
+        b8_t                 bounded  = false;
+        std::array<f32_t, 4> bounds{};
+        b8_t                 frameMap = false;
+        /// Keep the map square while its size is edited (World Machine's "square aspect").
+        b8_t squareMap = false;
         u32_t                      outputCount = 0;
         i32_t                      shown       = -1;
         b8_t                       showIds     = false;

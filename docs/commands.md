@@ -178,7 +178,9 @@ the first frames show a half-streamed ring. The copy comes out of the presented 
 file is what the window showed.
 
 The panels follow World Machine's project dialog: a sidebar docked on the right with four tabs (World:
-the finest resolution, the spacing drawn, the script's height range and its outputs with their ranges;
+the map as World Machine's World Dimensions, a centre and a size with a square lock, what it comes to in
+samples and a "Frame map" button, all live since `--bounds` only picks the tiles drawn; the finest
+resolution, the spacing drawn, the script's height range and its outputs with their ranges;
 View: camera, plan view, map scale, sun, rings and tiles; Display: water, a shown output and the guide;
 Script: its parameters and a reload), and a status bar along the bottom with the frame time, the tiles
 and the level.

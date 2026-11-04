@@ -193,6 +193,7 @@ private:
     void UpdatePanels();
     void UpdateReload();
     void ReshowTiles();
+    void FrameMap();
     /// Evaluates at most `budget` missing tiles of the ring, and evicts what left it.
     void StreamTiles(u32_t budget, f64_t deadline = 1e300);
 #ifdef IS_ENGINE

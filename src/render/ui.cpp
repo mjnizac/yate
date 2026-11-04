@@ -88,9 +88,50 @@ void Section(const char* title) {
     ImGui::SeparatorText(title);
 }
 
-/// World Machine's Scene Setup: the spacing the script is run at, its heights and what it outputs.
+/// Half the side of a map made from the panel when there was none, in metres round the eye.
+constexpr f32_t kNewMapHalf = 4096.0f;
+
+/// World Machine's World Dimensions: the map as an origin and a size, with a square lock, what it comes
+/// to in samples, and a button that puts it all on screen. Only which tiles are drawn changes: no reload.
+void MapSection(Ui::Panels& panels) {
+    Section("Map");
+    if (ImGui::Checkbox("Bounded to a map", &panels.bounded) && panels.bounded
+        && !(panels.bounds[0] < panels.bounds[2] && panels.bounds[1] < panels.bounds[3])) {
+        panels.bounds = {panels.eye[0] - kNewMapHalf, panels.eye[2] - kNewMapHalf, panels.eye[0] + kNewMapHalf,
+                         panels.eye[2] + kNewMapHalf};
+    }
+    if (!panels.bounded) {
+        ImGui::TextDisabled("an endless ring round the camera");
+        return;
+    }
+    std::array<f32_t, 2> centre{(panels.bounds[0] + panels.bounds[2]) * 0.5f, (panels.bounds[1] + panels.bounds[3]) * 0.5f};
+    std::array<f32_t, 2> size{panels.bounds[2] - panels.bounds[0], panels.bounds[3] - panels.bounds[1]};
+    const f32_t          step = std::max(std::max(size[0], size[1]) * 0.002f, 1.0f);
+    b8_t edited = ImGui::DragFloat2("Centre x, z (m)", centre.data(), step, 0.0f, 0.0f, "%.0f");
+    edited      = ImGui::Checkbox("Square", &panels.squareMap) || edited;
+    if (panels.squareMap) {
+        edited  = ImGui::DragFloat("Side (m)", &size[0], step, 1.0f, 1e7f, "%.0f", ImGuiSliderFlags_AlwaysClamp) || edited;
+        size[1] = size[0];
+    } else {
+        edited = ImGui::DragFloat2("Size x, z (m)", size.data(), step, 1.0f, 1e7f, "%.0f", ImGuiSliderFlags_AlwaysClamp) || edited;
+    }
+    // Written back only when edited: a round trip through the centre and the size every frame would let
+    // the bounds drift by a rounding at a time.
+    if (edited) {
+        panels.bounds = {centre[0] - size[0] * 0.5f, centre[1] - size[1] * 0.5f, centre[0] + size[0] * 0.5f,
+                         centre[1] + size[1] * 0.5f};
+    }
+    // World Machine's "Total dimensions: W x H, m/pixel", at the finest spacing.
+    ImGui::Text("%.2f x %.2f km, %.0f x %.0f samples at %g m", static_cast<f64_t>(size[0]) / 1000.0,
+                static_cast<f64_t>(size[1]) / 1000.0, std::floor(static_cast<f64_t>(size[0] / panels.resolution)) + 1.0,
+                std::floor(static_cast<f64_t>(size[1] / panels.resolution)) + 1.0, static_cast<f64_t>(panels.resolution));
+    panels.frameMap = ImGui::Button("Frame map");
+}
+
+/// World Machine's Scene Setup: the map, the spacing the script is run at, its heights and its outputs.
 [[nodiscard]] b8_t WorldTab(Ui::Panels& panels) {
     b8_t changed = false;
+    MapSection(panels);
     Section("Resolution");
     // Powers of two only: a level's lattice is then a subset of the finer one's, as for the levels. The
     // finest spacing reaches the script (it sees the spacing), so a change reloads.
@@ -388,6 +429,8 @@ void Ui::Begin() {
     ImGui::NewFrame();
 }
 
+f32_t SidebarWidth(f32_t windowWidth) noexcept { return std::min(kSidebarWidth, windowWidth * 0.5f); }
+
 b8_t Ui::Draw(Panels& panels) {
     if (!IsValid()) {
         return false;
@@ -399,7 +442,7 @@ b8_t Ui::Draw(Panels& panels) {
     // project dialog (its world, the view, what is drawn over it, and the script).
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const f32_t          status   = ImGui::GetFrameHeight() + 2.0f * ImGui::GetStyle().WindowPadding.y;
-    const f32_t          width    = std::min(kSidebarWidth, viewport->WorkSize.x * 0.5f);
+    const f32_t          width    = SidebarWidth(viewport->WorkSize.x);
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - width, viewport->WorkPos.y));
     ImGui::SetNextWindowSize(ImVec2(width, viewport->WorkSize.y - status));
     if (ImGui::Begin("YATE", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
