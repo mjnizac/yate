@@ -59,7 +59,7 @@ review() {
             --res) res="$2"; shift 2 ;;
             --level) sea="--level $2"; shift 2 ;;
             --no-sea) sea="--no-sea"; shift ;;
-            --sun) sun="$2"; viewer+=(--sun "$2"); shift 2 ;;
+            --sun) sun="$2"; shift 2 ;;
             --viewer) read -ra extra <<<"$2"; viewer+=("${extra[@]}"); shift 2 ;;
             --target) target="$2"; shift 2 ;;
             --shot) shots+=("$2"); shift 2 ;;

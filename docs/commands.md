@@ -131,9 +131,9 @@ and refuses to start while another run holds `out/.ctest.lock`, since two suites
 run the suites go 4 at a time (`CTEST_PARALLEL_LEVEL`, or `-j N`; `test_datasets` stays serial for its
 timings): the full suite took 350 s serial and 231 s at `-j4` in Release, about 800 s and 430 s in Debug. Both exit with the build's or ctest's status.
 `review` is one terrain iteration: a raw export with warnings only, `metrics.json`, a hillshade, the
-viewer shots in one process, and a four-line relief summary, all under `out/review/<script>/`. A
-`--sun` given lights the shots as it lights the hillshade, and `--viewer "<flags>"` passes more
-`terrain_viewer` flags to the shots (`"--no-panels --water --bounds ..."`).
+viewer shots in one process, and a four-line relief summary, all under `out/review/<script>/`.
+`--viewer "<flags>"` passes more `terrain_viewer` flags to the shots (`"--no-panels --plan --bounds ..."`);
+`--sun` lights only the hillshade.
 Stream-power results are cached on disk (`<bin>/cache/`) until the engine is rebuilt, so repeating a
 review within one build skips the simulation.
 
@@ -192,6 +192,7 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --vie
 
 `--sun az,el` places the sun in degrees, the azimuth clockwise from -z as `terrain_metrics --sun` counts
 it (default 126,31.7); the panel's "View" section has the same two sliders, and neither re-evaluates.
+A script's `shadow` output is not recomputed: it stays cast from the sun the script assumed.
 `--no-panels` leaves the panels out, so a screenshot shows the terrain alone.
 
 `--plan` (or "Plan view" in the panel) looks straight down with no perspective, +x to the right and +z
