@@ -237,6 +237,11 @@ b8_t Ui::Draw(Panels& panels) {
             ImGui::SliderFloat("Opacity", &panels.waterOpacity, 0.0f, 1.0f);
         }
 
+        if (panels.guide) {
+            ImGui::Separator();
+            ImGui::SliderFloat("Guide", &panels.guideOpacity, 0.0f, 1.0f, "%.2f");
+        }
+
         // Any R2->R1 output painted over the terrain: a ramp over its declared range, or a colour an id.
         if (panels.outputCount != 0) {
             ImGui::Separator();

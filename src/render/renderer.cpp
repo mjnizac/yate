@@ -18,6 +18,8 @@
 #include <engine/vulkan/window.hpp>
 #include <engine/window_layer.hpp>
 
+#include <spng.h>
+
 #ifdef TRACY_ENABLE
 #    include <tracy/Tracy.hpp>
 #endif
@@ -27,6 +29,7 @@
 #include <chrono>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <memory_resource>
 #include <mutex>
@@ -254,6 +257,59 @@ struct Reload {
            | (byte(water.opacity) << 24);
 }
 
+/// The guide image, decoded straight into a host-visible buffer the fragment stage reads by address.
+struct Guide {
+    vulkan::Buffer       texels;
+    std::array<u32_t, 2> size{};
+};
+
+/// Reads a PNG of any colour type and depth as RGBA8, row by row from the top.
+[[nodiscard]] Result<Guide> LoadGuide(vulkan::Context& context, std::string_view path) {
+    const std::string name{path};
+    std::FILE*        file = std::fopen(name.c_str(), "rb");
+    if (file == nullptr) {
+        ENGINE_FAIL(ErrorCode::NotFound, ErrorStage::Init, "could not open the guide image {}", path);
+    }
+    spng_ctx* png = spng_ctx_new(0);
+    Guide     guide;
+    usize_t   bytes  = 0;
+    spng_ihdr header{};
+    const auto done = [&](int code) {
+        spng_ctx_free(png);
+        std::fclose(file);
+        return code;
+    };
+    int code = png == nullptr ? SPNG_EMEM : spng_set_png_file(png, file);
+    if (code == 0) {
+        code = spng_get_ihdr(png, &header);
+    }
+    if (code == 0) {
+        code = spng_decoded_image_size(png, SPNG_FMT_RGBA8, &bytes);
+    }
+    if (code != 0) {
+        done(code);
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "{} is not a PNG the viewer can read: {}", path,
+                    spng_strerror(code));
+    }
+    Result<vulkan::Buffer> texels = context.Memory().CreateBuffer(vulkan::BufferDesc{
+        .size = bytes, .usage = 0, .category = vulkan::VramCategory::Viewer, .hostVisible = true});
+    if (!texels) {
+        done(0);
+        return std::unexpected(texels.error());
+    }
+    code = spng_decode_image(png, texels->mapped, bytes, SPNG_FMT_RGBA8, SPNG_DECODE_TRNS);
+    if (done(code) != 0) {
+        context.Memory().DestroyBuffer(*texels);
+        ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "could not decode {}: {}", path, spng_strerror(code));
+    }
+    if (Status flushed = context.Memory().FlushBuffer(*texels, 0, bytes); !flushed) {
+        LOG_WARN("could not flush the guide image: {}", flushed.error().Format().data());
+    }
+    guide.texels = *texels;
+    guide.size   = {header.width, header.height};
+    return guide;
+}
+
 } // namespace
 
 struct ViewerLayer::State {
@@ -286,6 +342,8 @@ struct ViewerLayer::State {
     /// One `ViewerGlobals` per frame in flight, host-visible: a frame writes its own while the GPU may
     /// still read the other's.
     vulkan::Buffer globals;
+    /// The `--guide` image; no buffer without one.
+    Guide guide;
     b8_t                     wireframe = false;
     Camera                   camera;
     Input                    input;
@@ -507,6 +565,24 @@ void ViewerLayer::OnAttach() {
         }
         m_state->globals = *globals;
     }
+    if (Settings& s = m_state->settings; !s.guide.empty()) {
+        // Over the ground it was given, or the map's; a guide over nothing in particular would be a guess.
+        if (!s.guideBounded && !s.bounded) {
+            LOG_ERROR("--guide needs --guide-bounds or --bounds: the ground the image covers");
+            App().AddExit(ExitCode::FailedToInitializeEngine);
+            App().Stop();
+            return;
+        }
+        s.guideBounds = s.guideBounded ? s.guideBounds : s.bounds;
+        Result<Guide> guide = LoadGuide(*m_state->context, s.guide);
+        if (!guide) {
+            LOG_ERROR("{}", guide.error().Format().data());
+            App().AddExit(ExitCode::FailedToInitializeEngine);
+            App().Stop();
+            return;
+        }
+        m_state->guide = *guide;
+    }
 
     // The camera is framed and the level chosen *before* the script runs, because the script is given
     // the level's sample spacing and `IdealLevel` needs only the camera, not the graph.
@@ -655,6 +731,9 @@ void ViewerLayer::OnDetach() {
     }
     if (m_state->context != nullptr && m_state->globals.IsValid()) {
         m_state->context->Memory().DestroyBuffer(m_state->globals);
+    }
+    if (m_state->context != nullptr && m_state->guide.texels.IsValid()) {
+        m_state->context->Memory().DestroyBuffer(m_state->guide.texels);
     }
     m_state->pipeline     = vulkan::GraphicsPipeline{};
     m_state->wirePipeline = vulkan::GraphicsPipeline{};
@@ -823,6 +902,8 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.sun               = state.settings.sun;
     panels.plan              = state.settings.plan;
     panels.showIds           = state.settings.showIds;
+    panels.guide             = state.guide.texels.IsValid();
+    panels.guideOpacity      = state.settings.guideOpacity;
     panels.shownRange        = {state.terrain.shownMinimum, state.terrain.shownMaximum};
     static_assert(Ui::Panels::kMaxOutputs == terrain::Graph::kMaxOutputs);
     for (usize_t i = 0; state.live != nullptr && i < state.live->graph.OutputCount(); ++i) {
@@ -855,6 +936,7 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     state.settings.sun           = panels.sun;
     state.settings.plan          = panels.plan;
     state.settings.showIds       = panels.showIds;
+    state.settings.guideOpacity  = panels.guideOpacity;
     if (panels.shown != shown) {
         detail::CopyBounded(state.showName, panels.shown >= 0 ? std::string_view{panels.outputs[static_cast<usize_t>(panels.shown)]}
                                                               : std::string_view{});
@@ -1068,7 +1150,11 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
         .eye = {eye.x, eye.y, eye.z},
         .sun = {std::sin(azimuth) * std::cos(altitude), std::sin(altitude), -std::cos(azimuth) * std::cos(altitude)},
         .shownRange = {state.terrain.shownMinimum, state.terrain.shownMaximum},
-        .shownMode  = state.terrain.shownOutput == kNoOutput ? 0u : (state.settings.showIds ? 2u : 1u)};
+        .shownMode  = state.terrain.shownOutput == kNoOutput ? 0u : (state.settings.showIds ? 2u : 1u),
+        .guideOpacity = state.guide.texels.IsValid() ? state.settings.guideOpacity : 0.0f,
+        .guide        = state.guide.texels.address,
+        .guideSize    = state.guide.size,
+        .guideBounds  = state.settings.guideBounds};
     const VkDeviceSize slot = sizeof(vulkan::ViewerGlobals) * frame.frameIndex;
     std::memcpy(static_cast<u8_t*>(state.globals.mapped) + slot, &globals, sizeof(globals));
     if (Status flushed = state.context->Memory().FlushBuffer(state.globals, slot, sizeof(globals)); !flushed) {

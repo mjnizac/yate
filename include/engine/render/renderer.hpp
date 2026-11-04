@@ -124,6 +124,13 @@ public:
         /// value, for ids such as biomes. Empty shows none. Changing it re-copies the tiles, no script run.
         std::string_view show;
         b8_t             showIds = false;
+        /// A PNG laid over the terrain as a tracing aid (`--guide`): a reference map or outline, its first
+        /// row at min z as in an exported heightmap, stretched over `guideBounds` (`--guide-bounds`,
+        /// else `bounds`). `guideOpacity` is how much of it shows ("Guide" in the panel).
+        std::string_view     guide;
+        std::array<f32_t, 4> guideBounds{};
+        b8_t                 guideBounded = false;
+        f32_t                guideOpacity = 0.5f;
     };
 
     ViewerLayer(Application& application, const Settings& settings);

@@ -82,6 +82,9 @@ public:
         i32_t                      shown       = -1;
         b8_t                       showIds     = false;
         std::array<f32_t, 2>       shownRange{};
+        /// A guide image is loaded, and how much of it shows (edited in place).
+        b8_t  guide        = false;
+        f32_t guideOpacity = 0.5f;
         /// Edited in place when the user drags a value. Null hides the section.
         terrain::Params* params = nullptr;
     };

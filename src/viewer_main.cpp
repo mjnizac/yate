@@ -50,6 +50,9 @@ void PrintUsage() {
                "                         exported heightmap; framed on --bounds unless --view is given\n"
                "  --show <output>        paint an R2->R1 output over the terrain, a ramp over its range\n"
                "  --show-ids             paint the shown output one colour a whole value (ids, biomes)\n"
+               "  --guide <file.png>     lay an image over the terrain as a tracing aid, its first row at\n"
+               "                         min z, over --guide-bounds minx,minz,maxx,maxz (default --bounds)\n"
+               "  --guide-opacity <f>    0 to 1, how much of the guide shows (default 0.5)\n"
                "  --follow               re-run the script as the camera moves, with params.bounds round\n"
                "                         it: for a world built only where it is looked at\n"
                "  --map-scale <f>        draw the map f times wider, heights and water level unchanged\n"
@@ -376,6 +379,28 @@ template <typename T>
             options.viewer.bounded = true;
         } else if (argument == "--show") {
             options.viewer.show = value;
+        } else if (argument == "--guide") {
+            options.viewer.guide = value;
+        } else if (argument == "--guide-bounds") {
+            Result<std::array<f32_t, 4>> bounds = ParseNumbers<4>(argument, value);
+            if (!bounds) {
+                return std::unexpected(bounds.error());
+            }
+            if (!((*bounds)[0] < (*bounds)[2] && (*bounds)[1] < (*bounds)[3])) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init,
+                            "--guide-bounds expects minx,minz,maxx,maxz with min under max, got {}", value);
+            }
+            options.viewer.guideBounds  = *bounds;
+            options.viewer.guideBounded = true;
+        } else if (argument == "--guide-opacity") {
+            Result<f64_t> opacity = cli::ParseFinite(argument, value);
+            if (!opacity) {
+                return std::unexpected(opacity.error());
+            }
+            if (*opacity < 0.0 || *opacity > 1.0) {
+                ENGINE_FAIL(ErrorCode::InvalidArgument, ErrorStage::Init, "--guide-opacity is in [0, 1], got {}", value);
+            }
+            options.viewer.guideOpacity = static_cast<f32_t>(*opacity);
         } else if (argument == "--sun") {
             Result<std::array<f32_t, 2>> sun = ParseNumbers<2>(argument, value);
             if (!sun) {

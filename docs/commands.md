@@ -214,6 +214,17 @@ again with the other output. A name the script does not give logs a warning and 
 build/Release/bin/terrain_viewer --script assets/scripts/terrains/cliffs.lua --target 0,800,-1500 --view 160,-30,9000 --show debris --screenshot out/cliffs_debris.png
 ```
 
+`--guide <file.png>` lays an image over the terrain as a tracing aid, as World Machine's guide image
+does: a reference map, an outline or a hillshade, its first row at min z, stretched over
+`--guide-bounds minx,minz,maxx,maxz` (default `--bounds`; one of the two is required).
+`--guide-opacity <0-1>` (default 0.5, "Guide" in the panel) is how much of it shows; its alpha is kept,
+so a transparent outline shows only its lines. With `--plan` a shot compares a terrain's outline with
+the one wanted at a glance:
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/lands/archipelago_arc.lua --resolution 128 --bounds -48000,-48000,48000,48000 --plan --water --no-panels --guide reference.png --screenshot out/arc_guide.png
+```
+
 `--water` draws water at the water level, which is off by default and costs no evaluation to change.
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
 sea; the panel has the same controls and a reload keeps them. The panel also toggles the sea, the lakes

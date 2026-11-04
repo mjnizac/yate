@@ -223,11 +223,21 @@ struct ViewerGlobals {
     /// range, 2 one colour a whole value.
     std::array<f32_t, 2> shownRange{};
     u32_t                shownMode = 0;
+    /// The guide image (`--guide`): how much of it is laid over the terrain (0: none), its RGBA8 texels
+    /// row by row, its size, and the ground it covers (min x, min z, max x, max z, metres).
+    f32_t                guideOpacity = 0.0f;
+    VkDeviceAddress      guide        = 0;
+    std::array<u32_t, 2> guideSize{};
+    std::array<f32_t, 4> guideBounds{};
 };
 
 static_assert(offsetof(ViewerGlobals, sun) == 12);
 static_assert(offsetof(ViewerGlobals, shownRange) == 24);
 static_assert(offsetof(ViewerGlobals, shownMode) == 32);
+static_assert(offsetof(ViewerGlobals, guideOpacity) == 36);
+static_assert(offsetof(ViewerGlobals, guide) == 40);
+static_assert(offsetof(ViewerGlobals, guideSize) == 48);
+static_assert(offsetof(ViewerGlobals, guideBounds) == 56);
 
 // 128 bytes is the minimum a device must offer, so this fits everywhere. Every offset is asserted:
 // a field out of place does not raise a validation error, it draws garbage.

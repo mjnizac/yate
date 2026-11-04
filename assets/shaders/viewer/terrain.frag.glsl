@@ -11,14 +11,25 @@
 
 #include "lib/water.lib.glsl"
 
+// RGBA8 texels, red in the low byte, row by row.
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TexelBuffer {
+    uint values[];
+};
+
 // What is the same for every tile of a frame. Must match `ViewerGlobals` in `vulkan/pipeline.hpp`.
-layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Globals {
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer Globals {
     vec3 eye;
     // Unit vector towards the sun (`--sun`, "Sun" in the panel).
     vec3 sun;
     // The shown output (`--show`): its declared range, and 0 none, 1 a ramp, 2 one colour an id.
     vec2 shownRange;
     uint shownMode;
+    // The guide image (`--guide`): opacity (0: none), texels, size, and the ground it covers (min x, min
+    // z, max x, max z).
+    float       guideOpacity;
+    TexelBuffer guide;
+    uvec2       guideSize;
+    vec4        guideBounds;
 };
 
 // The same block the vertex stage declares, member for member under scalar layout. The tile addresses
@@ -49,6 +60,23 @@ layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in float vHeight;
 layout(location = 3) in float vWater;
+// One texel of the guide image, clamped to its edge, in linear colour (the image is sRGB).
+vec4 GuideTexel(ivec2 texel) {
+    uvec2 size = pc.globals.guideSize;
+    uvec2 at   = uvec2(clamp(texel, ivec2(0), ivec2(size) - 1));
+    vec4  c    = unpackUnorm4x8(pc.globals.guide.values[at.y * size.x + at.x]);
+    return vec4(pow(c.rgb, vec3(2.2)), c.a);
+}
+
+// The guide image at `uv` in [0, 1), bilinear: its first row is at min z.
+vec4 SampleGuide(vec2 uv) {
+    vec2  p = uv * vec2(pc.globals.guideSize) - 0.5;
+    ivec2 i = ivec2(floor(p));
+    vec2  f = p - floor(p);
+    return mix(mix(GuideTexel(i), GuideTexel(i + ivec2(1, 0)), f.x),
+               mix(GuideTexel(i + ivec2(0, 1)), GuideTexel(i + ivec2(1, 1)), f.x), f.y);
+}
+
 layout(location = 4) in float vShown;
 layout(location = 5) flat in float vShownId;
 
@@ -290,6 +318,16 @@ void main() {
         // sides of it. Then what the pixel shows is the surface, and a surface reflects.
         if ((eye.y - level) * (vWorldPosition.y - level) < 0.0) {
             lit = mix(lit, WaterSurface(lit, direction), water.a);
+        }
+    }
+
+    // The guide image over everything, water included, as a tracing aid does: only over its own ground.
+    if (pc.globals.guideOpacity > 0.0) {
+        vec4 bounds = pc.globals.guideBounds;
+        vec2 uv     = (vWorldPosition.xz - bounds.xy) / (bounds.zw - bounds.xy);
+        if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+            vec4 texel = SampleGuide(uv);
+            lit        = mix(lit, texel.rgb, pc.globals.guideOpacity * texel.a);
         }
     }
 
