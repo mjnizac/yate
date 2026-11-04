@@ -184,13 +184,17 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
         return std::unexpected(height.error());
     }
     tile.height = *height;
+    // The shown output, if any, is a fourth plane after the normals' three.
+    const b8_t                  shown   = built.shownOutput != kNoOutput;
     Result<vulkan::SectionSlot> normals = context.Sections().Acquire(
-        terrain::ClassOf(normalsOutput.mapping, extent, 0), built.normalsBytes);
+        terrain::ClassOf(shown ? Mapping{Domain::R2, 4} : normalsOutput.mapping, extent, 0),
+        built.normalsBytes + (shown ? built.heightBytes : 0));
     if (!normals) {
         context.Sections().Release(tile.height);
         return std::unexpected(normals.error());
     }
     tile.normals = *normals;
+    tile.shown   = shown;
 
     const auto fail = [&](const Error& error) {
         context.Sections().Release(tile.height);
@@ -222,18 +226,26 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
         u32_t                          halo;
         u64_t                          offset;
     };
-    std::array<CopyPlan, 5> copies{{{&heightOutput, &tile.height, built.heightHalo, 0},
+    std::array<CopyPlan, 6> copies{{{&heightOutput, &tile.height, built.heightHalo, 0},
                                     {&normalsOutput, &tile.normals, built.normalsHalo, 0},
                                     {nullptr, &tile.height, 0, built.heightBytes},
                                     {nullptr, &tile.height, 0, 2 * built.heightBytes},
-                                    {nullptr, &tile.height, 0, 3 * built.heightBytes}}};
+                                    {nullptr, &tile.height, 0, 3 * built.heightBytes},
+                                    {nullptr, nullptr, 0, built.normalsBytes}}};
     for (usize_t w = 0; w < kWaterOutputs.size(); ++w) {
         if (built.waterOutputs[w] != kNoOutput) {
             copies[2 + w].output = &built.compiled.outputs[built.waterOutputs[w]];
             copies[2 + w].halo   = copies[2 + w].output->halo;
         }
     }
+    if (shown) {
+        copies[5] = {&built.compiled.outputs[built.shownOutput], &tile.normals,
+                     built.compiled.outputs[built.shownOutput].halo, built.normalsBytes};
+    }
     for (const CopyPlan& plan : copies) {
+        if (plan.target == nullptr) {
+            continue;
+        }
         if (plan.output == nullptr) {
             vkCmdFillBuffer(commands, plan.target->buffer, plan.target->offset + plan.offset,
                             built.heightBytes, kNoWaterBits);
@@ -362,6 +374,18 @@ constexpr u32_t kNoWaterBits = 0xC9742400u;
     built.waterOutputs  = loaded.waterOutputs;
     built.heightMinimum = loaded.heightMinimum;
     built.heightMaximum = loaded.heightMaximum;
+    // The shown output, by name among the R2->R1 ones. A name the script does not give shows nothing.
+    for (usize_t i = 0; i < loaded.graph.OutputCount() && !settings.show.empty(); ++i) {
+        const terrain::OutputRequest& output = loaded.graph.Output(i);
+        if (std::string_view{output.name.data()} == settings.show && output.value.mapping == Mapping{Domain::R2, 1}) {
+            built.shownOutput  = i;
+            built.shownMinimum = output.rangeMin;
+            built.shownMaximum = output.rangeMax > output.rangeMin ? output.rangeMax : output.rangeMin + 1.0f;
+        }
+    }
+    if (!settings.show.empty() && built.shownOutput == kNoOutput && level == 0) {
+        LOG_WARN("nothing to show: the script has no R2->R1 output named {}", settings.show);
+    }
 
     const terrain::CompiledOutput& height  = built.compiled.outputs[built.heightOutput];
     const terrain::CompiledOutput& normals = built.compiled.outputs[built.normalsOutput];

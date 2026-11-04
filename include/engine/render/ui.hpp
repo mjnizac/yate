@@ -73,6 +73,15 @@ public:
         /// Sun azimuth and elevation in degrees, edited in place.
         std::array<f32_t, 2> sun{};
         b8_t                 plan = false;
+        /// The script's R2->R1 outputs that can be shown, the one shown (-1 none, edited in place),
+        /// whether as ids, and its declared range for the legend.
+        /// As many as a graph has outputs (`Graph::kMaxOutputs`, asserted where the list is filled).
+        static constexpr usize_t kMaxOutputs = 8;
+        std::array<const char*, kMaxOutputs> outputs{};
+        u32_t                      outputCount = 0;
+        i32_t                      shown       = -1;
+        b8_t                       showIds     = false;
+        std::array<f32_t, 2>       shownRange{};
         /// Edited in place when the user drags a value. Null hides the section.
         terrain::Params* params = nullptr;
     };

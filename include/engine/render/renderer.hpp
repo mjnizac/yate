@@ -119,6 +119,11 @@ public:
         /// The orbit camera's target is the centre and its distance the zoom; with `--bounds` and no
         /// `--view` it starts framed on the bounds.
         b8_t plan = false;
+        /// An R2->R1 output painted over the terrain, still lit (`--show`, "Show" in the panel): a
+        /// colour ramp over the range the script declared for it, or with `showIds` one colour a whole
+        /// value, for ids such as biomes. Empty shows none. Changing it re-copies the tiles, no script run.
+        std::string_view show;
+        b8_t             showIds = false;
     };
 
     ViewerLayer(Application& application, const Settings& settings);
@@ -180,6 +185,7 @@ private:
     void UpdateLevel();
     void UpdatePanels();
     void UpdateReload();
+    void ReshowTiles();
     /// Evaluates at most `budget` missing tiles of the ring, and evicts what left it.
     void StreamTiles(u32_t budget, f64_t deadline = 1e300);
 #ifdef IS_ENGINE

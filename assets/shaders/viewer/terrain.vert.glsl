@@ -45,6 +45,10 @@ layout(location = 1) out vec3 vNormal;
 layout(location = 2) out float vHeight;
 // The highest water surface drawn here, lake or river; far below the ground where there is none.
 layout(location = 3) out float vWater;
+// The shown output (bit 26: a fourth plane of the normals slot), smooth for a ramp and flat for ids, so
+// a boundary between two ids never shows the ids between them.
+layout(location = 4) out float vShown;
+layout(location = 5) flat out float vShownId;
 
 void main() {
     uint samples         = pc.samples & 0xFFFFu;
@@ -76,6 +80,8 @@ void main() {
     float river  = (pc.samples & 0x40000000u) != 0u ? pc.heights.values[2u * plane + index] : -1e30;
     float sea    = (pc.samples & 0x30000000u) == 0x30000000u ? pc.heights.values[3u * plane + index] : -1e30;
     vWater       = max(max(lake, river), sea);
+    vShown       = (pc.samples & 0x04000000u) != 0u ? pc.normals.values[3u * plane + index] : 0.0;
+    vShownId     = vShown;
     vec3  normal = vec3(pc.normals.values[index * 3u], pc.normals.values[index * 3u + 1u],
                         pc.normals.values[index * 3u + 2u]);
 

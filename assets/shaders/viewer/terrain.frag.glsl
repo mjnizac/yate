@@ -16,6 +16,9 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Glo
     vec3 eye;
     // Unit vector towards the sun (`--sun`, "Sun" in the panel).
     vec3 sun;
+    // The shown output (`--show`): its declared range, and 0 none, 1 a ramp, 2 one colour an id.
+    vec2 shownRange;
+    uint shownMode;
 };
 
 // The same block the vertex stage declares, member for member under scalar layout. The tile addresses
@@ -46,6 +49,24 @@ layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in float vHeight;
 layout(location = 3) in float vWater;
+layout(location = 4) in float vShown;
+layout(location = 5) flat in float vShownId;
+
+// A ramp for a shown output, dark blue at the bottom of its range through green and yellow to red at the
+// top, so low and high read apart at a glance and in a screenshot.
+vec3 Ramp(float t) {
+    vec3 colour = mix(vec3(0.10, 0.05, 0.40), vec3(0.10, 0.40, 0.85), smoothstep(0.00, 0.25, t));
+    colour      = mix(colour, vec3(0.15, 0.70, 0.35), smoothstep(0.25, 0.50, t));
+    colour      = mix(colour, vec3(0.95, 0.85, 0.15), smoothstep(0.50, 0.75, t));
+    return mix(colour, vec3(0.85, 0.15, 0.10), smoothstep(0.75, 1.00, t));
+}
+
+// One colour an id: hues a golden angle apart, so neighbouring ids differ. Must match `IdColour` in
+// `src/render/ui.cpp`, whose legend shows them.
+vec3 IdColour(float id) {
+    float hue = fract(round(id) * 0.618034);
+    return clamp(abs(fract(hue + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0) * 0.6 + 0.25;
+}
 
 layout(location = 0) out vec4 outColor;
 
@@ -213,6 +234,16 @@ void main() {
         ramp       = mix(ramp, vec3(0.50, 0.47, 0.43), smoothstep(0.50, 0.70, e));
         ramp       = mix(ramp, vec3(0.93, 0.93, 0.93), smoothstep(1.0, 1.04, e));
         albedo     = ramp;
+    }
+
+    // A shown output replaces the palette, still lit so the relief reads under it; no snow, which would
+    // hide it on the summits.
+    uint shownMode = (pc.samples & 0x04000000u) != 0u ? pc.globals.shownMode : 0u;
+    if (shownMode != 0u) {
+        vec2 range = pc.globals.shownRange;
+        albedo     = shownMode == 2u ? IdColour(vShownId)
+                                     : Ramp(clamp((vShown - range.x) / (range.y - range.x), 0.0, 1.0));
+        snow       = 0.0;
     }
 
     float sun = max(dot(normal, pc.globals.sun), 0.0) * sunlit;

@@ -219,9 +219,15 @@ struct ViewerGlobals {
     std::array<f32_t, 3> eye{};
     /// Unit vector towards the sun.
     std::array<f32_t, 3> sun{};
+    /// The shown output's declared range, and how it is painted: 0 not at all, 1 a ramp over the
+    /// range, 2 one colour a whole value.
+    std::array<f32_t, 2> shownRange{};
+    u32_t                shownMode = 0;
 };
 
 static_assert(offsetof(ViewerGlobals, sun) == 12);
+static_assert(offsetof(ViewerGlobals, shownRange) == 24);
+static_assert(offsetof(ViewerGlobals, shownMode) == 32);
 
 // 128 bytes is the minimum a device must offer, so this fits everywhere. Every offset is asserted:
 // a field out of place does not raise a validation error, it draws garbage.

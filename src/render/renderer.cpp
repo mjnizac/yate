@@ -67,6 +67,8 @@ constexpr u32_t kDrawSea    = 1u << 29;
 constexpr u32_t kSeaOutput  = 1u << 28;
 /// Set on a tile with a coarser ring outside its own: it hangs a skirt round its edge to close the gap.
 constexpr u32_t kSkirt      = 1u << 27;
+/// Set on a tile whose normals slot carries the shown output as a fourth plane.
+constexpr u32_t kShown      = 1u << 26;
 
 /// Six frustum planes as `ax + by + cz + d >= 0` inside the volume.
 struct Frustum {
@@ -258,6 +260,10 @@ struct ViewerLayer::State {
     Settings              settings;
     std::array<char, 512> scriptPath{};
     std::array<char, 512> shapesPath{};
+    /// The shown output's name, which the panel may change: `settings.show` points here.
+    std::array<char, 64> showName{};
+    /// The shown output changed: the tiles are copied again (see `OnUpdate`).
+    b8_t reshow = false;
     terrain::Params       params;
 
     vulkan::Context*        context  = nullptr;
@@ -360,6 +366,8 @@ ViewerLayer::ViewerLayer(Application& application, const Settings& settings)
     m_state->settings.script = std::string_view{m_state->scriptPath.data()};
     detail::CopyBounded(m_state->shapesPath, settings.shapes);
     m_state->settings.shapes = std::string_view{m_state->shapesPath.data()};
+    detail::CopyBounded(m_state->showName, settings.show);
+    m_state->settings.show = std::string_view{m_state->showName.data()};
     if (settings.params != nullptr) {
         m_state->params = *settings.params;
     }
@@ -680,6 +688,9 @@ void ViewerLayer::OnUpdate() {
         m_state->camera.PlaceAt(Vec3{eye.x + step, eye.y, eye.z});
     }
     UpdateLevel();
+    if (m_state->reshow) {
+        ReshowTiles();
+    }
     // The bound, then as many more as fit in `streamMilliseconds` of the frame: a light script fills a ring
     // of hundreds at once, a heavy one never stalls a frame for it.
     const u64_t before = m_state->cache.evaluated;
@@ -811,6 +822,18 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.mapScale          = state.settings.mapScale;
     panels.sun               = state.settings.sun;
     panels.plan              = state.settings.plan;
+    panels.showIds           = state.settings.showIds;
+    panels.shownRange        = {state.terrain.shownMinimum, state.terrain.shownMaximum};
+    static_assert(Ui::Panels::kMaxOutputs == terrain::Graph::kMaxOutputs);
+    for (usize_t i = 0; state.live != nullptr && i < state.live->graph.OutputCount(); ++i) {
+        const terrain::OutputRequest& output = state.live->graph.Output(i);
+        if (output.value.mapping == terrain::Mapping{terrain::Domain::R2, 1}) {
+            panels.shown = std::string_view{output.name.data()} == state.settings.show
+                               ? static_cast<i32_t>(panels.outputCount) : panels.shown;
+            panels.outputs[panels.outputCount++] = output.name.data();
+        }
+    }
+    const i32_t shown = panels.shown;
 
     // Editing a parameter reloads: the script is what turns a parameter into terrain, so there is no
     // shortcut that updates push constants instead. The spec's "only numeric parameters changed, so no
@@ -831,6 +854,13 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     state.settings.ringRadius    = static_cast<u32_t>(panels.ringRadius);
     state.settings.sun           = panels.sun;
     state.settings.plan          = panels.plan;
+    state.settings.showIds       = panels.showIds;
+    if (panels.shown != shown) {
+        detail::CopyBounded(state.showName, panels.shown >= 0 ? std::string_view{panels.outputs[static_cast<usize_t>(panels.shown)]}
+                                                              : std::string_view{});
+        state.settings.show = std::string_view{state.showName.data()};
+        state.reshow        = true;
+    }
     if (panels.mapScale != state.settings.mapScale) {
         // The camera keeps looking at the same ground: what it is about is moved with the map.
         state.camera.ScaleGround(panels.mapScale / state.settings.mapScale);
@@ -838,6 +868,30 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     }
 
     state.ui.Record(commands);
+}
+
+/// Copies the ring again with the shown output the panel picked. The script does not run: the graph it
+/// built evaluates every output already, and only which one the tiles keep has changed.
+void ViewerLayer::ReshowTiles() {
+    State& state = *m_state;
+    state.reshow = false;
+    if (state.live == nullptr) {
+        return;
+    }
+    if (Status idle = state.context->WaitIdle(); !idle) {
+        LOG_WARN("could not wait for the device before showing another output: {}", idle.error().Format().data());
+    }
+    Result<Terrain> terrain = BuildTerrain(*state.context, *state.live, state.settings, 0);
+    if (!terrain) {
+        LOG_ERROR("could not show {}: {}", state.showName.data(), terrain.error().Format().data());
+        return;
+    }
+    state.cache.Release(*state.context);
+    state.terrain = std::move(*terrain);
+    for (Terrain& ring : state.rings) {
+        ring = Terrain{};
+    }
+    StreamTiles(~0u);
 }
 
 void ViewerLayer::UpdateReload() {
@@ -1012,7 +1066,9 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     const f32_t          altitude = state.settings.sun[1] * kDegrees;
     vulkan::ViewerGlobals globals{
         .eye = {eye.x, eye.y, eye.z},
-        .sun = {std::sin(azimuth) * std::cos(altitude), std::sin(altitude), -std::cos(azimuth) * std::cos(altitude)}};
+        .sun = {std::sin(azimuth) * std::cos(altitude), std::sin(altitude), -std::cos(azimuth) * std::cos(altitude)},
+        .shownRange = {state.terrain.shownMinimum, state.terrain.shownMaximum},
+        .shownMode  = state.terrain.shownOutput == kNoOutput ? 0u : (state.settings.showIds ? 2u : 1u)};
     const VkDeviceSize slot = sizeof(vulkan::ViewerGlobals) * frame.frameIndex;
     std::memcpy(static_cast<u8_t*>(state.globals.mapped) + slot, &globals, sizeof(globals));
     if (Status flushed = state.context->Memory().FlushBuffer(state.globals, slot, sizeof(globals)); !flushed) {
@@ -1049,8 +1105,9 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
         const u32_t vertexCount  = (quadsPerSide + 2) * (quadsPerSide + 2) * 6;
 
         constants.resolution   = tile.spacing;
-        constants.samples      = (constants.samples & ~kSkirt)
-                            | (tile.key.level < state.level + std::min(state.settings.maxLevel, kMaxRings) ? kSkirt : 0u);
+        constants.samples      = (constants.samples & ~(kSkirt | kShown))
+                            | (tile.key.level < state.level + std::min(state.settings.maxLevel, kMaxRings) ? kSkirt : 0u)
+                            | (tile.shown ? kShown : 0u);
         constants.gridVertices = gridVertices;
         constants.tileOrigin   = tile.origin;
         constants.heights      = tile.height.address;

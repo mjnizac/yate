@@ -204,6 +204,16 @@ distance is the zoom: the shot's height covers `1.155 x distance` metres.
 build/Release/bin/terrain_viewer --script assets/scripts/lands/archipelago_arc.lua --resolution 128 --bounds -48000,-48000,48000,48000 --plan --water --no-panels --screenshot out/arc_plan.png
 ```
 
+`--show <output>` (or "Show" in the panel) paints any of the script's R2->R1 outputs over the terrain,
+still lit: a ramp from dark blue at the bottom of the range the script declared for it, through green and
+yellow, to red at the top. `--show-ids` ("As ids") paints one colour a whole value instead, for ids such
+as biomes or strata, with a legend in the panel. The script does not run again; the tiles are copied
+again with the other output. A name the script does not give logs a warning and shows nothing.
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/terrains/cliffs.lua --target 0,800,-1500 --view 160,-30,9000 --show debris --screenshot out/cliffs_debris.png
+```
+
 `--water` draws water at the water level, which is off by default and costs no evaluation to change.
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
 sea; the panel has the same controls and a reload keeps them. The panel also toggles the sea, the lakes

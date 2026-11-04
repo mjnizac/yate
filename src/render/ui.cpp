@@ -32,6 +32,20 @@ namespace {
 /// Enough for the panels: ImGui allocates one set per texture it draws, and the viewer draws one.
 constexpr u32_t kDescriptorCount = 8;
 
+/// Ids the legend of a shown output lists at most.
+constexpr i32_t kMaxLegendIds = 32;
+
+/// The colour of an id, as `IdColour` in `viewer/terrain.frag.glsl` paints it: hues a golden angle apart.
+[[nodiscard]] std::array<f32_t, 3> IdColour(i32_t id) {
+    const f32_t hue = static_cast<f32_t>(id) * 0.618034f - std::floor(static_cast<f32_t>(id) * 0.618034f);
+    std::array<f32_t, 3> colour{};
+    for (usize_t c = 0; c < colour.size(); ++c) {
+        const f32_t shifted = hue + std::array<f32_t, 3>{0.0f, 2.0f / 3.0f, 1.0f / 3.0f}[c];
+        colour[c] = std::clamp(std::abs((shifted - std::floor(shifted)) * 6.0f - 3.0f) - 1.0f, 0.0f, 1.0f) * 0.6f + 0.25f;
+    }
+    return colour;
+}
+
 /// ImGui allocates through the engine's general allocator rather than `malloc`, so it shows up as part
 /// of `CPU/General` instead of swelling the untracked `operator new` pool.
 ///
@@ -221,6 +235,45 @@ b8_t Ui::Draw(Panels& panels) {
             ImGui::DragFloat("Sea level (m)", &panels.waterLevel, 1.0f);
             ImGui::ColorEdit3("Colour", panels.waterColour.data());
             ImGui::SliderFloat("Opacity", &panels.waterOpacity, 0.0f, 1.0f);
+        }
+
+        // Any R2->R1 output painted over the terrain: a ramp over its declared range, or a colour an id.
+        if (panels.outputCount != 0) {
+            ImGui::Separator();
+            const char* current = panels.shown >= 0 ? panels.outputs[static_cast<usize_t>(panels.shown)] : "(none)";
+            if (ImGui::BeginCombo("Show", current)) {
+                if (ImGui::Selectable("(none)", panels.shown < 0)) {
+                    panels.shown = -1;
+                }
+                for (u32_t i = 0; i < panels.outputCount; ++i) {
+                    if (ImGui::Selectable(panels.outputs[i], panels.shown == static_cast<i32_t>(i))) {
+                        panels.shown = static_cast<i32_t>(i);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (panels.shown >= 0) {
+                ImGui::Checkbox("As ids", &panels.showIds);
+                ImGui::SameLine();
+                ImGui::Text("%g .. %g", static_cast<f64_t>(panels.shownRange[0]), static_cast<f64_t>(panels.shownRange[1]));
+            }
+            // The ids' colours, as many as the range holds, up to `kMaxLegendIds`; none for a ramp.
+            const i32_t first = static_cast<i32_t>(std::ceil(panels.shownRange[0]));
+            const i32_t last  = panels.shown >= 0 && panels.showIds
+                                    ? std::min(static_cast<i32_t>(std::floor(panels.shownRange[1])), first + kMaxLegendIds - 1)
+                                    : first - 1;
+            for (i32_t id = first; id <= last; ++id) {
+                const std::array<f32_t, 3> colour = IdColour(id);
+                std::array<char, 16>       label{};
+                std::snprintf(label.data(), label.size(), "%d", id);
+                if ((id - first) % 8 != 0) {
+                    ImGui::SameLine();
+                }
+                ImGui::ColorButton(label.data(), ImVec4{colour[0], colour[1], colour[2], 1.0f},
+                                   ImGuiColorEditFlags_NoTooltip, ImVec2{14.0f, 14.0f});
+                ImGui::SameLine();
+                ImGui::TextUnformatted(label.data());
+            }
         }
 
         // The parameter list is generated from whatever the script was given, which is the whole of

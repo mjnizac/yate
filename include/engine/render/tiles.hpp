@@ -55,6 +55,8 @@ struct Tile {
     u32_t samples = 0;
     /// The cache's generation it was evaluated in (see `TileCache`).
     u64_t generation = 0;
+    /// Its normals slot carries the shown output as a fourth plane after the normals.
+    b8_t shown = false;
 };
 
 /// A graph the script produced, plus what the viewer needs to draw it.
@@ -110,6 +112,12 @@ struct Terrain {
     /// The `lakes` and `rivers` outputs, `kNoOutput` where the script has none. Drawn from the height
     /// slot, which carries them after the height (see `EvaluateTile`).
     std::array<usize_t, 3> waterOutputs{kNoOutput, kNoOutput, kNoOutput};
+    /// The output painted over the terrain (`ViewerLayer::Settings::show`), `kNoOutput` for none, and
+    /// the range the script declared for it. Drawn from the normals slot, a fourth plane after the three
+    /// components: the slot's power-of-two size class has room for it.
+    usize_t shownOutput  = kNoOutput;
+    f32_t   shownMinimum = 0.0f;
+    f32_t   shownMaximum = 1.0f;
     /// Bytes one tight tile takes, with no halo.
     u64_t heightBytes   = 0;
     u64_t normalsBytes  = 0;

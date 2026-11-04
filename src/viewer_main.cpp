@@ -48,6 +48,8 @@ void PrintUsage() {
                "  --no-panels            draw no panels, so a screenshot shows the terrain alone\n"
                "  --plan                 orthographic view straight down, +x right and +z down as in an\n"
                "                         exported heightmap; framed on --bounds unless --view is given\n"
+               "  --show <output>        paint an R2->R1 output over the terrain, a ramp over its range\n"
+               "  --show-ids             paint the shown output one colour a whole value (ids, biomes)\n"
                "  --follow               re-run the script as the camera moves, with params.bounds round\n"
                "                         it: for a world built only where it is looked at\n"
                "  --map-scale <f>        draw the map f times wider, heights and water level unchanged\n"
@@ -232,6 +234,10 @@ template <typename T>
             options.viewer.water.enabled = true;
             continue;
         }
+        if (argument == "--show-ids") {
+            options.viewer.showIds = true;
+            continue;
+        }
         if (argument == "--plan") {
             options.viewer.plan = true;
             continue;
@@ -368,6 +374,8 @@ template <typename T>
             }
             options.viewer.bounds  = *bounds;
             options.viewer.bounded = true;
+        } else if (argument == "--show") {
+            options.viewer.show = value;
         } else if (argument == "--sun") {
             Result<std::array<f32_t, 2>> sun = ParseNumbers<2>(argument, value);
             if (!sun) {
