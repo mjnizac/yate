@@ -6,13 +6,12 @@ Directions that are not tasks yet are in `docs/roadmap.md`.
 
 ## 1. Blocks trust in the suite
 
-- [ ] **CI is red on Windows since milestone 11, and Linux has never built.** `ci.yml` has run on GitHub
-      (read from the public API; the logs need admin rights). Run `9dba657` passed on Windows. Runs `39092a3`
-      and `ccd62ee` fail in "Tests that need no device" on both Windows configurations, and every Linux job
-      fails in "Build". The Windows failure does not reproduce here (a clean clone built as the workflow does
-      passes all six suites). The failing step's log names the suite; the same goes for Linux.
-- [ ] **`test_viewer` "distance picks the level"** waits up to 10 rounds of 60 frames for
-      `MissingTiles() == 0`; passes in Release, Debug not rechecked.
+- [ ] **Linux CI fails in three of its four jobs** (they are `continue-on-error`, so the run shows green;
+      both Windows jobs and Linux / gcc / none pass, read from `gh run view` on `aa4f2f0`, 2026-11-04):
+      Linux / clang (both) fails to build, `std::from_chars` for a double is deleted in its standard library
+      (`src/lua.cpp:2264`, the JSON number parser); Linux / gcc / asan-ubsan fails `test_errors` and
+      `test_compiler` with stack-use-after-scope: a `std::string_view` over the temporary `Error::Format()`
+      returns (`test_errors.cpp:20`; clang warns the same with -Wdangling-gsl).
 - [ ] **One GPU, one vendor, one OS.** Everything is validated on a GTX 1070 on Windows. Queue family
       selection, memory types, readback and the swapchain are where AMD and Intel differ; it needs hardware.
 
@@ -81,7 +80,8 @@ The goal is that a terrain is composed from validated examples and judged by num
       cone/round `Filters.Expand`, thermal `mass_balance` and `two_phase`, `Strata.Apply` with spatial
       bedding, `Curves.Ramp`), recreated against the forum threads they came from; none is in the alpine
       script yet. Since then: `multiscale` noise (the likeliest fix for the missing fine relief), hydraulic
-      `hardness`, `Erosion.Coastal`, `Weathering`, `Snow`, `Masks.Curvature` and `Wetness`.
+      `hardness`, `Erosion.Multiscale`, `Coastal`, `Weathering`, `Snow`, `Masks.Curvature` and `Wetness`;
+      none is in a library case yet either.
 - [ ] `Erosion.Multiscale` (World Machine's Multiscale Synthesis) needs a bounded region and samples its input
       on the CPU, so it sees no neighbourhood op upstream and repeats its simulation on every level change in
       the viewer (the `engine.memo` item in section 5 would cache it); an unbounded multiscale pass would need a
@@ -111,21 +111,23 @@ The goal is that a terrain is composed from validated examples and judged by num
 
 ## 5. Speed and tooling
 
-- [ ] **Tiles are evaluated one submit and wait at a time** (`EvaluateTile`): batch several per submission.
 - [ ] **Lua work is repeated on every level change**: the macros rebuild resolution-independent CPU grids each
-      time. `engine.memo(key, fn)` cleared on hot reload, or a `Terrain.Bake` op on a coarse grid; the report
+      time, and so do the prelude functions that sample on the CPU (`Erosion.Multiscale`, `Curves.Equalize`,
+      `Terrain.Mimic`, `Masks.Wetness`). `engine.memo(key, fn)` cleared on hot reload, or a `Terrain.Bake` op on a coarse grid; the report
       also samples 3 x 65 k points on the CPU (60 to 130 ms) at each change.
 - [ ] **One global level limits the view distance**: CDLOD-style per-tile levels with geomorphing (a design,
-      after the two items above). Normals take three floats per sample in the viewer; octahedral 2 x 16-bit is a
+      after the item above). Normals take three floats per sample in the viewer; octahedral 2 x 16-bit is a
       third of it.
 - [ ] `StreamPower` costs ~145 ns per cell and step on one thread (profile first); `Erosion.Wind` has no cache.
 - [ ] Export is bound by PNG encoding at 16k; measure the zlib level on 16-bit heights. `Graph::kMaxOutputs` is
       8; 16 would cost readback space only when used.
-- [ ] **No introspection of the API**: an agent learns a call's keys from the docs or the error. A generated
-      catalogue needs the bindings to declare parameters in data; start with a data-driven `check_args` for the
-      macros, now hand-written per macro.
+- [ ] **The API catalogue knows keys, not values**: `tools/dev.sh api` lists every function and the keys it
+      accepts by probing the engine, but defaults, ranges and meanings are only in `docs/lua_reference.md`.
+      Declaring parameters in data in the bindings (and a data-driven `check` for the prelude, now a key list
+      per function) would let the catalogue carry them.
 - [ ] User macros cannot be shared between scripts (`require`, `dofile`, `load` are removed on purpose).
 - [ ] The sidecar has no slope percentiles (`test_geometry` computes them from the raw export).
-- [ ] A golden failure reports a count, not where: print the bounding box and the largest difference.
+- [ ] A golden failure prints the count and the largest difference and writes a difference image, but not
+      where: print the bounding box of the differing samples.
 - [ ] The suite takes three to six minutes, mostly macro cases paying their own simulation; a `cells` key per
       case would cut it. `docs/architecture.md` does not describe the CPU ops (`StreamPower`, `Wind`, `Grid`).

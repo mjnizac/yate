@@ -38,9 +38,10 @@ Open, with the measurements, in `docs/todo.md`:
 
 * **Hydraulic erosion is only approximately resolution independent** (reference 2 m; channels at the scale
   of the cell differ; finer than 2 m the count is capped at 96) and leaves a one-sample ripple that
-  `Filters.Blur{ radius = 1 }` clears.
-* **CI is red** on Windows ("Tests that need no device", not reproducible locally) and Linux has never built.
-* **`test_viewer` "distance picks the level"** passes in Release since it waits for the tiles; Debug not rechecked.
+  `Filters.Blur{ radius = 1 }` clears. Valleys larger than a cell can come from `Erosion.Multiscale`, whose
+  coarse pass is in metres and the same at every resolution, but only over a bounded region.
+* **Linux CI fails** (clang cannot build `std::from_chars` for a double; gcc's ASan finds a dangling
+  `string_view` in two tests). Windows CI passes.
 * **Water at the ring's edge** shows a plate where the surface stands above a lower floor.
 * **One GPU, one vendor, one OS.**
 
