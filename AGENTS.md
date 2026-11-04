@@ -4,7 +4,9 @@ GPU-driven terrain generation engine. Lua scripts describe terrain as a lazy gra
 the engine compiles that graph into Vulkan compute dispatches, evaluates it section by section and
 exports 16-bit PNG heightmaps with a metadata sidecar.
 
-The export path is the product. The viewer is a tool for iterating on it.
+The export path is the product. The viewer is a tool for iterating on it: besides perspective shots it
+takes top-down plan shots laid out like an export (`--plan`), draws a reference over the terrain
+(`--guide`) and paints any output over it (`--show`); see the viewer section of `docs/commands.md`.
 
 | Where | What |
 | --- | --- |

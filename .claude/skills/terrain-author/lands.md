@@ -29,7 +29,9 @@ it is done: `tools/dev.sh lands-check <script> --bounds ... --expect count=N,are
 it and compares what each id measured with what was asked; `tools/dev.sh lands` prints the resolved
 elements (`script_report.lands` in `metadata.json`) next to the measurements. Give each new example a
 header with its viewer and export commands at a resolution suited to its size, and a golden in
-`tests/datasets/lands_<name>/`.
+`tests/datasets/lands_<name>/`. To judge an outline against a reference image, shoot it top-down with the
+reference over it: `terrain_viewer --script <s> --bounds <map> --resolution <m> --plan --water --no-panels
+--guide <reference.png> --screenshot out/<name>_guide.png` (the image's first row is min z).
 
 A low land under a cliffed coast must stand above the cliff (`cliff_height`) and rise within the distance the
 cliff fades in (`size * 0.01`), or a closed trough runs behind the coast; check the pits of every new composition

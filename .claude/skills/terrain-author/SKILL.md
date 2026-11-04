@@ -55,6 +55,12 @@ summary; read the images with the Read tool. A reference heightmap is measured d
 `build/Release/bin/terrain_metrics <ref.png> --level L`, after checking its `refs.json` says
 `heightmap`.
 
+`--viewer "<flags>"` adds viewer flags to the shots (`docs/commands.md` has each one), off unless asked:
+`--no-panels` keeps the panel off the terrain; `--plan --bounds <same bounds>` gives a top-down shot laid
+out like `hillshade.png`, and with `--guide <reference.png>` the reference is drawn over it, so an outline
+is compared in place, not side by side; `--show <output>` (`--show-ids` for ids) paints a mask, wetness,
+strata or biome over the relief, to check where it falls; `--sun az,el` lights the shots.
+
 Use the same three views every run (oblique, grazing, top-down) and keep them in the script's header
 comment. The viewer has no cast shadows: judge geometry on the hillshade, with the sun in front of the
 faces that matter, not on the viewer. Separate geometric defects (wrong forms, spikes, grid patterns)
