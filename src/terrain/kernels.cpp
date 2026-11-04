@@ -157,7 +157,8 @@ constexpr OpInfo kOps[] = {
      .name           = "HydraulicErosion",
      .shader         = "ops/hydraulic_erosion.comp.spv",
      .nodeClass      = NodeClass::Iterative,
-     .maxInputs      = 1,
+     // The height and, optionally, the hardness map.
+     .maxInputs      = 2,
      // Channel 1 is the water and the sediment left at the end, which a renderer wants for putting rock
      // against silt. Written only when something asks for it, through the channel mask.
      .maxChannels    = 2,

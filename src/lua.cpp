@@ -1936,6 +1936,9 @@ void Bind(sol::state& state, Graph& graph, f64_t spacing) {
         params.erosionRate = args.Float("erosion_rate", 0.3);
         params.deposition  = args.Float("deposition", 0.3);
         params.flowRate    = args.Float("flow_rate", 0.15);
+        if (args.Has("hardness")) {
+            params.hardness = args.Input("hardness");
+        }
         args.Finish();
 
         // Validated as written, so a bad value is reported as the script wrote it and not as whatever

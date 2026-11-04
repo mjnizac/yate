@@ -25,6 +25,10 @@
 // With `rate <= 0.25` the four outflows cannot exceed the water present, which is what keeps it stable
 // without a normalisation step.
 //
+// World Machine's Hardness: input 1, clamped to [0, 1], scales what is taken from the bed by
+// 1 - hardness, so hard rock stands as ridges and ledges while soft ground between is carved.
+// Deposition is unchanged: sediment settles on hard rock as on anything else.
+//
 // Parameters:
 //   0  rain added per iteration
 //   1  evaporation, the fraction of water lost per iteration
@@ -33,6 +37,7 @@
 //   4  deposition rate, how fast an excess is laid back down
 //   5  flow rate, the fraction of a surface drop that moves per iteration
 //   6  sample spacing in metres, written by the compiler from the job resolution
+//   7  1 when input 1 is a hardness map
 //   8  iteration count, written by the evaluator
 //   9  iteration index, written by the evaluator
 
@@ -154,7 +159,8 @@ void main() {
         // lowest neighbour, so one iteration cannot cut the cell below what surrounds it — without that
         // bound the capacity term alone does not stop a cell from digging past its own outlet, and the
         // next iteration sees a steeper drop and takes more.
-        float taken = min(erosionRate * (holds - next.sediment),
+        float soft  = ParamUint(7) == 1u ? 1.0 - clamp(LoadScalar(1u, InputIndex(1u, local)), 0.0, 1.0) : 1.0;
+        float taken = min(soft * erosionRate * (holds - next.sediment),
                           0.5 * max(centre.height - lowest, 0.0));
         next.height -= taken;
         next.sediment += taken;

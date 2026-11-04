@@ -270,6 +270,55 @@ void CheckTwoPhase(Context& context, KernelLibrary& kernels, const Field& bare) 
     }
 }
 
+/// The thermal checks' noise eroded by water under a constant hardness.
+[[nodiscard]] Result<Field> RunHardHydraulic(Context& context, KernelLibrary& kernels, f32_t hardness) {
+    Graph graph;
+    Graph::NoiseParams noise;
+    noise.frequency     = 0.04f;
+    noise.octaves       = 4;
+    noise.amplitude     = 1.0f;
+    Result<Value> value = graph.AddNoise(noise, At(40));
+    Result<Value> hard  = graph.AddConst(Mapping{Domain::R2, 1}, {hardness}, At(41));
+    if (!value || !hard) {
+        return std::unexpected(!value ? value.error() : hard.error());
+    }
+    Graph::HydraulicParams hydraulic;
+    hydraulic.hardness    = *hard;
+    Result<Value> carved = graph.AddHydraulicErosion(*value, hydraulic, At(42));
+    if (!carved) {
+        return std::unexpected(carved.error());
+    }
+    if (Status requested = graph.RequestOutput("height", *carved, -1.0f, 1.0f); !requested) {
+        return std::unexpected(requested.error());
+    }
+    return Evaluate(context, kernels, graph, SectionExtent{.x = kExtent, .y = 1, .z = kExtent},
+                    kExtent, 1, kExtent, 1.0f, kOrigin, kSeed);
+}
+
+/// Hardness 0 is the plain op bit for bit; hardness 1 takes nothing from the bed, so with no sediment
+/// to lay down the terrain comes out as it went in; a half hardness carves less than none.
+void CheckHydraulicHardness(Context& context, KernelLibrary& kernels, const Field& bare, const Field& carved) {
+    const auto differing = [](const Field& a, const Field& b) {
+        u64_t count = 0;
+        for (usize_t i = 0; i < a.samples.size(); ++i) {
+            count += std::memcmp(&a.samples[i], &b.samples[i], sizeof(f32_t)) != 0 ? 1 : 0;
+        }
+        return count;
+    };
+    Result<Field> soft = RunHardHydraulic(context, kernels, 0.0f);
+    Result<Field> rock = RunHardHydraulic(context, kernels, 1.0f);
+    Result<Field> half = RunHardHydraulic(context, kernels, 0.5f);
+    REQUIRE_OK_VOID(soft);
+    REQUIRE_OK_VOID(rock);
+    REQUIRE_OK_VOID(half);
+    CHECK_EQ(differing(*soft, carved), u64_t{0});
+    CHECK_EQ(differing(*rock, bare), u64_t{0});
+    std::printf("     hardness 0.5 changes %.6g against %.6g at none\n", MeanDifference(bare, *half),
+                MeanDifference(bare, carved));
+    CHECK(MeanDifference(bare, *half) < MeanDifference(bare, carved));
+    CHECK(MeanDifference(bare, *half) > 0.0);
+}
+
 /// The checks below each build a `Graph`, which keeps fixed-capacity storage for 1024 nodes and so is
 /// around 150 KiB. Six of them on one frame overflowed the default 1 MiB stack in Debug, so each one gets
 /// its own frame. `graph.hpp` has a static_assert pinning the size for the same reason.
@@ -614,6 +663,9 @@ int main() {
         // can leave the steepest single step as steep as it was. What must not happen is a blow-up, so
         // the bound is on the magnitude rather than on the slope.
         CHECK(Magnitude(*carved) < Magnitude(*bare) * 4.0);
+
+        test::Section("hydraulic hardness: 0 is the plain op, 1 takes nothing from the bed");
+        CheckHydraulicHardness(context, kernels, *bare, *carved);
 
         test::Section("hydraulic erosion exposes its water and sediment");
         CheckHydraulicFlowChannel(context, kernels);

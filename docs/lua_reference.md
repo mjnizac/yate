@@ -789,6 +789,7 @@ Rain, flow, sediment transport, evaporation. Carves channels and deposits fans.
 | `erosion_rate` | `0.3` | `(0, 1]` | how fast a shortfall is taken from the bed |
 | `deposition` | `0.3` | `(0, 1]` | how fast an excess is laid back down |
 | `flow_rate` | `0.15` | `(0, 0.25]` | fraction of a surface drop that moves per iteration |
+| `hardness` | none | | an `Rn -> R1` field, clamped to [0, 1], that resists erosion: what is taken from the bed is scaled by `1 - hardness` (World Machine's Hardness), so hard beds stand as ledges; deposition is unchanged |
 
 | No erosion | 8 iterations | 32 |
 | --- | --- | --- |

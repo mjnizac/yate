@@ -999,13 +999,29 @@ Result<Value> Graph::AddHydraulicErosion(Value input, const HydraulicParams& par
         }
     }
 
+    if (params.hardness.has_value()) {
+        if (Status checked = CheckValue(*params.hardness, "HydraulicErosion hardness", location); !checked) {
+            return std::unexpected(checked.error());
+        }
+        if (!(params.hardness->mapping == Mapping{input.mapping.domain, 1})) {
+            return std::unexpected(MakeScriptError(
+                ErrorCode::InvalidArgument, ErrorStage::Validation, location.file, location.line,
+                "{} expects the hardness to be {}, got {}", ToString(OpKind::HydraulicErosion),
+                ToString(Mapping{input.mapping.domain, 1}), ToString(params.hardness->mapping)));
+        }
+    }
+
     Node node;
     node.kind         = OpKind::HydraulicErosion;
     node.nodeClass    = NodeClass::Iterative;
     node.iterations   = params.iterations;
     node.radius       = params.iterations;
-    node.inputCount   = 1;
+    node.inputCount   = params.hardness.has_value() ? 2 : 1;
     node.inputs[0]    = input;
+    if (params.hardness.has_value()) {
+        node.inputs[1] = *params.hardness;
+    }
+    node.params[7] = params.hardness.has_value() ? 1u : 0u;
     node.channelCount = 2;
     node.channels[0]  = input.mapping;
     // Water and sediment as they stood after the last iteration. Two components rather than three,

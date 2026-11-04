@@ -552,6 +552,9 @@ public:
         /// Fraction of a surface drop that moves per iteration, in (0, 0.25]. Above a quarter the four
         /// outflows of a cell can exceed the water it has, and the scheme stops being stable.
         f32_t flowRate = 0.15f;
+        /// An `Rn -> R1` field, clamped to [0, 1], that resists erosion: what is taken from the bed
+        /// is scaled by 1 - hardness. World Machine's Hardness input.
+        std::optional<Value> hardness;
     };
 
     /// Hydraulic erosion of an `Rn -> R1` height field, producing an `Rn -> R1` height.
