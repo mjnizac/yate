@@ -114,6 +114,11 @@ public:
         std::array<f32_t, 2> sun{126.03f, 31.70f};
         /// Draw the panels; off (`--no-panels`) a screenshot shows the terrain alone.
         b8_t panels = true;
+        /// Plan view (`--plan`, "Plan view" in the panel): orthographic, straight down, +x right and +z
+        /// down as in an exported heightmap, so a shot lines up with `hillshade.png` and a reference map.
+        /// The orbit camera's target is the centre and its distance the zoom; with `--bounds` and no
+        /// `--view` it starts framed on the bounds.
+        b8_t plan = false;
     };
 
     ViewerLayer(Application& application, const Settings& settings);

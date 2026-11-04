@@ -112,7 +112,7 @@ Detail of each call is in `docs/lua_reference.md`; why each piece is the way it 
   `f32` volumes with a metadata sidecar. `terrain_viewer` (Graphics) draws the same graph as a GPU-displaced
   grid: orbit camera (`--view`, `--target`), a ring of streamed tiles with rings of detail beyond it
   (`--max-level`), `--follow`, `--map-scale`, 4x MSAA, vsync, hot reload, `--screenshot`, analytic sea level
-  (`--water`, off by default), the sun (`--sun`), shots without panels (`--no-panels`).
+  (`--water`, off by default), the sun (`--sun`), shots without panels (`--no-panels`), an orthographic plan view (`--plan`).
 * **Ops.** Twenty-one ops: `Const`, `Coords`, `Noise` (simplex, ridged, billow, cellular), `Normals`, `Arith`,
   `Curve`, `Blend`, `SlopeMask`, `Vector`, `Blur`, `Gradient`, `ThermalErosion`, `HydraulicErosion`,
   `Transform`, `Shape`, `Gullies`, `Grid`, `Water`, `Lands`, `Displace` and `Cells`; plus `Erosion.StreamPower`, a

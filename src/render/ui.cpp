@@ -180,6 +180,8 @@ b8_t Ui::Draw(Panels& panels) {
         ImGui::Separator();
 
         ImGui::TextUnformatted(panels.cameraMode);
+        ImGui::SameLine();
+        ImGui::Checkbox("Plan view", &panels.plan);
         ImGui::Text("eye %.0f, %.0f, %.0f", static_cast<f64_t>(panels.eye[0]),
                     static_cast<f64_t>(panels.eye[1]), static_cast<f64_t>(panels.eye[2]));
 

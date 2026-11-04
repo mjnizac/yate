@@ -194,6 +194,16 @@ build/Release/bin/terrain_viewer --script assets/scripts/shapes/canyon.lua --vie
 it (default 126,31.7); the panel's "View" section has the same two sliders, and neither re-evaluates.
 `--no-panels` leaves the panels out, so a screenshot shows the terrain alone.
 
+`--plan` (or "Plan view" in the panel) looks straight down with no perspective, +x to the right and +z
+down the screen, the way an exported heightmap and `hillshade.png` are laid out, so a shot of a map
+compares with them and with a reference outline pixel for pixel. With `--bounds` and no `--view` it opens
+framed on the bounds; the orbit camera's target stays the centre and the wheel zooms. In a `--shot` the
+distance is the zoom: the shot's height covers `1.155 x distance` metres.
+
+```bash
+build/Release/bin/terrain_viewer --script assets/scripts/lands/archipelago_arc.lua --resolution 128 --bounds -48000,-48000,48000,48000 --plan --water --no-panels --screenshot out/arc_plan.png
+```
+
 `--water` draws water at the water level, which is off by default and costs no evaluation to change.
 `--water-level <m>` (default 0), `--water-color r,g,b` (each 0 to 1) and `--water-opacity <0-1>` set the
 sea; the panel has the same controls and a reload keeps them. The panel also toggles the sea, the lakes

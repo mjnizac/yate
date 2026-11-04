@@ -46,6 +46,8 @@ void PrintUsage() {
                "  --sun az,el            sun azimuth (clockwise from -z, as terrain_metrics) and\n"
                "                         elevation in degrees (default 126,31.7)\n"
                "  --no-panels            draw no panels, so a screenshot shows the terrain alone\n"
+               "  --plan                 orthographic view straight down, +x right and +z down as in an\n"
+               "                         exported heightmap; framed on --bounds unless --view is given\n"
                "  --follow               re-run the script as the camera moves, with params.bounds round\n"
                "                         it: for a world built only where it is looked at\n"
                "  --map-scale <f>        draw the map f times wider, heights and water level unchanged\n"
@@ -228,6 +230,10 @@ template <typename T>
         // following the camera.
         if (argument == "--water") {
             options.viewer.water.enabled = true;
+            continue;
+        }
+        if (argument == "--plan") {
+            options.viewer.plan = true;
             continue;
         }
         if (argument == "--no-panels") {

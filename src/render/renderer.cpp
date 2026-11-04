@@ -162,6 +162,26 @@ struct Frustum {
     return result;
 }
 
+/// Half the plan view's height over the camera's distance: tan of the orbit camera's half field of view
+/// (60 degrees), so switching to the plan view keeps about the same ground on screen.
+constexpr f32_t kPlanTangent = 0.57735027f;
+
+/// The plan view: orthographic and straight down, +x to the right and +z down the screen (as rows run in
+/// an exported heightmap), `half` metres from `centre` to the top edge. Depth runs over the heights `low`
+/// to `high`, reversed like the perspective one: the highest ground is nearest.
+[[nodiscard]] Mat4 PlanProjection(Vec3 centre, f32_t half, f32_t aspect, f32_t low, f32_t high) noexcept {
+    const f32_t width = half * aspect;
+    Mat4        result;
+    result.m[0][0] = 1.0f / width;
+    result.m[3][0] = -centre.x / width;
+    result.m[2][1] = 1.0f / half;
+    result.m[3][1] = -centre.z / half;
+    result.m[1][2] = 1.0f / (high - low);
+    result.m[3][2] = -low / (high - low);
+    result.m[3][3] = 1.0f;
+    return result;
+}
+
 /// Level whose tiles are about the right size for what the camera can see.
 ///
 /// One level for the whole ring, not one per tile. Per-tile levels are the usual answer and they bring
@@ -497,6 +517,14 @@ void ViewerLayer::OnAttach() {
         constexpr f32_t kDegrees = 3.14159265358979f / 180.0f;
         m_state->camera.SetView(Vec3{view.target[0], view.target[1], view.target[2]},
                                 view.yaw * kDegrees, view.pitch * kDegrees, view.distance);
+    } else if (const Settings& s = m_state->settings; s.plan && s.bounded) {
+        // A plan view of a map starts with the whole map on screen, centred.
+        const VkExtent2D extent = m_state->swapchain->Extent();
+        const f32_t aspect = extent.height != 0 ? static_cast<f32_t>(extent.width) / static_cast<f32_t>(extent.height) : 1.0f;
+        const f32_t half   = std::max(s.bounds[3] - s.bounds[1], (s.bounds[2] - s.bounds[0]) / aspect) * 0.5f * s.mapScale;
+        m_state->camera.SetView(Vec3{(s.bounds[0] + s.bounds[2]) * 0.5f * s.mapScale, 0.0f,
+                                     (s.bounds[1] + s.bounds[3]) * 0.5f * s.mapScale},
+                                0.0f, -1.55f, half / kPlanTangent);
     }
     // The script runs once, at the finest spacing; the rings, from the level the distance picks out,
     // compile the same graph at theirs.
@@ -782,6 +810,7 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     panels.ringRadius        = static_cast<i32_t>(state.settings.ringRadius);
     panels.mapScale          = state.settings.mapScale;
     panels.sun               = state.settings.sun;
+    panels.plan              = state.settings.plan;
 
     // Editing a parameter reloads: the script is what turns a parameter into terrain, so there is no
     // shortcut that updates push constants instead. The spec's "only numeric parameters changed, so no
@@ -801,6 +830,7 @@ void ViewerLayer::RecordPanels(VkCommandBuffer commands) {
     state.settings.maxLevel      = static_cast<u32_t>(panels.maxLevel);
     state.settings.ringRadius    = static_cast<u32_t>(panels.ringRadius);
     state.settings.sun           = panels.sun;
+    state.settings.plan          = panels.plan;
     if (panels.mapScale != state.settings.mapScale) {
         // The camera keeps looking at the same ground: what it is about is moved with the map.
         state.camera.ScaleGround(panels.mapScale / state.settings.mapScale);
@@ -945,8 +975,17 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
                              ? static_cast<f32_t>(frame.extent.width)
                                    / static_cast<f32_t>(frame.extent.height)
                              : 1.0f;
-    // The camera works in the drawn map; the tiles and the frustum test in the script's metres.
-    const Mat4    viewProjection = state.camera.ViewProjection(aspect) * MapScale(state.settings.mapScale);
+    // The camera works in the drawn map; the tiles and the frustum test in the script's metres. The plan
+    // view looks down on the camera's focus from above every height the script declared, with margin for
+    // ground past the range and the skirts.
+    const f32_t span  = state.terrain.heightMaximum - state.terrain.heightMinimum + 100.0f;
+    const f32_t low   = state.terrain.heightMinimum - span;
+    const f32_t high  = state.terrain.heightMaximum + span;
+    const Vec3  focus = state.camera.Focus();
+    const f32_t half  = state.camera.ViewDistance(0.5f * (low + high)) * kPlanTangent;
+    const Mat4  projection = state.settings.plan ? PlanProjection(focus, half, aspect, low, high)
+                                                 : state.camera.ViewProjection(aspect);
+    const Mat4    viewProjection = projection * MapScale(state.settings.mapScale);
     const Frustum frustum        = FrustumOf(viewProjection);
 
     // Water is shaded by the terrain fragments themselves (see `terrain.frag.glsl`). A wireframe draws
@@ -954,7 +993,8 @@ void ViewerLayer::Record(const WindowLayer::FrameContext& frame) {
     const ViewerLayer::Water& water = state.settings.water;
     const b8_t shadeWater           = water.enabled && !state.wireframe;
     const b8_t seaOutput            = state.terrain.waterOutputs[2] != kNoOutput;
-    const Vec3 drawnEye             = state.camera.Position();
+    // In the plan view the water is looked at from straight above the focus.
+    const Vec3 drawnEye = state.settings.plan ? Vec3{focus.x, high + half, focus.z} : state.camera.Position();
     const Vec3 eye{drawnEye.x / state.settings.mapScale, drawnEye.y, drawnEye.z / state.settings.mapScale};
 
     vulkan::TerrainPushConstants constants{};

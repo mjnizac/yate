@@ -72,6 +72,7 @@ public:
         f32_t mapScale   = 1.0f;
         /// Sun azimuth and elevation in degrees, edited in place.
         std::array<f32_t, 2> sun{};
+        b8_t                 plan = false;
         /// Edited in place when the user drags a value. Null hides the section.
         terrain::Params* params = nullptr;
     };
